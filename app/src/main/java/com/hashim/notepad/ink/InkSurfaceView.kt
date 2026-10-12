@@ -112,7 +112,9 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
                 m.preScale(pageWidthPt / bmp.width, pageHeightPt / bmp.height)
                 canvas.drawBitmap(bmp, m, bitmapPaint)
             }
+            canvas.save(); canvas.concat(pageToView)
             for (s in strokes) renderer.draw(canvas, s, pageToView)
+            canvas.restore()
             selectionBounds?.let { b ->
                 canvas.save(); canvas.concat(pageToView)
                 canvas.drawRect(b, selectionFill)
