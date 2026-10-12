@@ -215,13 +215,14 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         region.setPath(lassoPath, Region(bounds.left.toInt() - 1, bounds.top.toInt() - 1, bounds.right.toInt() + 1, bounds.bottom.toInt() + 1))
         selected.clear()
         val sel = RectF()
+        var first = true
         for (s in strokes) {
             val inputs = s.inputs
             var inside = 0
             for (i in 0 until inputs.size) { val p = inputs[i]; if (region.contains(p.x.toInt(), p.y.toInt())) inside++ }
             if (inputs.size > 0 && inside * 2 >= inputs.size) {
                 selected.add(s)
-                for (i in 0 until inputs.size) { val p = inputs[i]; if (sel.isEmpty) sel.set(p.x, p.y, p.x, p.y) else sel.union(p.x, p.y) }
+                for (i in 0 until inputs.size) { val p = inputs[i]; if (first) { sel.set(p.x, p.y, p.x, p.y); first = false } else sel.union(p.x, p.y) }
             }
         }
         selectionBounds = if (selected.isEmpty()) null else RectF(sel).apply { inset(-6f, -6f) }
