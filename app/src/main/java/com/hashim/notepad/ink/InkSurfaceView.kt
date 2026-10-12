@@ -312,6 +312,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
                 if (event.getPointerId(idx) != currentPointerId) return true
+                if (erasing) eraseAt(event.getX(idx), event.getY(idx))
                 currentStrokeId?.let { wetLayer.finishStroke(event, currentPointerId, it) }
                 currentStrokeId = null; currentPointerId = -1; erasing = false; return true
             }
