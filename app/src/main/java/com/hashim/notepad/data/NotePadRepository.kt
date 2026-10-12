@@ -36,7 +36,7 @@ class NotePadRepository(context: Context) {
     ).use { c ->
         buildList {
             while (c.moveToNext()) add(
-                Notebook(c.getString(0), c.getString(1), c.getStringOrNull(2), c.getString(7), c.getInt(3), c.getLong(4), c.getLong(5), c.getInt(6))
+                Notebook(c.getString(0), c.getString(1), c.getStringOrNull(2), c.getString(6), c.getInt(3), c.getLong(4), c.getLong(5), c.getInt(7))
             )
         }
     }

@@ -117,7 +117,7 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
         val bytes = withContext(Dispatchers.Default) { StrokeStore.encode(strokes) }
         repo.saveStrokes(p.id, bytes, strokes.size)
         delay(2500)
-        if (recognizer.isModelDownloaded(language)) {
+        if (runCatching { recognizer.isModelDownloaded(language) }.getOrDefault(false)) {
             runCatching { recognizer.recognize(strokes, language, p.widthPt, p.heightPt) }
                 .onSuccess { repo.saveRecognition(p.id, "ink", language, it) }
                 .onFailure { Log.w("NotePad", "recognition", it) }
