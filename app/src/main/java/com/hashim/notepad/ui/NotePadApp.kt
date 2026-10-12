@@ -38,7 +38,7 @@ fun NotePadApp(initialPdf: Uri?, themeMode: ThemeMode, dynamicColor: Boolean, on
         importing = true
         runCatching { importer.importAsNotebook(initialPdf) }
             .onSuccess { screen = Screen.Pages(it) }
-            .onFailure { Toast.makeText(context, "Could not import PDF: ${it.message}", Toast.LENGTH_LONG).show() }
+            .onFailure { android.util.Log.e("NotePad", "PDF import failed", it); Toast.makeText(context, "Could not import PDF: ${it.message}", Toast.LENGTH_LONG).show() }
         importing = false
     }
 

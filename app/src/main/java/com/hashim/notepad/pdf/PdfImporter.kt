@@ -40,11 +40,14 @@ class PdfImporter(private val context: Context, private val repo: NotePadReposit
     /** Makes the PDF's own text layer searchable (source = "pdf"); scanned pages simply yield nothing. */
     private suspend fun indexTextLayer(notebookId: String, file: File) {
         val pages = repo.pages(notebookId).first()
+        val annots = runCatching { PdfAnnotations.scan(file) }.getOrDefault(emptyMap())
         PdfPageSource(context, file).use { src ->
             for (p in pages) {
                 val idx = p.pdfPageIndex ?: continue
                 val text = runCatching { src.text(idx) }.getOrDefault("").trim()
                 if (text.isNotEmpty()) repo.saveRecognition(p.id, "pdf", null, text)
+                val notes = annots[idx]?.joinToString("\n").orEmpty()
+                if (notes.isNotEmpty()) repo.saveRecognition(p.id, "pdf_annot", null, notes)
             }
         }
     }
