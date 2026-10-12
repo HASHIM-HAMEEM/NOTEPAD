@@ -57,4 +57,5 @@ dependencies {
     implementation(libs.mlkit.digital.ink)
     implementation(libs.kotlinx.coroutines.play.services)
     implementation(libs.androidx.documentfile)
+    implementation(libs.androidx.work.runtime)
 }
