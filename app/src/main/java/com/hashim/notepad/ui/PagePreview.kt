@@ -3,6 +3,8 @@ package com.hashim.notepad.ui
 import android.graphics.Bitmap
 import android.graphics.Matrix
 import android.graphics.Paint
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffColorFilter
 import android.util.LruCache
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -23,6 +25,7 @@ import com.hashim.notepad.data.NotePadRepository
 import com.hashim.notepad.data.Page
 import com.hashim.notepad.data.PageKind
 import com.hashim.notepad.ink.InkTextures
+import com.hashim.notepad.ink.PaperTexture
 import com.hashim.notepad.ink.StrokeStore
 import com.hashim.notepad.pdf.PdfPageSource
 import kotlinx.coroutines.Dispatchers
@@ -72,6 +75,12 @@ fun PagePreview(repo: NotePadRepository, page: Page?, paperColor: Color, modifie
         val scale = size.width / p.widthPt
         drawIntoCanvas { c ->
             val n = c.nativeCanvas
+            val texturePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                shader = PaperTexture.shader()
+                alpha = 96
+                colorFilter = PorterDuffColorFilter(paperColor.toArgbInt(), PorterDuff.Mode.MULTIPLY)
+            }
+            n.drawRect(0f, 0f, size.width, size.height, texturePaint)
             n.save()
             n.scale(scale, scale)
             val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = ruling.toArgbInt(); strokeWidth = 0.8f }

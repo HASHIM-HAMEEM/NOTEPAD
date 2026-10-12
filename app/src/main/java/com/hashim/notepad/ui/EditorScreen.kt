@@ -8,13 +8,16 @@ import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Redo
@@ -36,10 +39,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.drawscope.Stroke as DrawStroke
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -105,6 +110,7 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
     var zoomPercent by remember { mutableIntStateOf(100) }
     var rulerVisible by remember { mutableStateOf(false) }
     val darkTheme = MaterialTheme.colorScheme.isDark
+    val deskColor = MaterialTheme.colorScheme.background
     val exporter = remember(context, repo) { PdfExporter(context, repo) }
     LaunchedEffect(pixelEraser, surface) { surface?.pixelEraser = pixelEraser }
     LaunchedEffect(notebook?.coverColor, surface) {
@@ -126,6 +132,7 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
     LaunchedEffect(surface, zoomBox, language) { surface?.setZoomBox(zoomBox, language != "en") }
     LaunchedEffect(surface, rulerVisible) { surface?.setRulerVisible(rulerVisible) }
     LaunchedEffect(surface, darkTheme) { surface?.setRulerDarkTheme(darkTheme) }
+    LaunchedEffect(surface, deskColor) { surface?.setDeskColor(deskColor.toArgb()) }
     LaunchedEffect(spec, fingerDraws, surface) { surface?.let { it.brushSpec = spec; it.fingerDraws = fingerDraws; if (spec.tool != InkTool.LASSO) it.clearSelection() } }
 
     // Load page geometry + strokes once the surface exists.
@@ -228,7 +235,7 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
     val statusBarHeight = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceContainerLow)) {
         AndroidView(
-            modifier = Modifier.fillMaxSize().padding(top = statusBarHeight + 76.dp),
+            modifier = Modifier.fillMaxSize().padding(start = 12.dp, end = 12.dp, top = statusBarHeight + 96.dp, bottom = 12.dp),
             factory = { ctx ->
                 InkSurfaceView(ctx).also { v ->
                     v.onSample = { sample = it }
@@ -242,17 +249,17 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
         )
 
         Surface(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RectangleShape,
-            color = MaterialTheme.colorScheme.surfaceContainer,
-            shadowElevation = 1.dp,
+            modifier = Modifier.fillMaxWidth().statusBarsPadding().padding(start = 12.dp, end = 12.dp, top = 8.dp),
+            shape = RoundedCornerShape(26.dp),
+            color = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.94f),
+            contentColor = MaterialTheme.colorScheme.onSurface,
+            border = BorderStroke(0.75.dp, MaterialTheme.colorScheme.outlineVariant),
+            shadowElevation = 10.dp,
         ) {
-            Column {
-                Spacer(Modifier.height(statusBarHeight))
-                Row(
-                    Modifier.fillMaxWidth().height(76.dp).padding(horizontal = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
+            Row(
+                Modifier.fillMaxWidth().height(76.dp).padding(horizontal = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 IconButton(onClick = onBack, modifier = Modifier.size(48.dp)) {
                     Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
                 }
@@ -273,7 +280,8 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
                             DropdownMenu(
                                 expanded = penPopover == type,
                                 onDismissRequest = { penPopover = null },
-                                shape = MaterialTheme.shapes.large,
+                                shape = RoundedCornerShape(22.dp),
+                                containerColor = MaterialTheme.colorScheme.surfaceContainer,
                             ) {
                                 BrushSettingsPopover(
                                     title = type.label,
@@ -287,7 +295,6 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
                             }
                         }
                     }
-                    Box(Modifier.padding(horizontal = 6.dp, vertical = 18.dp).width(1.dp).height(32.dp).background(MaterialTheme.colorScheme.outlineVariant))
                     Box {
                         ShelfCanvasItem(
                             label = "Highlighter",
@@ -299,7 +306,8 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
                         DropdownMenu(
                             expanded = highlighterPopover,
                             onDismissRequest = { highlighterPopover = false },
-                            shape = MaterialTheme.shapes.large,
+                            shape = RoundedCornerShape(22.dp),
+                            containerColor = MaterialTheme.colorScheme.surfaceContainer,
                         ) {
                             BrushSettingsPopover(
                                 title = "Highlighter",
@@ -323,7 +331,8 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
                         DropdownMenu(
                             expanded = penPopover == PenType.CALLIGRAPHY,
                             onDismissRequest = { penPopover = null },
-                            shape = MaterialTheme.shapes.large,
+                            shape = RoundedCornerShape(22.dp),
+                            containerColor = MaterialTheme.colorScheme.surfaceContainer,
                         ) {
                             BrushSettingsPopover(
                                 title = PenType.CALLIGRAPHY.label,
@@ -349,8 +358,13 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
                         IconButton(onClick = { colorPop = true }, modifier = Modifier.size(40.dp)) {
                             ColorWheelButton(color)
                         }
-                        DropdownMenu(expanded = colorPop, onDismissRequest = { colorPop = false }, shape = MaterialTheme.shapes.large) {
-                            Column(Modifier.padding(8.dp)) {
+                        DropdownMenu(
+                            expanded = colorPop,
+                            onDismissRequest = { colorPop = false },
+                            shape = RoundedCornerShape(22.dp),
+                            containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                        ) {
+                            Column(Modifier.padding(16.dp)) {
                                 (PALETTE + EXTRA_PALETTE).chunked(4).forEach { row ->
                                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                                         row.forEach { swatch ->
@@ -387,7 +401,7 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
                         IconButton(onClick = { morePop = true }, modifier = Modifier.size(44.dp)) {
                             Icon(Icons.Default.MoreVert, "More")
                         }
-                        DropdownMenu(expanded = morePop, onDismissRequest = { morePop = false }, shape = MaterialTheme.shapes.large) {
+                        DropdownMenu(expanded = morePop, onDismissRequest = { morePop = false }, shape = RoundedCornerShape(22.dp), containerColor = MaterialTheme.colorScheme.surfaceContainer) {
                             if (hasSelection) {
                                 DropdownMenuItem(
                                     text = { Text("Delete selection") },
@@ -401,15 +415,18 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
                             ToggleItem("Pixel eraser", "Erase pixels instead of whole strokes", pixelEraser) { pixelEraser = it }
                         }
                     }
-                }
             }
         }
 
-        if (pages.isNotEmpty()) Row(
-            Modifier.align(Alignment.BottomStart).navigationBarsPadding()
+        if (pages.isNotEmpty()) Surface(
+            modifier = Modifier.align(Alignment.BottomStart).navigationBarsPadding()
                 .padding(start = 16.dp, bottom = if (showLab) 64.dp else 16.dp),
-            verticalAlignment = Alignment.CenterVertically,
+            shape = RoundedCornerShape(14.dp),
+            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f),
+            border = BorderStroke(0.75.dp, MaterialTheme.colorScheme.outlineVariant),
+            shadowElevation = 3.dp,
         ) {
+            Row(Modifier.padding(start = 12.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(
                 "${index + 1} / ${pages.size}    ${zoomPercent}%",
                 style = MaterialTheme.typography.labelMedium,
@@ -422,6 +439,7 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
                 IconButton(enabled = index in 0 until pages.size - 1, onClick = { if (index < pages.lastIndex) onNavigateToPage(pages[index + 1].id) }, modifier = Modifier.size(32.dp)) {
                     Icon(Icons.Default.ChevronRight, "Next page", modifier = Modifier.size(18.dp))
                 }
+            }
             }
         }
 
@@ -499,8 +517,8 @@ private fun PenType.toShelfStyle(): ShelfDrawing = when (this) {
 @Composable
 private fun ShelfCanvasItem(label: String, style: ShelfDrawing, selected: Boolean, color: Int, onClick: () -> Unit) {
     val rise by animateDpAsState(
-        targetValue = if (selected) (-12).dp else 0.dp,
-        animationSpec = spring(dampingRatio = 0.7f),
+        targetValue = if (selected) (-18).dp else 0.dp,
+        animationSpec = spring(dampingRatio = 0.6f, stiffness = 400f),
         label = "$label-rise",
     )
     val dark = MaterialTheme.colorScheme.isDark
@@ -508,15 +526,15 @@ private fun ShelfCanvasItem(label: String, style: ShelfDrawing, selected: Boolea
     val onSurface = MaterialTheme.colorScheme.onSurface
 
     Box(
-        Modifier.width(34.dp).height(76.dp).clickable(onClickLabel = label, onClick = onClick),
-        contentAlignment = Alignment.BottomCenter,
+        Modifier.width(42.dp).height(76.dp).clipToBounds().clickable(onClickLabel = label, onClick = onClick),
+        contentAlignment = Alignment.TopCenter,
     ) {
-        Canvas(Modifier.size(28.dp, 64.dp).offset(y = rise).clipToBounds()) {
+        Canvas(Modifier.requiredSize(42.dp, 96.dp).offset(y = 18.dp + rise)) {
             val centerX = size.width / 2f
-            val bodyTop = 16.dp.toPx()
-            val bodyBottom = size.height + 8.dp.toPx()
-            val bodyLeft = 6.dp.toPx()
-            val bodyWidth = size.width - 12.dp.toPx()
+            val bodyTop = 20.dp.toPx()
+            val bodyBottom = size.height + 20.dp.toPx()
+            val bodyLeft = 10.dp.toPx()
+            val bodyWidth = size.width - bodyLeft * 2f
             val bodyCorner = CornerRadius(5.dp.toPx())
             val penColor = Color(color)
             val itemColor = if (style == ShelfDrawing.HIGHLIGHTER) penColor.copy(alpha = 0.45f) else penColor
@@ -528,67 +546,80 @@ private fun ShelfCanvasItem(label: String, style: ShelfDrawing, selected: Boolea
             val bodyTopLeft = Offset(bodyLeft, bodyTop)
             val bodySize = Size(bodyWidth, bodyBottom - bodyTop)
 
+            if (selected && style != ShelfDrawing.RULER && style != ShelfDrawing.ERASER) {
+                drawCircle(penColor.copy(alpha = 0.18f), 18.dp.toPx(), Offset(centerX, 13.dp.toPx()))
+            }
             if (style == ShelfDrawing.RULER) {
-                val rulerLeft = 2.dp.toPx()
-                val rulerTop = 18.dp.toPx()
-                val rulerWidth = size.width - 4.dp.toPx()
-                val rulerHeight = 28.dp.toPx()
+                val rulerLeft = 3.dp.toPx()
+                val rulerTop = 23.dp.toPx()
+                val rulerWidth = size.width - 6.dp.toPx()
+                val rulerHeight = 42.dp.toPx()
                 drawRoundRect(
-                    color = Color.White.copy(alpha = 0.68f),
+                    color = Color.White.copy(alpha = if (dark) 0.12f else 0.55f),
                     topLeft = Offset(rulerLeft, rulerTop),
                     size = Size(rulerWidth, rulerHeight),
-                    cornerRadius = CornerRadius(3.dp.toPx()),
+                    cornerRadius = CornerRadius(4.dp.toPx()),
                 )
                 drawRoundRect(
                     color = outline,
                     topLeft = Offset(rulerLeft, rulerTop),
                     size = Size(rulerWidth, rulerHeight),
-                    cornerRadius = CornerRadius(3.dp.toPx()),
+                    cornerRadius = CornerRadius(4.dp.toPx()),
                     style = DrawStroke(width = 1f),
                 )
-                for (i in 1..6) {
-                    val x = rulerLeft + rulerWidth * i / 7f
+                for (i in 1..8) {
+                    val x = rulerLeft + rulerWidth * i / 9f
                     drawLine(
-                        color = outline,
-                        start = Offset(x, rulerTop + 4.dp.toPx()),
-                        end = Offset(x, rulerTop + if (i % 2 == 0) 14.dp.toPx() else 10.dp.toPx()),
+                        color = Color(0xFF5A5248).copy(alpha = 0.6f),
+                        start = Offset(x, rulerTop + 6.dp.toPx()),
+                        end = Offset(x, rulerTop + if (i % 2 == 0) 22.dp.toPx() else 15.dp.toPx()),
                         strokeWidth = 1.dp.toPx(),
                     )
                 }
+                drawLine(Color.White.copy(alpha = 0.9f), Offset(rulerLeft + 2.dp.toPx(), rulerTop + 2.dp.toPx()), Offset(rulerLeft + rulerWidth - 2.dp.toPx(), rulerTop + 2.dp.toPx()), 1.dp.toPx())
                 return@Canvas
             }
 
             if (style == ShelfDrawing.ERASER) {
-                val eraserTop = 18.dp.toPx()
+                val eraserTop = 28.dp.toPx()
                 val eraserLeft = 4.dp.toPx()
                 val eraserWidth = size.width - 8.dp.toPx()
                 drawRoundRect(
-                    color = if (dark) Color(0xFFE6E7EA) else Color.White,
-                    topLeft = Offset(eraserLeft, eraserTop),
-                    size = Size(eraserWidth, 31.dp.toPx()),
+                    color = if (dark) Color(0xFFE7D9D4) else Color(0xFFFFF8F4),
+                    topLeft = Offset(eraserLeft + 1.dp.toPx(), eraserTop + 2.dp.toPx()),
+                    size = Size(eraserWidth, 40.dp.toPx()),
                     cornerRadius = CornerRadius(4.dp.toPx()),
                 )
                 drawRoundRect(
-                    color = Color(0xFFB8BDC5),
-                    topLeft = Offset(eraserLeft, eraserTop + 12.dp.toPx()),
+                    brush = Brush.verticalGradient(listOf(Color(0xFFD6D7D8), Color(0xFF9EA2A7))),
+                    topLeft = Offset(eraserLeft, eraserTop + 15.dp.toPx()),
                     size = Size(eraserWidth, 6.dp.toPx()),
                     cornerRadius = CornerRadius(2.dp.toPx()),
                 )
                 drawRoundRect(
                     color = outline,
                     topLeft = Offset(eraserLeft, eraserTop),
-                    size = Size(eraserWidth, 31.dp.toPx()),
+                    size = Size(eraserWidth, 40.dp.toPx()),
                     cornerRadius = CornerRadius(4.dp.toPx()),
                     style = DrawStroke(width = 1f),
                 )
                 return@Canvas
             }
 
+            drawRoundRect(Color.Black.copy(alpha = if (dark) 0.24f else 0.16f), Offset(bodyLeft + 1.dp.toPx(), bodyTop + 2.dp.toPx()), bodySize, bodyCorner)
             drawRoundRect(bodyBrush, bodyTopLeft, bodySize, bodyCorner)
             drawRoundRect(outline, bodyTopLeft, bodySize, bodyCorner, style = DrawStroke(width = 1f))
+            drawRoundRect(
+                brush = Brush.horizontalGradient(listOf(Color.White.copy(alpha = 0.55f), Color.White.copy(alpha = 0.08f), Color.Transparent)),
+                topLeft = Offset(bodyLeft + 3.dp.toPx(), bodyTop + 3.dp.toPx()),
+                size = Size(4.dp.toPx(), bodySize.height - 6.dp.toPx()),
+                cornerRadius = CornerRadius(2.dp.toPx()),
+            )
+            drawLine(Color.Black.copy(alpha = 0.12f), Offset(bodyLeft + bodyWidth - 2.dp.toPx(), bodyTop + 3.dp.toPx()), Offset(bodyLeft + bodyWidth - 2.dp.toPx(), size.height), 1.dp.toPx())
 
             when (style) {
                 ShelfDrawing.BALLPOINT -> {
+                    drawRoundRect(itemColor, Offset(bodyLeft, bodyTop + 14.dp.toPx()), Size(bodyWidth, 4.dp.toPx()), CornerRadius(2.dp.toPx()))
                     val tip = Path().apply {
                         moveTo(centerX, 3.dp.toPx())
                         lineTo(centerX - 5.dp.toPx(), 17.dp.toPx())
@@ -599,6 +630,7 @@ private fun ShelfCanvasItem(label: String, style: ShelfDrawing, selected: Boolea
                     drawCircle(itemColor, 1.4.dp.toPx(), Offset(centerX, 3.dp.toPx()))
                 }
                 ShelfDrawing.PENCIL -> {
+                    drawRoundRect(itemColor, Offset(bodyLeft, bodyTop + 14.dp.toPx()), Size(bodyWidth, 4.dp.toPx()), CornerRadius(2.dp.toPx()))
                     val wood = Path().apply {
                         moveTo(centerX, 3.dp.toPx())
                         lineTo(centerX - 6.dp.toPx(), 18.dp.toPx())
@@ -626,6 +658,7 @@ private fun ShelfCanvasItem(label: String, style: ShelfDrawing, selected: Boolea
                     drawPath(nib, Color(0xFFB9BEC7))
                     drawLine(Color(0xFF656A72), Offset(centerX, 5.dp.toPx()), Offset(centerX, 21.dp.toPx()), 1.dp.toPx())
                     drawCircle(itemColor, 1.5.dp.toPx(), Offset(centerX, 15.dp.toPx()))
+                    drawRoundRect(Brush.verticalGradient(listOf(Color(0xFFC9CDD3), Color(0xFF8E949C))), Offset(bodyLeft, bodyTop + 17.dp.toPx()), Size(bodyWidth, 7.dp.toPx()), CornerRadius(2.dp.toPx()))
                 }
                 ShelfDrawing.MARKER -> {
                     drawRoundRect(
@@ -656,6 +689,7 @@ private fun ShelfCanvasItem(label: String, style: ShelfDrawing, selected: Boolea
                     }
                     drawPath(nib, itemColor)
                     drawLine(outline, Offset(9.dp.toPx(), 18.dp.toPx()), Offset(20.dp.toPx(), 8.dp.toPx()), 1.dp.toPx())
+                    drawRoundRect(Brush.verticalGradient(listOf(Color(0xFFC9CDD3), Color(0xFF8E949C))), Offset(bodyLeft, bodyTop + 17.dp.toPx()), Size(bodyWidth, 7.dp.toPx()), CornerRadius(2.dp.toPx()))
                 }
                 ShelfDrawing.LASSO -> {
                     val loop = Path().apply {
@@ -689,8 +723,9 @@ private fun BrushSettingsPopover(
     onOpacityChange: (Float) -> Unit,
     showOpacity: Boolean,
 ) {
-    Column(Modifier.width(248.dp).padding(horizontal = 16.dp, vertical = 12.dp)) {
-        Text(title, style = MaterialTheme.typography.titleSmall)
+    Surface(shape = RoundedCornerShape(22.dp), color = MaterialTheme.colorScheme.surfaceContainer) {
+        Column(Modifier.width(264.dp).padding(16.dp)) {
+        Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
         Canvas(Modifier.fillMaxWidth().height(40.dp)) {
             drawLine(
                 Color(color).copy(alpha = if (showOpacity) opacity else 1f),
@@ -705,6 +740,7 @@ private fun BrushSettingsPopover(
         if (showOpacity) {
             Text("Opacity", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Slider(value = opacity, onValueChange = onOpacityChange, valueRange = 0.1f..1f)
+        }
         }
     }
 }

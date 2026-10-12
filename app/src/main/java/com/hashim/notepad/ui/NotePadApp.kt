@@ -54,8 +54,17 @@ fun NotePadApp(initialPdf: Uri?, themeMode: ThemeMode, dynamicColor: Boolean, on
         targetState = screen,
         transitionSpec = {
             val forward = depth(targetState) >= depth(initialState)
-            val enter = androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(Motion.medium, delayMillis = 40, easing = Motion.emphasizedDecelerate)) +
-                androidx.compose.animation.slideInHorizontally(androidx.compose.animation.core.tween(Motion.long, easing = Motion.emphasized)) { if (forward) it / 10 else -it / 10 }
+            val openingNotebook = targetState is Screen.Pages && initialState is Screen.Notebooks
+            val enter = if (openingNotebook) {
+                androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(Motion.medium, delayMillis = 40, easing = Motion.emphasizedDecelerate)) +
+                    androidx.compose.animation.scaleIn(
+                        initialScale = 0.96f,
+                        animationSpec = androidx.compose.animation.core.tween(Motion.medium, easing = Motion.emphasizedDecelerate),
+                    )
+            } else {
+                androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(Motion.medium, delayMillis = 40, easing = Motion.emphasizedDecelerate)) +
+                    androidx.compose.animation.slideInHorizontally(androidx.compose.animation.core.tween(Motion.long, easing = Motion.emphasized)) { if (forward) it / 10 else -it / 10 }
+            }
             val exit = androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(Motion.short, easing = Motion.emphasizedAccelerate)) +
                 androidx.compose.animation.slideOutHorizontally(androidx.compose.animation.core.tween(Motion.long, easing = Motion.emphasized)) { if (forward) -it / 10 else it / 10 }
             (enter togetherWith exit).using(androidx.compose.animation.SizeTransform(clip = false))

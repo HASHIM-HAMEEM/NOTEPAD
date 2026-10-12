@@ -11,13 +11,16 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -33,7 +36,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -42,11 +49,13 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.hashim.notepad.data.Notebook
 import com.hashim.notepad.data.NotePadRepository
 import com.hashim.notepad.data.PageKind
 import com.hashim.notepad.export.BundleCodec
 import com.hashim.notepad.export.PdfExporter
+import com.hashim.notepad.ink.PaperTexture
 import com.hashim.notepad.pdf.PdfImporter
 import com.hashim.notepad.recognition.InkRecognizer
 import kotlinx.coroutines.launch
@@ -132,6 +141,30 @@ fun NotebooksScreen(
                     onNew = { showNew = true },
                 )
             }
+            if (notebooks.isNotEmpty()) {
+                val recent = notebooks.sortedByDescending { it.updatedAt }.take(3)
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    Column {
+                        Text("Recent", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                        Spacer(Modifier.height(12.dp))
+                        Row(
+                            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(16.dp),
+                        ) {
+                            recent.forEach { nb ->
+                                NotebookCard(
+                                    repo, nb, nb.id == selectedId, compact, Modifier.width(208.dp),
+                                    onOpen = { onOpen(nb.id) },
+                                    onMore = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); actionsFor = nb },
+                                )
+                            }
+                        }
+                    }
+                }
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    Text("All notebooks", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                }
+            }
             if (notebooks.isEmpty() && !importing) item(span = { GridItemSpan(maxLineSpan) }) {
                 EmptyLibrary(onNew = { showNew = true }, onImport = { pickPdf.launch(arrayOf("application/pdf")) })
             }
@@ -147,7 +180,7 @@ fun NotebooksScreen(
     }
 
     // ---- sheets & dialogs
-    if (showNew) ModalBottomSheet(onDismissRequest = { showNew = false }, shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)) {
+    if (showNew) ModalBottomSheet(onDismissRequest = { showNew = false }, shape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp), containerColor = MaterialTheme.colorScheme.surfaceContainer) {
         SheetTitle("New notebook")
         SheetRow(Icons.Outlined.Description, "Blank notebook", "Plain, lined or grid pages") { showNew = false; showCreate = true }
         SheetRow(Icons.Outlined.PictureAsPdf, "From a PDF", "Write directly on a textbook") { showNew = false; pickPdf.launch(arrayOf("application/pdf")) }
@@ -157,11 +190,11 @@ fun NotebooksScreen(
 
     actionsFor?.let { nb ->
         val pages by repo.pages(nb.id).collectAsState(initial = emptyList())
-        ModalBottomSheet(onDismissRequest = { actionsFor = null }, shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)) {
+        ModalBottomSheet(onDismissRequest = { actionsFor = null }, shape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp), containerColor = MaterialTheme.colorScheme.surfaceContainer) {
             Row(Modifier.padding(horizontal = 24.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                PagePreview(repo, pages.firstOrNull(), paperOf(nb), Modifier.width(44.dp).aspectRatio(0.72f).clip(RoundedCornerShape(6.dp)).border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(6.dp)))
+                BookCover(nb.title, bookCoverColor(nb), pages.any { it.kind == PageKind.PDF }, Modifier.width(44.dp).aspectRatio(0.72f).clip(RoundedCornerShape(6.dp)))
                 Spacer(Modifier.width(16.dp))
-                Column { Text(nb.title, style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis); Text(meta(nb), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                Column { Text(nb.title, style = MaterialTheme.typography.titleLarge.copy(fontFamily = titleFontFamily(nb.title)), maxLines = 1, overflow = TextOverflow.Ellipsis); Text(meta(nb), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
             }
             HorizontalDivider(Modifier.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.outlineVariant)
             SheetRow(Icons.Outlined.DriveFileRenameOutline, "Rename") { actionsFor = null; renameFor = nb }
@@ -207,7 +240,7 @@ fun NotebooksScreen(
             dismissButton = { TextButton(onClick = { deleteFor = null }) { Text("Cancel") } },
         )
     }
-    if (showAppearance) ModalBottomSheet(onDismissRequest = { showAppearance = false }, shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)) {
+    if (showAppearance) ModalBottomSheet(onDismissRequest = { showAppearance = false }, shape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp), containerColor = MaterialTheme.colorScheme.surfaceContainer) {
         SheetTitle("Appearance")
         Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             ThemeMode.entries.forEach { m ->
@@ -254,7 +287,7 @@ private fun LibraryHeader(count: Int, compact: Boolean, importing: Boolean, onSe
         }
         Spacer(Modifier.height(12.dp))
         Surface(
-            onClick = onSearch, shape = CircleShape, color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            onClick = onSearch, shape = RoundedCornerShape(26.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh,
             modifier = Modifier.fillMaxWidth().height(50.dp),
         ) {
             Row(Modifier.padding(horizontal = 18.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -273,30 +306,94 @@ private fun NotebookCard(repo: NotePadRepository, notebook: Notebook, selected: 
     val pages by repo.pages(notebook.id).collectAsState(initial = emptyList())
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
-    val scale by animateFloatAsState(if (pressed) 0.97f else 1f, spring(stiffness = Spring.StiffnessMediumLow), label = "press")
-    val radius = 14.dp
+    val scale by animateFloatAsState(if (pressed) 0.96f else 1f, spring(stiffness = Spring.StiffnessMediumLow), label = "press")
+    val cover = remember(notebook.id, notebook.coverColor) { bookCoverColor(notebook) }
+    val radius = RoundedCornerShape(topStart = 4.dp, bottomStart = 4.dp, topEnd = 10.dp, bottomEnd = 10.dp)
     Column(modifier.graphicsLayer { scaleX = scale; scaleY = scale }) {
         Box(
             Modifier.fillMaxWidth().aspectRatio(0.72f)
-                .shadow(if (selected) 10.dp else 4.dp, RoundedCornerShape(radius), spotColor = Color.Black.copy(alpha = 0.35f))
-                .clip(RoundedCornerShape(radius))
-                .border(if (selected) 2.dp else 1.dp, if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(radius))
+                .shadow(if (selected) 12.dp else 7.dp, radius, spotColor = Color.Black.copy(alpha = 0.36f))
+                .clip(radius)
+                .border(if (selected) 2.dp else 1.dp, if (selected) MaterialTheme.colorScheme.primary else cover.copy(alpha = 0.65f), radius)
                 .combinedClickable(interactionSource = interaction, indication = null, onClick = onOpen, onLongClick = onMore),
         ) {
-            PagePreview(repo, pages.firstOrNull(), paperOf(notebook), Modifier.fillMaxSize())
-            // spine
-            Box(Modifier.fillMaxHeight().width(6.dp).background(MaterialTheme.colorScheme.primary.copy(alpha = 0.55f)))
-            if (notebook.coverColor == "#1F1F22") Unit
+            BookCover(notebook.title, cover, pages.any { it.kind == PageKind.PDF }, Modifier.fillMaxSize())
         }
         Spacer(Modifier.height(10.dp))
         Row(verticalAlignment = Alignment.Top) {
             Column(Modifier.weight(1f)) {
-                Text(notebook.title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(notebook.title, style = MaterialTheme.typography.titleSmall.copy(fontFamily = titleFontFamily(notebook.title)), fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Text(meta(notebook), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
             }
             if (!compact) IconButton(onClick = onMore, modifier = Modifier.size(28.dp)) { Icon(Icons.Default.MoreVert, "More", tint = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
     }
+}
+
+@Composable
+private fun BookCover(title: String, color: Color, isPdf: Boolean, modifier: Modifier = Modifier) {
+    val spine = Color(color.red * 0.62f, color.green * 0.62f, color.blue * 0.62f)
+    val edge = Color(color.red * 0.91f, color.green * 0.91f, color.blue * 0.91f)
+    Box(modifier.background(Brush.horizontalGradient(listOf(spine, color, edge)))) {
+        Canvas(Modifier.fillMaxSize()) {
+            drawIntoCanvas { canvas ->
+                val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                    shader = PaperTexture.shader()
+                    alpha = 110
+                    colorFilter = android.graphics.PorterDuffColorFilter(
+                        android.graphics.Color.rgb((color.red * 255).toInt(), (color.green * 255).toInt(), (color.blue * 255).toInt()),
+                        android.graphics.PorterDuff.Mode.MULTIPLY,
+                    )
+                }
+                canvas.nativeCanvas.drawRect(0f, 0f, size.width, size.height, paint)
+            }
+            val spineWidth = 10.dp.toPx()
+            drawRect(spine, size = androidx.compose.ui.geometry.Size(spineWidth, size.height))
+            var y = 10.dp.toPx()
+            while (y < size.height - 10.dp.toPx()) {
+                drawLine(Color(0xFFF3E7D4).copy(alpha = 0.7f), Offset(spineWidth / 2f, y), Offset(spineWidth / 2f, y + 4.dp.toPx()), 1.dp.toPx())
+                y += 10.dp.toPx()
+            }
+            drawLine(Color.White.copy(alpha = 0.18f), Offset(spineWidth + 2.dp.toPx(), 0f), Offset(spineWidth + 2.dp.toPx(), size.height), 1.dp.toPx())
+        }
+        Box(
+            Modifier.align(Alignment.CenterEnd).padding(end = 12.dp).width(7.dp).fillMaxHeight(0.92f)
+                .background(spine.copy(alpha = 0.82f), RoundedCornerShape(4.dp)),
+        )
+        Surface(
+            Modifier.fillMaxWidth(if (isPdf) 0.68f else 1f).padding(start = 18.dp, end = 18.dp, top = 18.dp),
+            shape = RoundedCornerShape(3.dp),
+            color = Color(0xFFF4EBDD).copy(alpha = 0.94f),
+        ) {
+            Text(
+                title,
+                Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                color = Color(0xFF382D22),
+                style = MaterialTheme.typography.titleSmall.copy(fontFamily = titleFontFamily(title), fontSize = 13.sp),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        if (isPdf) {
+            Surface(
+                Modifier.align(Alignment.TopEnd).padding(8.dp),
+                color = Color(0xFFB4532A),
+                shape = RoundedCornerShape(4.dp),
+            ) {
+                Text("PDF", Modifier.padding(horizontal = 7.dp, vertical = 4.dp), color = Color.White, style = MaterialTheme.typography.labelSmall)
+            }
+        }
+    }
+}
+
+private val coverPalette = listOf(
+    Color(0xFF7A2E2A), Color(0xFF2F5D50), Color(0xFF233A5E), Color(0xFFC08A2E),
+    Color(0xFF5B3A5E), Color(0xFF4B5563), Color(0xFFB4532A), Color(0xFF6B6B2F),
+)
+
+private fun bookCoverColor(notebook: Notebook): Color {
+    notebook.coverColor?.let { hex -> runCatching { return Color(android.graphics.Color.parseColor(hex)) } }
+    return coverPalette[Math.floorMod(notebook.id.hashCode(), coverPalette.size)]
 }
 
 @Composable
@@ -319,7 +416,7 @@ private fun EmptyLibrary(onNew: () -> Unit, onImport: () -> Unit) {
 
 @Composable
 internal fun SheetTitle(text: String) {
-    Text(text, style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 8.dp))
+    Text(text, style = MaterialTheme.typography.titleLarge.copy(fontFamily = titleFontFamily(text)), fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 8.dp))
 }
 
 @Composable
@@ -365,9 +462,9 @@ private fun LanguageRow(current: String, onPick: (String) -> Unit) {
 @Composable
 private fun ThemeSwatch(mode: ThemeMode) {
     val (bg, fg) = when (mode) {
-        ThemeMode.LIGHT -> Color(0xFFFAFAF7) to Color(0xFF2458C5)
-        ThemeMode.DARK -> Color(0xFF1F1F22) to Color(0xFFADC6FF)
-        ThemeMode.SEPIA -> Color(0xFFF6EFE0) to Color(0xFF7A4F2A)
+        ThemeMode.LIGHT -> Color(0xFFF3EFE7) to Color(0xFFB4532A)
+        ThemeMode.DARK -> Color(0xFF1B1916) to Color(0xFFF0A47C)
+        ThemeMode.SEPIA -> Color(0xFFF1E8D8) to Color(0xFFB4532A)
         ThemeMode.SYSTEM -> MaterialTheme.colorScheme.surfaceContainerLowest to MaterialTheme.colorScheme.primary
     }
     Box(Modifier.size(40.dp, 28.dp).clip(RoundedCornerShape(6.dp)).background(bg).border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(6.dp))) {

@@ -6,6 +6,8 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Matrix
 import android.graphics.Paint
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffColorFilter
 import android.graphics.Typeface
 import android.os.SystemClock
 import android.view.GestureDetector
@@ -77,6 +79,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     }
     private val rulerHandlePaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val rulerHandleOutlinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+    private val rulerAnglePillPaint = Paint(Paint.ANTI_ALIAS_FLAG)
 
     private enum class RulerGesture { NONE, DRAG, ROTATE, TWO_FINGER }
     private var rulerGesture = RulerGesture.NONE
@@ -177,6 +180,10 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         canvas.save()
         canvas.clipRect(0f, stripTop, width.toFloat(), height.toFloat())
         canvas.drawColor(paperPaint.color)
+        paperTexturePaint.colorFilter = PorterDuffColorFilter(paperPaint.color, PorterDuff.Mode.MULTIPLY)
+        paperTexturePaint.alpha = 110
+        canvas.drawRect(0f, stripTop, width.toFloat(), height.toFloat(), paperTexturePaint)
+        paperTexturePaint.alpha = 255
         canvas.save(); canvas.concat(zoomToView)
         drawTemplate(canvas)
         canvas.restore()
@@ -231,7 +238,13 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     private val predictor = MotionEventPredictor.newInstance(this)
     private val templatePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFC9CDD6.toInt(); strokeWidth = 0f; style = Paint.Style.STROKE }
     private val paperPaint = Paint().apply { color = 0xFFFFFFFF.toInt() }
-    private val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x22000000 }
+    private val paperTexturePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { shader = PaperTexture.shader() }
+    private val paperViewPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x10000000 }
+    private val keyShadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x08000000 }
+    private val pageViewRect = RectF()
+    private val pageClipPath = Path()
+    private var deskColor = 0xFFF3EFE7.toInt()
     private val bitmapPaint = Paint(Paint.FILTER_BITMAP_FLAG)
 
     private val scaleDetector = ScaleGestureDetector(context, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
@@ -247,11 +260,24 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
 
     private val strokeLayer = object : View(context) {
         override fun onDraw(canvas: Canvas) {
-            canvas.drawColor(0xFFE9EAEE.toInt())
+            canvas.drawColor(deskColor)
+            pageViewRect.set(0f, 0f, pageWidthPt, pageHeightPt)
+            pageToView.mapRect(pageViewRect)
+            val corner = 12f * resources.displayMetrics.density
+            shadowPaint.setShadowLayer(18f * resources.displayMetrics.density, 0f, 7f * resources.displayMetrics.density, 0x33000000)
+            keyShadowPaint.setShadowLayer(7f * resources.displayMetrics.density, 0f, 2f * resources.displayMetrics.density, 0x26000000)
+            canvas.drawRoundRect(pageViewRect, corner, corner, shadowPaint)
+            canvas.drawRoundRect(pageViewRect, corner, corner, keyShadowPaint)
+            paperViewPaint.color = paperPaint.color
+            canvas.drawRoundRect(pageViewRect, corner, corner, paperViewPaint)
+            pageClipPath.reset()
+            pageClipPath.addRoundRect(pageViewRect, corner, corner, Path.Direction.CW)
+            canvas.save()
+            canvas.clipPath(pageClipPath)
             canvas.save()
             canvas.concat(pageToView)
-            canvas.drawRect(2f, 3f, pageWidthPt + 2f, pageHeightPt + 3f, shadowPaint)
-            canvas.drawRect(0f, 0f, pageWidthPt, pageHeightPt, paperPaint)
+            paperTexturePaint.colorFilter = PorterDuffColorFilter(paperPaint.color, PorterDuff.Mode.MULTIPLY)
+            canvas.drawRect(0f, 0f, pageWidthPt, pageHeightPt, paperTexturePaint)
             drawTemplate(canvas)
             canvas.restore()
             pageBitmap?.let { bmp ->
@@ -283,6 +309,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
                 for (b in textBlocks) TextBlockPainter.draw(canvas, b, b.id == selectedTextBlockId)
                 canvas.restore()
             }
+            canvas.restore()
             drawRuler(canvas)
             drawZoomStrip(canvas)
         }
@@ -321,6 +348,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         rulerOutlinePaint.strokeWidth = 1f / scale
         rulerTickPaint.strokeWidth = 1f / scale
         rulerHandleOutlinePaint.strokeWidth = 1f / scale
+        rulerFillPaint.setShadowLayer(8f / scale, 0f, 3f / scale, 0x44000000)
 
         canvas.save()
         canvas.concat(pageToView)
@@ -361,12 +389,18 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         val handleX = rulerCx + halfLength
         canvas.drawCircle(handleX, rulerCy, RULER_HANDLE_RADIUS_PT, rulerHandlePaint)
         canvas.drawCircle(handleX, rulerCy, RULER_HANDLE_RADIUS_PT, rulerHandleOutlinePaint)
+        rulerTextPaint.textAlign = Paint.Align.CENTER
+        rulerTextPaint.textSize = 18f
+        canvas.drawText("↻", handleX, rulerCy + 6f, rulerTextPaint)
         canvas.restore()
 
         canvas.save()
         canvas.concat(pageToView)
         rulerTextPaint.textSize = RULER_ANGLE_TEXT_PT
-        canvas.drawText("${degrees.roundToInt()}°", rulerCx, rulerCy + RULER_ANGLE_BASELINE_PT, rulerTextPaint)
+        val angleCenter = rulerPagePoint(rulerCx, rulerCy + 16f)
+        val pill = RectF(angleCenter[0] - 24f, angleCenter[1] - 12f, angleCenter[0] + 24f, angleCenter[1] + 12f)
+        canvas.drawRoundRect(pill, 12f, 12f, rulerAnglePillPaint)
+        canvas.drawText("${degrees.roundToInt()}°", angleCenter[0], angleCenter[1] + 4f, rulerTextPaint)
         canvas.restore()
     }
 
@@ -419,6 +453,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     }
 
     fun setPaperColor(argb: Int) { paperPaint.color = argb; templatePaint.color = if (argb == 0xFF1F1F22.toInt()) 0xFF3A3A40.toInt() else 0xFFC9CDD6.toInt(); strokeLayer.invalidate() }
+    fun setDeskColor(argb: Int) { deskColor = argb; strokeLayer.invalidate() }
 
     fun setRulerVisible(visible: Boolean) {
         rulerVisible = visible
@@ -554,12 +589,13 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     }
 
     private fun updateRulerPaints() {
-        rulerFillPaint.color = if (rulerDarkTheme) 0xD92A2B2F.toInt() else 0xD1FFFFFF.toInt()
-        rulerOutlinePaint.color = if (rulerDarkTheme) 0xFF7C8188.toInt() else 0xFF7A7F87.toInt()
-        rulerTickPaint.color = if (rulerDarkTheme) 0xFFE5E7EB.toInt() else 0xFF4A4F57.toInt()
-        rulerTextPaint.color = if (rulerDarkTheme) 0xFFF1F3F5.toInt() else 0xFF30343A.toInt()
-        rulerHandlePaint.color = if (rulerDarkTheme) 0xFF50545B.toInt() else 0xFFE5E7EB.toInt()
-        rulerHandleOutlinePaint.color = if (rulerDarkTheme) 0xFFE5E7EB.toInt() else 0xFF4A4F57.toInt()
+        rulerFillPaint.color = if (rulerDarkTheme) 0x1FFFFFFF else 0x8CFFFFFF.toInt()
+        rulerOutlinePaint.color = 0xBFFFFFFF.toInt()
+        rulerTickPaint.color = 0xFF5A5248.toInt()
+        rulerTextPaint.color = if (rulerDarkTheme) 0xFFEDE6DA.toInt() else 0xFF4A4036.toInt()
+        rulerHandlePaint.color = if (rulerDarkTheme) 0x335A5248 else 0x99FFFFFF.toInt()
+        rulerHandleOutlinePaint.color = 0xBFFFFFFF.toInt()
+        rulerAnglePillPaint.color = if (rulerDarkTheme) 0xCC2B2823.toInt() else 0xCCFFFFFF.toInt()
     }
 
     private fun clampPan() {

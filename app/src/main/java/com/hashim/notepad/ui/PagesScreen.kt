@@ -87,7 +87,7 @@ fun PagesScreen(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         if (showBack) IconButton(onClick = onBack, modifier = Modifier.offset(x = (-12).dp)) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
                         Column(Modifier.weight(1f)) {
-                            Text(title, style = MaterialTheme.typography.headlineMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            Text(title, style = MaterialTheme.typography.headlineMedium.copy(fontFamily = titleFontFamily(title)), maxLines = 2, overflow = TextOverflow.Ellipsis)
                             Text(
                                 busy ?: "${pages.size} page${if (pages.size == 1) "" else "s"} · ${InkRecognizer.LANGUAGES.firstOrNull { it.first == notebook?.language }?.second ?: ""}",
                                 style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -104,7 +104,7 @@ fun PagesScreen(
         }
     }
 
-    if (showMore) ModalBottomSheet(onDismissRequest = { showMore = false }, shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)) {
+    if (showMore) ModalBottomSheet(onDismissRequest = { showMore = false }, shape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp), containerColor = MaterialTheme.colorScheme.surfaceContainer) {
         SheetTitle(title)
         SheetRow(Icons.Outlined.Spellcheck, "Recognise handwriting", "Index every page for search (${InkRecognizer.LANGUAGES.firstOrNull { it.first == notebook?.language }?.second ?: "ar"})") {
             showMore = false
@@ -137,7 +137,7 @@ fun PagesScreen(
         Spacer(Modifier.height(24.dp))
     }
 
-    if (showAdd) ModalBottomSheet(onDismissRequest = { showAdd = false }, shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)) {
+    if (showAdd) ModalBottomSheet(onDismissRequest = { showAdd = false }, shape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp), containerColor = MaterialTheme.colorScheme.surfaceContainer) {
         SheetTitle("Add page")
         Row(Modifier.padding(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
             listOf(PageKind.BLANK to "Blank", PageKind.LINED to "Lined", PageKind.GRID to "Grid").forEach { (kind, label) ->
@@ -164,9 +164,9 @@ private fun PageTile(repo: NotePadRepository, page: Page, number: Int, paper: Co
     Column(modifier.graphicsLayer { scaleX = scale; scaleY = scale }, horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
             Modifier.fillMaxWidth().aspectRatio(page.widthPt / page.heightPt)
-                .shadow(3.dp, RoundedCornerShape(8.dp), spotColor = Color.Black.copy(alpha = 0.3f))
-                .clip(RoundedCornerShape(8.dp))
-                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp))
+                .shadow(5.dp, RoundedCornerShape(12.dp), spotColor = Color.Black.copy(alpha = 0.22f))
+                .clip(RoundedCornerShape(12.dp))
+                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(12.dp))
                 .clickable(interactionSource = interaction, indication = null, onClick = onClick),
         ) {
             PagePreview(repo, page, paper, Modifier.fillMaxSize())

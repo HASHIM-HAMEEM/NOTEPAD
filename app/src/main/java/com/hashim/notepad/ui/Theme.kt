@@ -17,10 +17,14 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.googlefonts.Font
+import androidx.compose.ui.text.googlefonts.GoogleFont
+import androidx.compose.ui.text.googlefonts.GoogleFont.Provider
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.hashim.notepad.R
 
 enum class ThemeMode(val label: String) { SYSTEM("System"), LIGHT("Light"), DARK("Dark"), SEPIA("Sepia") }
 
@@ -47,49 +51,49 @@ private object Ink {
     val amber = Color(0xFFB7791F)
 }
 
-/** Light: warm paper-white surfaces, ink-blue accent, soft outlines. */
+/** Light: warm paper-white surfaces and terracotta ink. */
 private val LightScheme: ColorScheme = lightColorScheme(
-    primary = Ink.blue, onPrimary = Color.White, primaryContainer = Ink.blueSoft, onPrimaryContainer = Ink.blueOnSoft,
-    secondary = Color(0xFF5B6473), onSecondary = Color.White, secondaryContainer = Color(0xFFE6E9EF), onSecondaryContainer = Color(0xFF1C2330),
-    tertiary = Ink.amber, onTertiary = Color.White, tertiaryContainer = Color(0xFFFCEBCB), onTertiaryContainer = Color(0xFF3F2A00),
-    background = Color(0xFFFAFAF7), onBackground = Color(0xFF1A1C1E),
-    surface = Color(0xFFFAFAF7), onSurface = Color(0xFF1A1C1E),
-    surfaceVariant = Color(0xFFEDEEEA), onSurfaceVariant = Color(0xFF585C63),
-    surfaceContainerLowest = Color(0xFFFFFFFF), surfaceContainerLow = Color(0xFFF4F4F1), surfaceContainer = Color(0xFFEFEFEB),
-    surfaceContainerHigh = Color(0xFFE9E9E5), surfaceContainerHighest = Color(0xFFE2E3DF),
-    outline = Color(0xFFB9BCC3), outlineVariant = Color(0xFFDFE1E5),
+    primary = Color(0xFFB4532A), onPrimary = Color.White, primaryContainer = Color(0xFFF6DCCD), onPrimaryContainer = Color(0xFF4A1C08),
+    secondary = Color(0xFF6E655A), onSecondary = Color.White, secondaryContainer = Color(0xFFE8E1D7), onSecondaryContainer = Color(0xFF2B2620),
+    tertiary = Color(0xFF8B6B40), onTertiary = Color.White, tertiaryContainer = Color(0xFFF1E2CB), onTertiaryContainer = Color(0xFF34230C),
+    background = Color(0xFFF3EFE7), onBackground = Color(0xFF2B2620),
+    surface = Color(0xFFFBF8F2), onSurface = Color(0xFF2B2620),
+    surfaceVariant = Color(0xFFE8E1D4), onSurfaceVariant = Color(0xFF6B6258),
+    surfaceContainerLowest = Color(0xFFFFFCF8), surfaceContainerLow = Color(0xFFF7F2E9), surfaceContainer = Color(0xFFEFE9DE),
+    surfaceContainerHigh = Color(0xFFE8E1D4), surfaceContainerHighest = Color(0xFFDED6C9),
+    outline = Color(0xFFB7AA99), outlineVariant = Color(0xFFE0D8CA),
     error = Color(0xFFB3261E), onError = Color.White, errorContainer = Color(0xFFF9DEDC), onErrorContainer = Color(0xFF410E0B),
-    inverseSurface = Color(0xFF2F3133), inverseOnSurface = Color(0xFFF1F1EE), inversePrimary = Color(0xFFADC6FF),
+    inverseSurface = Color(0xFF342F29), inverseOnSurface = Color(0xFFF7F2E9), inversePrimary = Color(0xFFE8AE90),
     scrim = Color.Black,
 )
 
-/** Dark: true neutral greys (no blue cast), slightly lifted accent for contrast. */
+/** Dark: warm charcoal surfaces and a lifted terracotta accent. */
 private val DarkScheme: ColorScheme = darkColorScheme(
-    primary = Color(0xFFADC6FF), onPrimary = Color(0xFF082B6A), primaryContainer = Color(0xFF1E3F85), onPrimaryContainer = Color(0xFFD9E2FF),
-    secondary = Color(0xFFC0C7D4), onSecondary = Color(0xFF2A313D), secondaryContainer = Color(0xFF40475A), onSecondaryContainer = Color(0xFFDCE2F1),
-    tertiary = Color(0xFFF3C77A), onTertiary = Color(0xFF402D00), tertiaryContainer = Color(0xFF5B4300), onTertiaryContainer = Color(0xFFFFE1A8),
-    background = Color(0xFF121214), onBackground = Color(0xFFE5E5E3),
-    surface = Color(0xFF121214), onSurface = Color(0xFFE5E5E3),
-    surfaceVariant = Color(0xFF2A2B2E), onSurfaceVariant = Color(0xFFBDBFC5),
-    surfaceContainerLowest = Color(0xFF0C0C0E), surfaceContainerLow = Color(0xFF1A1A1D), surfaceContainer = Color(0xFF1F1F22),
-    surfaceContainerHigh = Color(0xFF29292D), surfaceContainerHighest = Color(0xFF343438),
-    outline = Color(0xFF5E6168), outlineVariant = Color(0xFF34363B),
+    primary = Color(0xFFF0A47C), onPrimary = Color(0xFF4A1C08), primaryContainer = Color(0xFF68351F), onPrimaryContainer = Color(0xFFFFDBCA),
+    secondary = Color(0xFFB8AE9F), onSecondary = Color(0xFF302B25), secondaryContainer = Color(0xFF4A4238), onSecondaryContainer = Color(0xFFE9DFD1),
+    tertiary = Color(0xFFD5B37C), onTertiary = Color(0xFF39280F), tertiaryContainer = Color(0xFF55401F), onTertiaryContainer = Color(0xFFF2D8A8),
+    background = Color(0xFF1B1916), onBackground = Color(0xFFEDE6DA),
+    surface = Color(0xFF23201C), onSurface = Color(0xFFEDE6DA),
+    surfaceVariant = Color(0xFF34302A), onSurfaceVariant = Color(0xFFB8AE9F),
+    surfaceContainerLowest = Color(0xFF171512), surfaceContainerLow = Color(0xFF25221E), surfaceContainer = Color(0xFF2B2823),
+    surfaceContainerHigh = Color(0xFF34302A), surfaceContainerHighest = Color(0xFF3D3831),
+    outline = Color(0xFF81776B), outlineVariant = Color(0xFF4B453D),
     error = Color(0xFFF2B8B5), onError = Color(0xFF601410), errorContainer = Color(0xFF8C1D18), onErrorContainer = Color(0xFFF9DEDC),
-    inverseSurface = Color(0xFFE5E5E3), inverseOnSurface = Color(0xFF2F3133), inversePrimary = Ink.blue,
+    inverseSurface = Color(0xFFEDE6DA), inverseOnSurface = Color(0xFF2B2620), inversePrimary = Color(0xFFB4532A),
     scrim = Color.Black,
 )
 
 /** Sepia: book-paper tones for long reading sessions. */
 private val SepiaScheme: ColorScheme = lightColorScheme(
-    primary = Color(0xFF7A4F2A), onPrimary = Color.White, primaryContainer = Color(0xFFEFDCC6), onPrimaryContainer = Color(0xFF2E1B0A),
+    primary = Color(0xFFB4532A), onPrimary = Color.White, primaryContainer = Color(0xFFF0D9C8), onPrimaryContainer = Color(0xFF4A1C08),
     secondary = Color(0xFF6B5A47), onSecondary = Color.White, secondaryContainer = Color(0xFFEADFCB), onSecondaryContainer = Color(0xFF2A2117),
     tertiary = Color(0xFF5E6B3F), onTertiary = Color.White, tertiaryContainer = Color(0xFFE0E6C8), onTertiaryContainer = Color(0xFF1B2308),
-    background = Color(0xFFF6EFE0), onBackground = Color(0xFF2A2117),
-    surface = Color(0xFFF6EFE0), onSurface = Color(0xFF2A2117),
-    surfaceVariant = Color(0xFFEADFCB), onSurfaceVariant = Color(0xFF5A4E3F),
-    surfaceContainerLowest = Color(0xFFFFFBF2), surfaceContainerLow = Color(0xFFF1E8D6), surfaceContainer = Color(0xFFECE2CE),
-    surfaceContainerHigh = Color(0xFFE6DCC6), surfaceContainerHighest = Color(0xFFE0D5BE),
-    outline = Color(0xFFA2927B), outlineVariant = Color(0xFFD6CBB5),
+    background = Color(0xFFF1E8D8), onBackground = Color(0xFF30261C),
+    surface = Color(0xFFFAF3E6), onSurface = Color(0xFF30261C),
+    surfaceVariant = Color(0xFFEADFCB), onSurfaceVariant = Color(0xFF6C5742),
+    surfaceContainerLowest = Color(0xFFFFFAEF), surfaceContainerLow = Color(0xFFF5ECDC), surfaceContainer = Color(0xFFEDE2CF),
+    surfaceContainerHigh = Color(0xFFE6DAC5), surfaceContainerHighest = Color(0xFFDED0B8),
+    outline = Color(0xFFA2927B), outlineVariant = Color(0xFFD6C8B0),
     error = Color(0xFF9C3A2E), onError = Color.White, errorContainer = Color(0xFFF7DAD3), onErrorContainer = Color(0xFF3B0A05),
     inverseSurface = Color(0xFF3A3024), inverseOnSurface = Color(0xFFF6EFE0), inversePrimary = Color(0xFFE8BE95),
     scrim = Color.Black,
@@ -99,19 +103,36 @@ private val SepiaScheme: ColorScheme = lightColorScheme(
 
 val NotePadShapes = Shapes(
     extraSmall = RoundedCornerShape(8.dp),
-    small = RoundedCornerShape(12.dp),
-    medium = RoundedCornerShape(16.dp),
-    large = RoundedCornerShape(22.dp),
-    extraLarge = RoundedCornerShape(28.dp),
+    small = RoundedCornerShape(14.dp),
+    medium = RoundedCornerShape(20.dp),
+    large = RoundedCornerShape(26.dp),
+    extraLarge = RoundedCornerShape(32.dp),
 )
 
-private val base = FontFamily.SansSerif
+private val googleFontProvider = Provider(
+    providerAuthority = "com.google.android.gms.fonts",
+    providerPackage = "com.google.android.gms",
+    certificates = R.array.com_google_android_gms_fonts_certs,
+)
+private val base = FontFamily(
+    Font(GoogleFont("Nunito"), googleFontProvider, FontWeight.Normal),
+    Font(GoogleFont("Nunito"), googleFontProvider, FontWeight.Medium),
+    Font(GoogleFont("Nunito"), googleFontProvider, FontWeight.SemiBold),
+    Font(GoogleFont("Nunito"), googleFontProvider, FontWeight.Bold),
+)
+private val arabicTitle = FontFamily(
+    Font(GoogleFont("Noto Naskh Arabic"), googleFontProvider, FontWeight.Normal),
+    Font(GoogleFont("Noto Naskh Arabic"), googleFontProvider, FontWeight.Bold),
+)
+
+fun titleFontFamily(text: String): FontFamily =
+    if (text.any { it in '\u0600'..'\u06FF' || it in '\u0750'..'\u077F' || it in '\u08A0'..'\u08FF' }) arabicTitle else base
 
 /** Tight, confident type: large display titles, calm body copy, generous line height for Arabic script. */
 val NotePadTypography = Typography(
-    displaySmall = TextStyle(fontFamily = base, fontWeight = FontWeight.SemiBold, fontSize = 36.sp, lineHeight = 44.sp, letterSpacing = (-0.5).sp),
-    headlineLarge = TextStyle(fontFamily = base, fontWeight = FontWeight.SemiBold, fontSize = 30.sp, lineHeight = 38.sp, letterSpacing = (-0.4).sp),
-    headlineMedium = TextStyle(fontFamily = base, fontWeight = FontWeight.SemiBold, fontSize = 26.sp, lineHeight = 34.sp, letterSpacing = (-0.3).sp),
+    displaySmall = TextStyle(fontFamily = base, fontWeight = FontWeight.Bold, fontSize = 36.sp, lineHeight = 44.sp, letterSpacing = (-0.2).sp),
+    headlineLarge = TextStyle(fontFamily = base, fontWeight = FontWeight.SemiBold, fontSize = 30.sp, lineHeight = 38.sp, letterSpacing = (-0.2).sp),
+    headlineMedium = TextStyle(fontFamily = base, fontWeight = FontWeight.SemiBold, fontSize = 26.sp, lineHeight = 34.sp, letterSpacing = (-0.2).sp),
     headlineSmall = TextStyle(fontFamily = base, fontWeight = FontWeight.SemiBold, fontSize = 22.sp, lineHeight = 30.sp, letterSpacing = (-0.2).sp),
     titleLarge = TextStyle(fontFamily = base, fontWeight = FontWeight.SemiBold, fontSize = 20.sp, lineHeight = 28.sp),
     titleMedium = TextStyle(fontFamily = base, fontWeight = FontWeight.Medium, fontSize = 16.sp, lineHeight = 24.sp, letterSpacing = 0.1.sp),

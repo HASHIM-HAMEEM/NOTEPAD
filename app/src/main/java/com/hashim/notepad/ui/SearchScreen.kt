@@ -1,11 +1,13 @@
 package com.hashim.notepad.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -27,7 +29,7 @@ import com.hashim.notepad.data.SearchHit
 import kotlinx.coroutines.delay
 
 /** Search across handwriting, typed text, PDF text layers and PDF annotations. */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun SearchScreen(repo: NotePadRepository, onBack: () -> Unit, onOpenPage: (notebookId: String, pageId: String) -> Unit) {
     var query by remember { mutableStateOf("") }
@@ -40,7 +42,7 @@ fun SearchScreen(repo: NotePadRepository, onBack: () -> Unit, onOpenPage: (noteb
         Column(Modifier.padding(padding).fillMaxSize()) {
             Row(Modifier.statusBarsPadding().padding(start = 8.dp, end = 20.dp, top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
-                Surface(shape = CircleShape, color = MaterialTheme.colorScheme.surfaceContainerHigh, modifier = Modifier.weight(1f).height(50.dp)) {
+                Surface(shape = RoundedCornerShape(26.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh, modifier = Modifier.weight(1f).height(50.dp)) {
                     Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Outlined.Search, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
                         Spacer(Modifier.width(12.dp))
@@ -63,14 +65,14 @@ fun SearchScreen(repo: NotePadRepository, onBack: () -> Unit, onOpenPage: (noteb
                 else -> LazyColumn(contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     items(hits, key = { it.pageId + it.source }) { h ->
                         Surface(
-                            onClick = { onOpenPage(h.notebookId, h.pageId) }, shape = MaterialTheme.shapes.large,
-                            color = MaterialTheme.colorScheme.surfaceContainerLow, modifier = Modifier.fillMaxWidth(),
+                            onClick = { onOpenPage(h.notebookId, h.pageId) }, shape = RoundedCornerShape(22.dp),
+                            color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.fillMaxWidth().animateItem(),
                         ) {
                             Column(Modifier.padding(18.dp)) {
                                 Text(h.snippet, style = MaterialTheme.typography.bodyLarge, maxLines = 3, overflow = TextOverflow.Ellipsis)
                                 Spacer(Modifier.height(10.dp))
                                 Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text(h.notebookTitle, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                                    Text(h.notebookTitle, style = MaterialTheme.typography.labelLarge.copy(fontFamily = titleFontFamily(h.notebookTitle)), fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                                     Text("  ·  page ${h.pageIndex}", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                     Spacer(Modifier.width(10.dp))
                                     Box(Modifier.clip(CircleShape).background(MaterialTheme.colorScheme.secondaryContainer).padding(horizontal = 10.dp, vertical = 3.dp)) {
