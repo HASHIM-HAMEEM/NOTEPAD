@@ -1,0 +1,10 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <!-- paper sheet -->
+    <path android:fillColor="#FFFFFFFF" android:pathData="M34,28 h32 a4,4 0 0 1 4,4 v44 a4,4 0 0 1 -4,4 h-32 a4,4 0 0 1 -4,-4 v-44 a4,4 0 0 1 4,-4 z"/>
+    <path android:strokeColor="#FFD7DCE5" android:strokeWidth="1.5" android:pathData="M38,42 h24 M38,50 h24 M38,58 h16"/>
+    <!-- pen -->
+    <path android:fillColor="#FF2458C5" android:pathData="M60,26 l10,-10 a3,3 0 0 1 4.2,0 l5.8,5.8 a3,3 0 0 1 0,4.2 l-10,10 z"/>
+    <path android:fillColor="#FF173C88" android:pathData="M60,26 l10,10 -22,22 -14,4 4,-14 z"/>
+    <path android:fillColor="#FF0E2A62" android:pathData="M38,48 l-4,14 14,-4 z"/>
+</vector>

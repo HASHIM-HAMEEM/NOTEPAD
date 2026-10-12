@@ -3,6 +3,7 @@ package com.hashim.notepad.ui
 import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.togetherWith
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.platform.LocalContext
@@ -49,9 +50,21 @@ fun NotePadApp(initialPdf: Uri?, themeMode: ThemeMode, dynamicColor: Boolean, on
         }
     }
 
-    when (val s = screen) {
+    androidx.compose.animation.AnimatedContent(
+        targetState = screen,
+        transitionSpec = {
+            val forward = depth(targetState) >= depth(initialState)
+            val enter = androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(Motion.medium, delayMillis = 40, easing = Motion.emphasizedDecelerate)) +
+                androidx.compose.animation.slideInHorizontally(androidx.compose.animation.core.tween(Motion.long, easing = Motion.emphasized)) { if (forward) it / 10 else -it / 10 }
+            val exit = androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(Motion.short, easing = Motion.emphasizedAccelerate)) +
+                androidx.compose.animation.slideOutHorizontally(androidx.compose.animation.core.tween(Motion.long, easing = Motion.emphasized)) { if (forward) -it / 10 else it / 10 }
+            (enter togetherWith exit).using(androidx.compose.animation.SizeTransform(clip = false))
+        },
+        label = "screen",
+    ) { s ->
+    when (s) {
         Screen.Notebooks -> NotebooksScreen(
-            repo = repo, importer = importer, bundles = bundles, importing = importing,
+            repo = repo, importer = importer, bundles = bundles, exporter = exporter, importing = importing,
             onImportingChanged = { importing = it },
             onOpen = { screen = Screen.Pages(it) },
             onSearch = { screen = Screen.Search }, onAccount = { screen = Screen.Account },
@@ -64,7 +77,7 @@ fun NotePadApp(initialPdf: Uri?, themeMode: ThemeMode, dynamicColor: Boolean, on
             if (twoPane) androidx.compose.foundation.layout.Row {
                 androidx.compose.foundation.layout.Box(Modifier.width(320.dp)) {
                     NotebooksScreen(
-                        repo = repo, importer = importer, bundles = bundles, importing = importing, onImportingChanged = { importing = it },
+                        repo = repo, importer = importer, bundles = bundles, exporter = exporter, importing = importing, onImportingChanged = { importing = it },
                         onOpen = { screen = Screen.Pages(it) }, onSearch = { screen = Screen.Search }, onAccount = { screen = Screen.Account }, selectedId = s.notebookId, compact = true,
                         themeMode = themeMode, dynamicColor = dynamicColor, onThemeChange = onThemeChange, onDynamicChange = onDynamicChange,
                     )
@@ -86,4 +99,7 @@ fun NotePadApp(initialPdf: Uri?, themeMode: ThemeMode, dynamicColor: Boolean, on
             onNavigateToPage = { screen = Screen.Editor(s.notebookId, it) },
         )
     }
+    }
 }
+
+private fun depth(s: Screen) = when (s) { Screen.Notebooks -> 0; Screen.Search, Screen.Account -> 1; is Screen.Pages -> 1; is Screen.Editor -> 2 }

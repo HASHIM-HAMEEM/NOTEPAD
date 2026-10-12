@@ -1,48 +1,96 @@
 package com.hashim.notepad.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.hashim.notepad.data.NotePadRepository
 import com.hashim.notepad.data.SearchHit
 import kotlinx.coroutines.delay
 
+/** Search across handwriting, typed text, PDF text layers and PDF annotations. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SearchScreen(repo: NotePadRepository, onBack: () -> Unit, onOpenPage: (notebookId: String, pageId: String) -> Unit) {
     var query by remember { mutableStateOf("") }
     var hits by remember { mutableStateOf<List<SearchHit>>(emptyList()) }
-    LaunchedEffect(query) { delay(250); hits = repo.search(query) }
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(query) { delay(200); hits = repo.search(query) }
+    LaunchedEffect(Unit) { focus.requestFocus() }
 
-    Scaffold(topBar = {
-        TopAppBar(
-            navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
-            title = {
-                OutlinedTextField(
-                    value = query, onValueChange = { query = it }, singleLine = true,
-                    placeholder = { Text("Search handwriting and text") }, modifier = Modifier.fillMaxWidth().padding(end = 12.dp),
-                )
-            },
-        )
-    }) { padding ->
-        if (query.isNotBlank() && hits.isEmpty()) {
-            Box(Modifier.padding(padding).fillMaxSize()) { Text("No matches.", Modifier.padding(24.dp), color = MaterialTheme.colorScheme.onSurfaceVariant) }
-        } else LazyColumn(Modifier.padding(padding).fillMaxSize()) {
-            items(hits, key = { it.pageId + it.source }) { h ->
-                ListItem(
-                    headlineContent = { Text(h.snippet, maxLines = 2) },
-                    supportingContent = { Text("${h.notebookTitle} · page ${h.pageIndex} · ${h.source}") },
-                    modifier = Modifier.clickable { onOpenPage(h.notebookId, h.pageId) },
-                )
-                HorizontalDivider()
+    Scaffold(containerColor = MaterialTheme.colorScheme.background) { padding ->
+        Column(Modifier.padding(padding).fillMaxSize()) {
+            Row(Modifier.statusBarsPadding().padding(start = 8.dp, end = 20.dp, top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
+                Surface(shape = CircleShape, color = MaterialTheme.colorScheme.surfaceContainerHigh, modifier = Modifier.weight(1f).height(50.dp)) {
+                    Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Outlined.Search, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Spacer(Modifier.width(12.dp))
+                        Box(Modifier.weight(1f)) {
+                            if (query.isEmpty()) Text("Search handwriting, text and PDFs", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            BasicTextField(
+                                value = query, onValueChange = { query = it }, singleLine = true,
+                                textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
+                                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                                modifier = Modifier.fillMaxWidth().focusRequester(focus),
+                            )
+                        }
+                        if (query.isNotEmpty()) IconButton(onClick = { query = "" }, modifier = Modifier.size(28.dp)) { Icon(Icons.Default.Close, "Clear", Modifier.size(18.dp)) }
+                    }
+                }
+            }
+            when {
+                query.isBlank() -> Hint("Type a word in Arabic, Urdu or English.\nHandwriting is searched once a notebook has been recognised.")
+                hits.isEmpty() -> Hint("No matches for “$query”.")
+                else -> LazyColumn(contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    items(hits, key = { it.pageId + it.source }) { h ->
+                        Surface(
+                            onClick = { onOpenPage(h.notebookId, h.pageId) }, shape = MaterialTheme.shapes.large,
+                            color = MaterialTheme.colorScheme.surfaceContainerLow, modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Column(Modifier.padding(18.dp)) {
+                                Text(h.snippet, style = MaterialTheme.typography.bodyLarge, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                                Spacer(Modifier.height(10.dp))
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(h.notebookTitle, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                                    Text("  ·  page ${h.pageIndex}", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Spacer(Modifier.width(10.dp))
+                                    Box(Modifier.clip(CircleShape).background(MaterialTheme.colorScheme.secondaryContainer).padding(horizontal = 10.dp, vertical = 3.dp)) {
+                                        Text(sourceLabel(h.source), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSecondaryContainer)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
 }
+
+@Composable
+private fun Hint(text: String) {
+    Box(Modifier.fillMaxSize().padding(40.dp), contentAlignment = Alignment.TopCenter) {
+        Text(text, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+    }
+}
+
+private fun sourceLabel(source: String) = when (source) { "ink" -> "Handwriting"; "text" -> "Typed"; "pdf" -> "PDF text"; "pdf_annot" -> "PDF note"; else -> source }

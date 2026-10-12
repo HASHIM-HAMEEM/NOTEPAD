@@ -25,6 +25,17 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.automirrored.filled.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.draw.clip
 import androidx.ink.strokes.Stroke
 import com.hashim.notepad.data.NotePadRepository
 import com.hashim.notepad.data.Page
@@ -134,54 +145,13 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
         }
     }
 
-    Scaffold(
-        topBar = {
-            Column(Modifier.statusBarsPadding()) {
-                Row(
-                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 4.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(2.dp),
-                ) {
-                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
-                    ToolButton(Icons.Default.Edit, "Pen", tool == InkTool.PEN) { tool = InkTool.PEN }
-                    ToolButton(Icons.Default.Brush, "Highlighter", tool == InkTool.HIGHLIGHTER) { tool = InkTool.HIGHLIGHTER }
-                    ToolButton(Icons.Default.Clear, "Eraser", tool == InkTool.ERASER) { tool = InkTool.ERASER }
-                    if (tool == InkTool.ERASER) FilterChip(selected = pixelEraser, onClick = { pixelEraser = !pixelEraser }, label = { Text(if (pixelEraser) "Pixel" else "Stroke") }, modifier = Modifier.padding(horizontal = 4.dp))
-                    ToolButton(Icons.Default.TextFields, "Text", tool == InkTool.TEXT) { tool = InkTool.TEXT }
-                    ToolButton(Icons.Default.HighlightAlt, "Lasso", tool == InkTool.LASSO) { tool = InkTool.LASSO }
-                    if (hasSelection) IconButton(onClick = { surface?.deleteSelection() }) { Icon(Icons.Default.DeleteOutline, "Delete selection") }
-                    VerticalDivider(Modifier.height(24.dp).padding(horizontal = 4.dp))
-                    PALETTE.forEach { c -> ColorDot(c, c == color) { color = c } }
-                    VerticalDivider(Modifier.height(24.dp).padding(horizontal = 4.dp))
-                    Slider(value = size, onValueChange = { size = it }, valueRange = 1f..10f, modifier = Modifier.width(110.dp))
-                    VerticalDivider(Modifier.height(24.dp).padding(horizontal = 4.dp))
-                    IconButton(onClick = { surface?.undo() }) { Icon(Icons.AutoMirrored.Filled.Undo, "Undo") }
-                    IconButton(onClick = { surface?.redo() }) { Icon(Icons.AutoMirrored.Filled.Redo, "Redo") }
-                    VerticalDivider(Modifier.height(24.dp).padding(horizontal = 4.dp))
-                    IconButton(enabled = index > 0, onClick = { onNavigateToPage(pages[index - 1].id) }) { Icon(Icons.Default.ChevronLeft, "Previous page") }
-                    Text(if (pages.isEmpty()) "" else "${index + 1}/${pages.size}", style = MaterialTheme.typography.labelMedium)
-                    IconButton(enabled = index in 0 until pages.size - 1, onClick = { onNavigateToPage(pages[index + 1].id) }) { Icon(Icons.Default.ChevronRight, "Next page") }
-                    VerticalDivider(Modifier.height(24.dp).padding(horizontal = 4.dp))
-                    FilterChip(selected = zoomBox, onClick = { zoomBox = !zoomBox }, label = { Text("Zoom box") })
-                    Spacer(Modifier.width(4.dp))
-                    FilterChip(selected = fingerDraws, onClick = { fingerDraws = !fingerDraws }, label = { Text("Finger draws") })
-                    Spacer(Modifier.width(4.dp))
-                    FilterChip(selected = showLab, onClick = { showLab = !showLab }, label = { Text("Lab") })
-                }
-                HorizontalDivider()
-            }
-        },
-        bottomBar = {
-            if (showLab) Text(
-                text = "tool=${sample.toolType}  pressure=%.3f  tilt=%.0f°  orient=%.0f°  input→handler=%d ms  batched=%d  strokes=%d".format(
-                    sample.pressure, sample.tilt, sample.orientation, sample.handlerLatencyMs, sample.historySize, sample.strokeCount
-                ),
-                fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.labelSmall,
-                modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant).padding(8.dp).navigationBarsPadding(),
-            )
-        },
-    ) { padding ->
-        Box(Modifier.fillMaxSize().padding(padding)) {
+    var chrome by rememberSaveable { mutableStateOf(true) }
+    var colorPop by remember { mutableStateOf(false) }
+    var sizePop by remember { mutableStateOf(false) }
+    var morePop by remember { mutableStateOf(false) }
+    val haptics = androidx.compose.ui.platform.LocalHapticFeedback.current
+
+    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceContainerLow)) {
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = { ctx ->
@@ -194,15 +164,114 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
                 }
             },
         )
+
+        // ---- floating toolbar
+        androidx.compose.animation.AnimatedVisibility(
+            visible = chrome,
+            enter = androidx.compose.animation.slideInVertically(tween(Motion.medium, easing = Motion.emphasizedDecelerate)) { -it } + fadeIn(tween(Motion.medium)),
+            exit = androidx.compose.animation.slideOutVertically(tween(Motion.short, easing = Motion.emphasizedAccelerate)) { -it } + fadeOut(tween(Motion.short)),
+            modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = 10.dp, start = 12.dp, end = 12.dp),
+        ) {
+            Surface(
+                shape = CircleShape, color = MaterialTheme.colorScheme.surface, tonalElevation = 2.dp, shadowElevation = 8.dp,
+                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+            ) {
+                Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 6.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
+                    PillDivider()
+                    ToolButton(Icons.Default.Edit, "Pen", tool == InkTool.PEN) { tool = InkTool.PEN }
+                    ToolButton(Icons.Default.Brush, "Highlighter", tool == InkTool.HIGHLIGHTER) { tool = InkTool.HIGHLIGHTER }
+                    ToolButton(Icons.Default.Clear, "Eraser", tool == InkTool.ERASER) { if (tool == InkTool.ERASER) pixelEraser = !pixelEraser else tool = InkTool.ERASER }
+                    androidx.compose.animation.AnimatedVisibility(tool == InkTool.ERASER) {
+                        Text(if (pixelEraser) "pixel" else "stroke", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(end = 6.dp))
+                    }
+                    ToolButton(Icons.Default.TextFields, "Text", tool == InkTool.TEXT) { tool = InkTool.TEXT }
+                    ToolButton(Icons.Default.HighlightAlt, "Lasso", tool == InkTool.LASSO) { tool = InkTool.LASSO }
+                    androidx.compose.animation.AnimatedVisibility(hasSelection) {
+                        IconButton(onClick = { surface?.deleteSelection() }) { Icon(Icons.Default.DeleteOutline, "Delete selection", tint = MaterialTheme.colorScheme.error) }
+                    }
+                    PillDivider()
+                    Box {
+                        IconButton(onClick = { colorPop = true; sizePop = false }) {
+                            Box(Modifier.size(22.dp).background(Color(color), CircleShape).border(2.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape))
+                        }
+                        DropdownMenu(expanded = colorPop, onDismissRequest = { colorPop = false }, shape = MaterialTheme.shapes.large) {
+                            Row(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                PALETTE.forEach { c -> ColorDot(c, c == color) { color = c; colorPop = false } }
+                            }
+                        }
+                    }
+                    Box {
+                        IconButton(onClick = { sizePop = true; colorPop = false }) {
+                            Box(Modifier.size((6 + size * 1.6f).dp.coerceAtMost(22.dp)).background(MaterialTheme.colorScheme.onSurface, CircleShape))
+                        }
+                        DropdownMenu(expanded = sizePop, onDismissRequest = { sizePop = false }, shape = MaterialTheme.shapes.large) {
+                            Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp).width(220.dp)) {
+                                Text("Stroke width", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Box(Modifier.fillMaxWidth().height(36.dp), contentAlignment = Alignment.Center) {
+                                    Box(Modifier.fillMaxWidth(0.8f).height((size * 1.6f).dp).background(Color(color), CircleShape))
+                                }
+                                Slider(value = size, onValueChange = { size = it }, valueRange = 1f..10f)
+                            }
+                        }
+                    }
+                    PillDivider()
+                    IconButton(onClick = { surface?.undo() }) { Icon(Icons.AutoMirrored.Filled.Undo, "Undo") }
+                    IconButton(onClick = { surface?.redo() }) { Icon(Icons.AutoMirrored.Filled.Redo, "Redo") }
+                    PillDivider()
+                    Box {
+                        IconButton(onClick = { morePop = true }) { Icon(Icons.Default.MoreHoriz, "More") }
+                        DropdownMenu(expanded = morePop, onDismissRequest = { morePop = false }, shape = MaterialTheme.shapes.large) {
+                            ToggleItem("Zoom box", "Magnified line for small writing", zoomBox) { zoomBox = it }
+                            ToggleItem("Finger draws", "Otherwise finger pans and zooms", fingerDraws) { fingerDraws = it }
+                            ToggleItem("Pen diagnostics", "Pressure, tilt and latency", showLab) { showLab = it }
+                        }
+                    }
+                    IconButton(onClick = { chrome = false }) { Icon(Icons.Default.KeyboardArrowUp, "Hide toolbar") }
+                }
+            }
+        }
+        // collapsed handle
+        androidx.compose.animation.AnimatedVisibility(
+            visible = !chrome, enter = fadeIn(tween(Motion.medium)), exit = fadeOut(tween(Motion.short)),
+            modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = 6.dp),
+        ) {
+            Surface(onClick = { chrome = true }, shape = CircleShape, color = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f), shadowElevation = 4.dp) {
+                Icon(Icons.Default.KeyboardArrowDown, "Show toolbar", Modifier.padding(horizontal = 18.dp, vertical = 4.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+
+        // ---- page pill
+        androidx.compose.animation.AnimatedVisibility(
+            visible = chrome && pages.isNotEmpty(), enter = fadeIn(tween(Motion.medium)), exit = fadeOut(tween(Motion.short)),
+            modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = if (zoomBox) 64.dp else 16.dp),
+        ) {
+            Surface(shape = CircleShape, color = MaterialTheme.colorScheme.surface, tonalElevation = 2.dp, shadowElevation = 6.dp,
+                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 4.dp)) {
+                    IconButton(enabled = index > 0, onClick = { onNavigateToPage(pages[index - 1].id) }) { Icon(Icons.Default.ChevronLeft, "Previous page") }
+                    Text("${index + 1} / ${pages.size}", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(horizontal = 6.dp))
+                    IconButton(enabled = index in 0 until pages.size - 1, onClick = { onNavigateToPage(pages[index + 1].id) }) { Icon(Icons.Default.ChevronRight, "Next page") }
+                }
+            }
+        }
+
         if (zoomBox) Row(
-            Modifier.align(Alignment.BottomEnd).padding(8.dp).background(MaterialTheme.colorScheme.surface.copy(alpha = 0.92f), MaterialTheme.shapes.medium),
+            Modifier.align(Alignment.BottomEnd).navigationBarsPadding().padding(8.dp).background(MaterialTheme.colorScheme.surface.copy(alpha = 0.92f), CircleShape),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             IconButton(onClick = { surface?.zoomShift(-1) }) { Icon(Icons.Default.ChevronLeft, "Back") }
             IconButton(onClick = { surface?.zoomShift(1) }) { Icon(Icons.Default.ChevronRight, "Forward") }
             IconButton(onClick = { surface?.zoomNewLine() }) { Icon(Icons.Default.KeyboardReturn, "New line") }
         }
-        }
+
+        if (showLab) Text(
+            text = "tool=${sample.toolType}  pressure=%.3f  tilt=%.0f°  orient=%.0f°  input→handler=%d ms  batched=%d  strokes=%d".format(
+                sample.pressure, sample.tilt, sample.orientation, sample.handlerLatencyMs, sample.historySize, sample.strokeCount
+            ),
+            fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.align(Alignment.BottomStart).navigationBarsPadding().padding(8.dp).background(MaterialTheme.colorScheme.surface.copy(alpha = 0.9f), MaterialTheme.shapes.small).padding(8.dp),
+        )
     }
 
     newBlockAt?.let { (x, y) ->
@@ -249,15 +318,30 @@ private fun TextBlockDialog(initial: String, onDismiss: () -> Unit, onDelete: ((
 private fun rememberSaveableTool() = remember { mutableStateOf(InkTool.PEN) }
 
 @Composable
+private fun PillDivider() { VerticalDivider(Modifier.height(22.dp).padding(horizontal = 4.dp), color = MaterialTheme.colorScheme.outlineVariant) }
+
+@Composable
 private fun ToolButton(icon: ImageVector, label: String, selected: Boolean, onClick: () -> Unit) {
-    FilledIconToggleButton(checked = selected, onCheckedChange = { onClick() }) { Icon(icon, label) }
+    val bg by animateColorAsState(if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent, tween(Motion.short), label = "toolBg")
+    val fg by animateColorAsState(if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant, tween(Motion.short), label = "toolFg")
+    Box(Modifier.size(40.dp).clip(CircleShape).background(bg).clickable(onClick = onClick), contentAlignment = Alignment.Center) { Icon(icon, label, tint = fg) }
+}
+
+@Composable
+private fun ToggleItem(title: String, subtitle: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    DropdownMenuItem(
+        text = { Column { Text(title); Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) } },
+        trailingIcon = { Switch(checked = checked, onCheckedChange = onChange) },
+        onClick = { onChange(!checked) },
+    )
 }
 
 @Composable
 private fun ColorDot(argb: Int, selected: Boolean, onClick: () -> Unit) {
+    val ring by animateFloatAsState(if (selected) 1f else 0f, tween(Motion.short), label = "ring")
     Box(
-        Modifier.size(28.dp).padding(2.dp).clickable(onClick = onClick)
-            .border(if (selected) 2.dp else 0.dp, MaterialTheme.colorScheme.onSurface, CircleShape)
-            .padding(3.dp).background(Color(argb), CircleShape)
+        Modifier.size(32.dp).clip(CircleShape).clickable(onClick = onClick)
+            .border((2 * ring).dp, MaterialTheme.colorScheme.onSurface.copy(alpha = ring), CircleShape)
+            .padding(4.dp).background(Color(argb), CircleShape)
     )
 }

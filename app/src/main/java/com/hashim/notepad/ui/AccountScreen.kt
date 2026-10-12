@@ -1,5 +1,9 @@
 package com.hashim.notepad.ui
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -76,8 +80,25 @@ fun AccountScreen(onBack: () -> Unit) {
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Column(Modifier.widthIn(max = 480.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Card(Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Surface(Modifier.fillMaxWidth(), shape = MaterialTheme.shapes.extraLarge, color = MaterialTheme.colorScheme.surfaceContainerLow) {
+                    Column(Modifier.padding(22.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            val dot = when (status.state) {
+                                SyncState.IDLE -> androidx.compose.ui.graphics.Color(0xFF2E9E5B)
+                                SyncState.SYNCING -> MaterialTheme.colorScheme.primary
+                                SyncState.ERROR -> MaterialTheme.colorScheme.error
+                                SyncState.OFFLINE, SyncState.NEEDS_KEY -> MaterialTheme.colorScheme.tertiary
+                                else -> MaterialTheme.colorScheme.outline
+                            }
+                            Box(Modifier.size(10.dp).background(dot, CircleShape))
+                            Spacer(Modifier.widthIn(10.dp))
+                            Text(
+                                when (status.state) {
+                                    SyncState.DISABLED -> "Sync off"; SyncState.SIGNED_OUT -> "On this device only"; SyncState.NEEDS_KEY -> "Passphrase needed"
+                                    SyncState.IDLE -> "Up to date"; SyncState.SYNCING -> "Syncing"; SyncState.ERROR -> "Sync error"; SyncState.OFFLINE -> "Offline"
+                                }, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                         Text(
                             when (status.state) {
                                 SyncState.DISABLED -> "Sync not configured in this build"
@@ -87,7 +108,7 @@ fun AccountScreen(onBack: () -> Unit) {
                                 SyncState.SYNCING -> "Syncing…"
                                 SyncState.ERROR -> "Sync error"
                                 SyncState.OFFLINE -> "Offline — changes queued"
-                            }, style = MaterialTheme.typography.titleMedium
+                            }, style = MaterialTheme.typography.headlineSmall
                         )
                         if (status.lastSyncAt > 0) Text("Last sync: ${DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(status.lastSyncAt))}", style = MaterialTheme.typography.bodySmall)
                         Text("Pending changes: ${status.pending}", style = MaterialTheme.typography.bodySmall)
