@@ -9,6 +9,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.IosShare
+import androidx.compose.material.icons.filled.Archive
+import com.hashim.notepad.export.BundleCodec
 import androidx.compose.material.icons.filled.Spellcheck
 import androidx.compose.ui.platform.LocalContext
 import android.widget.Toast
@@ -27,7 +29,7 @@ import kotlinx.coroutines.launch
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PagesScreen(
-    repo: NotePadRepository, notebookId: String, exporter: PdfExporter, recognizer: InkRecognizer,
+    repo: NotePadRepository, notebookId: String, exporter: PdfExporter, recognizer: InkRecognizer, bundles: BundleCodec,
     onBack: () -> Unit, onOpenPage: (String) -> Unit,
 ) {
     val context = LocalContext.current
@@ -73,6 +75,22 @@ fun PagesScreen(
                             busy = null
                         }
                     }) { Icon(Icons.Default.IosShare, "Export PDF") }
+                    IconButton(enabled = busy == null, onClick = {
+                        scope.launch {
+                            busy = "Exporting bundle…"
+                            runCatching {
+                                val dir = java.io.File(context.cacheDir, "exports").apply { mkdirs() }
+                                val f = java.io.File(dir, title.replace(Regex("[^\\p{L}\\p{N} _-]"), "_").ifBlank { "notebook" } + ".notepad.zip")
+                                f.outputStream().use { bundles.export(notebookId, it) }
+                                f
+                            }.onSuccess { f ->
+                                val uri = androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.files", f)
+                                val send = android.content.Intent(android.content.Intent.ACTION_SEND).apply { type = "application/zip"; putExtra(android.content.Intent.EXTRA_STREAM, uri); addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+                                context.startActivity(android.content.Intent.createChooser(send, "Export notebook bundle"))
+                            }.onFailure { Toast.makeText(context, "Export failed: ${it.message}", Toast.LENGTH_LONG).show() }
+                            busy = null
+                        }
+                    }) { Icon(Icons.Default.Archive, "Export notebook bundle") }
                 },
             )
         },

@@ -13,6 +13,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Unarchive
+import com.hashim.notepad.export.BundleCodec
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -32,6 +34,7 @@ import java.util.Date
 fun NotebooksScreen(
     repo: NotePadRepository,
     importer: PdfImporter,
+    bundles: BundleCodec,
     importing: Boolean,
     onImportingChanged: (Boolean) -> Unit,
     onOpen: (String) -> Unit,
@@ -54,12 +57,26 @@ fun NotebooksScreen(
         }
     }
 
+    val pickBundle = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri ?: return@rememberLauncherForActivityResult
+        scope.launch {
+            onImportingChanged(true)
+            runCatching { context.contentResolver.openInputStream(uri)!!.use { bundles.import(it) } }
+                .onSuccess { onOpen(it) }
+                .onFailure { Toast.makeText(context, "Could not import bundle: ${it.message}", Toast.LENGTH_LONG).show() }
+            onImportingChanged(false)
+        }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("Notebooks") },
                 actions = {
                     IconButton(onClick = onSearch) { Icon(Icons.Default.Search, "Search") }
+                    IconButton(onClick = { pickBundle.launch(arrayOf("application/zip", "application/octet-stream")) }, enabled = !importing) {
+                        Icon(Icons.Default.Unarchive, "Import notebook bundle")
+                    }
                     IconButton(onClick = { pickPdf.launch(arrayOf("application/pdf")) }, enabled = !importing) {
                         Icon(Icons.Default.PictureAsPdf, "Import PDF")
                     }

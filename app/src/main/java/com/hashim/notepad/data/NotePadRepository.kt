@@ -13,7 +13,8 @@ import kotlinx.coroutines.withContext
 import java.util.UUID
 
 class NotePadRepository(context: Context) {
-    private val helper = NotePadDb(context.applicationContext)
+    internal val helper = NotePadDb(context.applicationContext)
+    internal fun changed() = notifyChanged()
     private val changes = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
 
     private fun notifyChanged() { changes.tryEmit(Unit) }

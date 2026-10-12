@@ -23,6 +23,7 @@ fun NotePadApp(initialPdf: Uri?) {
     val importer = remember { PdfImporter(context, repo) }
     val exporter = remember { com.hashim.notepad.export.PdfExporter(context, repo) }
     val recognizer = remember { com.hashim.notepad.recognition.InkRecognizer() }
+    val bundles = remember { com.hashim.notepad.export.BundleCodec(context, repo) }
     var screen by remember { mutableStateOf<Screen>(Screen.Notebooks) }
     var importing by rememberSaveable { mutableStateOf(false) }
 
@@ -44,14 +45,14 @@ fun NotePadApp(initialPdf: Uri?) {
 
     when (val s = screen) {
         Screen.Notebooks -> NotebooksScreen(
-            repo = repo, importer = importer, importing = importing,
+            repo = repo, importer = importer, bundles = bundles, importing = importing,
             onImportingChanged = { importing = it },
             onOpen = { screen = Screen.Pages(it) },
             onSearch = { screen = Screen.Search },
         )
         Screen.Search -> SearchScreen(repo = repo, onBack = { screen = Screen.Notebooks }, onOpenPage = { nb, page -> screen = Screen.Editor(nb, page) })
         is Screen.Pages -> PagesScreen(
-            repo = repo, notebookId = s.notebookId, exporter = exporter, recognizer = recognizer,
+            repo = repo, notebookId = s.notebookId, exporter = exporter, recognizer = recognizer, bundles = bundles,
             onBack = { screen = Screen.Notebooks },
             onOpenPage = { screen = Screen.Editor(s.notebookId, it) },
         )
