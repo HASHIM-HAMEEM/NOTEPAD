@@ -19,12 +19,13 @@ sealed interface Screen {
     data class Pages(val notebookId: String) : Screen
     data class Editor(val notebookId: String, val pageId: String) : Screen
     data object Search : Screen
+    data object Account : Screen
 }
 
 @Composable
 fun NotePadApp(initialPdf: Uri?, themeMode: ThemeMode, dynamicColor: Boolean, onThemeChange: (ThemeMode) -> Unit, onDynamicChange: (Boolean) -> Unit) {
     val context = LocalContext.current
-    val repo = remember { NotePadRepository(context) }
+    val repo = remember { NotePadRepository.get(context) }
     val importer = remember { PdfImporter(context, repo) }
     val exporter = remember { com.hashim.notepad.export.PdfExporter(context, repo) }
     val recognizer = remember { com.hashim.notepad.recognition.InkRecognizer() }
@@ -53,9 +54,10 @@ fun NotePadApp(initialPdf: Uri?, themeMode: ThemeMode, dynamicColor: Boolean, on
             repo = repo, importer = importer, bundles = bundles, importing = importing,
             onImportingChanged = { importing = it },
             onOpen = { screen = Screen.Pages(it) },
-            onSearch = { screen = Screen.Search },
+            onSearch = { screen = Screen.Search }, onAccount = { screen = Screen.Account },
             themeMode = themeMode, dynamicColor = dynamicColor, onThemeChange = onThemeChange, onDynamicChange = onDynamicChange,
         )
+        Screen.Account -> AccountScreen(onBack = { screen = Screen.Notebooks })
         Screen.Search -> SearchScreen(repo = repo, onBack = { screen = Screen.Notebooks }, onOpenPage = { nb, page -> screen = Screen.Editor(nb, page) })
         is Screen.Pages -> androidx.compose.foundation.layout.BoxWithConstraints {
             val twoPane = maxWidth >= 840.dp
@@ -63,7 +65,7 @@ fun NotePadApp(initialPdf: Uri?, themeMode: ThemeMode, dynamicColor: Boolean, on
                 androidx.compose.foundation.layout.Box(Modifier.width(320.dp)) {
                     NotebooksScreen(
                         repo = repo, importer = importer, bundles = bundles, importing = importing, onImportingChanged = { importing = it },
-                        onOpen = { screen = Screen.Pages(it) }, onSearch = { screen = Screen.Search }, selectedId = s.notebookId, compact = true,
+                        onOpen = { screen = Screen.Pages(it) }, onSearch = { screen = Screen.Search }, onAccount = { screen = Screen.Account }, selectedId = s.notebookId, compact = true,
                         themeMode = themeMode, dynamicColor = dynamicColor, onThemeChange = onThemeChange, onDynamicChange = onDynamicChange,
                     )
                 }

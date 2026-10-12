@@ -19,6 +19,21 @@ class NotePadRepository(context: Context) {
 
     private fun notifyChanged() { changes.tryEmit(Unit) }
 
+    /** Queues a row for the next sync push. */
+    private fun mark(table: String, rowId: String) {
+        helper.writableDatabase.execSQL("insert or ignore into outbox(table_name, row_id) values (?, ?)", arrayOf(table, rowId))
+        onLocalChange?.invoke()
+    }
+
+    /** Set by the sync layer to schedule a push after local edits. */
+    @Volatile var onLocalChange: (() -> Unit)? = null
+
+    companion object {
+        @Volatile private var instance: NotePadRepository? = null
+        fun get(context: Context): NotePadRepository =
+            instance ?: synchronized(this) { instance ?: NotePadRepository(context.applicationContext).also { instance = it } }
+    }
+
     fun notebooks(): Flow<List<Notebook>> = flow {
         emit(loadNotebooks())
         changes.collect { emit(loadNotebooks()) }
@@ -74,7 +89,7 @@ class NotePadRepository(context: Context) {
             put("id", id); put("title", title); put("cover_color", coverColor); put("sort_order", 0)
             put("created_at", now); put("updated_at", now)
         })
-        notifyChanged(); id
+        mark("notebooks", id); notifyChanged(); id
     }
 
     fun textBlocks(pageId: String): Flow<List<TextBlock>> = flow {
@@ -91,19 +106,19 @@ class NotePadRepository(context: Context) {
         helper.writableDatabase.insertOrThrow("text_blocks", null, ContentValues().apply {
             put("id", id); put("page_id", pageId); put("x_pt", xPt); put("y_pt", yPt); put("w_pt", wPt); put("direction", "auto"); put("content", content); put("updated_at", System.currentTimeMillis())
         })
-        indexTextBlocks(pageId); notifyChanged(); id
+        mark("text_blocks", id); indexTextBlocks(pageId); notifyChanged(); id
     }
 
     suspend fun updateTextBlock(id: String, pageId: String, content: String? = null, xPt: Float? = null, yPt: Float? = null) = withContext(Dispatchers.IO) {
         helper.writableDatabase.update("text_blocks", ContentValues().apply {
             content?.let { put("content", it) }; xPt?.let { put("x_pt", it) }; yPt?.let { put("y_pt", it) }; put("updated_at", System.currentTimeMillis())
         }, "id = ?", arrayOf(id))
-        indexTextBlocks(pageId); notifyChanged()
+        mark("text_blocks", id); indexTextBlocks(pageId); notifyChanged()
     }
 
     suspend fun deleteTextBlock(id: String, pageId: String) = withContext(Dispatchers.IO) {
-        helper.writableDatabase.update("text_blocks", ContentValues().apply { put("deleted_at", System.currentTimeMillis()) }, "id = ?", arrayOf(id))
-        indexTextBlocks(pageId); notifyChanged()
+        helper.writableDatabase.update("text_blocks", ContentValues().apply { put("deleted_at", System.currentTimeMillis()); put("updated_at", System.currentTimeMillis()) }, "id = ?", arrayOf(id))
+        mark("text_blocks", id); indexTextBlocks(pageId); notifyChanged()
     }
 
     /** Keeps typed text searchable alongside recognised handwriting. */
@@ -114,16 +129,17 @@ class NotePadRepository(context: Context) {
         if (text.isNotBlank()) db.insertOrThrow("recognition", null, ContentValues().apply {
             put("id", UUID.randomUUID().toString()); put("page_id", pageId); put("source", "text"); put("text", text); put("updated_at", System.currentTimeMillis())
         })
+        mark("recognition", pageId)
     }
 
     suspend fun setNotebookPaper(id: String, hex: String) = withContext(Dispatchers.IO) {
-        helper.writableDatabase.update("notebooks", ContentValues().apply { put("cover_color", hex) }, "id = ?", arrayOf(id))
-        notifyChanged()
+        helper.writableDatabase.update("notebooks", ContentValues().apply { put("cover_color", hex); put("updated_at", System.currentTimeMillis()) }, "id = ?", arrayOf(id))
+        mark("notebooks", id); notifyChanged()
     }
 
     suspend fun setNotebookLanguage(id: String, language: String) = withContext(Dispatchers.IO) {
-        helper.writableDatabase.update("notebooks", ContentValues().apply { put("language", language) }, "id = ?", arrayOf(id))
-        notifyChanged()
+        helper.writableDatabase.update("notebooks", ContentValues().apply { put("language", language); put("updated_at", System.currentTimeMillis()) }, "id = ?", arrayOf(id))
+        mark("notebooks", id); notifyChanged()
     }
 
     suspend fun saveRecognition(pageId: String, source: String, language: String?, text: String) = withContext(Dispatchers.IO) {
@@ -137,7 +153,7 @@ class NotePadRepository(context: Context) {
             })
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
-        notifyChanged()
+        mark("recognition", pageId); notifyChanged()
     }
 
     suspend fun recognizedText(pageId: String): String? = withContext(Dispatchers.IO) {
@@ -168,12 +184,13 @@ class NotePadRepository(context: Context) {
 
     suspend fun renameNotebook(id: String, title: String) = withContext(Dispatchers.IO) {
         helper.writableDatabase.update("notebooks", ContentValues().apply { put("title", title); put("updated_at", System.currentTimeMillis()) }, "id = ?", arrayOf(id))
-        notifyChanged()
+        mark("notebooks", id); notifyChanged()
     }
 
     suspend fun deleteNotebook(id: String) = withContext(Dispatchers.IO) {
-        helper.writableDatabase.update("notebooks", ContentValues().apply { put("deleted_at", System.currentTimeMillis()) }, "id = ?", arrayOf(id))
-        notifyChanged()
+        val now = System.currentTimeMillis()
+        helper.writableDatabase.update("notebooks", ContentValues().apply { put("deleted_at", now); put("updated_at", now) }, "id = ?", arrayOf(id))
+        mark("notebooks", id); notifyChanged()
     }
 
     suspend fun addPage(notebookId: String, kind: PageKind, afterSortKey: Double? = null, widthPt: Float = 595f, heightPt: Float = 842f,
@@ -188,7 +205,7 @@ class NotePadRepository(context: Context) {
             put("created_at", now); put("updated_at", now)
         })
         touchNotebook(notebookId, now)
-        notifyChanged(); id
+        mark("pages", id); notifyChanged(); id
     }
 
     /** Imports a PDF as one page per PDF page. */
@@ -201,11 +218,14 @@ class NotePadRepository(context: Context) {
                 put("id", asset.id); put("kind", asset.kind); put("local_path", asset.localPath); put("byte_size", asset.byteSize)
                 put("sha256", asset.sha256); put("page_count", asset.pageCount); put("name", asset.name); put("created_at", now)
             }, android.database.sqlite.SQLiteDatabase.CONFLICT_IGNORE)
+            mark("assets", asset.id)
             var sortKey = maxSortKey(notebookId)
             pageSizesPt.forEachIndexed { index, (w, h) ->
                 sortKey += 1.0
+                val pageId = UUID.randomUUID().toString()
+                mark("pages", pageId)
                 db.insertOrThrow("pages", null, ContentValues().apply {
-                    put("id", UUID.randomUUID().toString()); put("notebook_id", notebookId); put("sort_key", sortKey); put("kind", PageKind.PDF.db)
+                    put("id", pageId); put("notebook_id", notebookId); put("sort_key", sortKey); put("kind", PageKind.PDF.db)
                     put("asset_id", asset.id); put("pdf_page_index", index); put("width_pt", w); put("height_pt", h)
                     put("created_at", now); put("updated_at", now)
                 })
@@ -239,7 +259,7 @@ class NotePadRepository(context: Context) {
             arrayOf<Any?>(UUID.randomUUID().toString(), pageId, layer, strokeCount, data, now)
         )
         db.execSQL("update pages set updated_at = ? where id = ?", arrayOf<Any?>(now, pageId))
-        notifyChanged()
+        mark("stroke_batches", pageId); mark("pages", pageId); notifyChanged()
     }
 
     private fun maxSortKey(notebookId: String): Double =
@@ -247,6 +267,7 @@ class NotePadRepository(context: Context) {
 
     private fun touchNotebook(id: String, now: Long) {
         helper.writableDatabase.execSQL("update notebooks set updated_at = ? where id = ?", arrayOf<Any?>(now, id))
+        mark("notebooks", id)
     }
 }
 

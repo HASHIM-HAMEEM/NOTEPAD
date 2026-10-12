@@ -10,6 +10,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.Search
@@ -42,6 +43,7 @@ fun NotebooksScreen(
     onImportingChanged: (Boolean) -> Unit,
     onOpen: (String) -> Unit,
     onSearch: () -> Unit,
+    onAccount: () -> Unit = {},
     themeMode: ThemeMode,
     dynamicColor: Boolean,
     onThemeChange: (ThemeMode) -> Unit,
@@ -85,6 +87,7 @@ fun NotebooksScreen(
                 title = { Text("Notebooks") },
                 actions = {
                     IconButton(onClick = onSearch) { Icon(Icons.Default.Search, "Search") }
+                    IconButton(onClick = onAccount) { Icon(Icons.Default.AccountCircle, "Sync & account") }
                     IconButton(onClick = { showSettings = true }) { Icon(Icons.Default.Tune, "Settings") }
                     IconButton(onClick = { pickBundle.launch(arrayOf("application/zip", "application/octet-stream")) }, enabled = !importing) {
                         Icon(Icons.Default.Unarchive, "Import notebook bundle")

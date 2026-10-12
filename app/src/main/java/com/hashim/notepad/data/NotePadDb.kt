@@ -18,18 +18,32 @@ class NotePadDb(context: Context) : SQLiteOpenHelper(context, "notepad.db", null
 
     override fun onCreate(db: SQLiteDatabase) {
         SCHEMA.split(Regex(";\\s*\\n(?=\\s*create)")).map { it.trim().removeSuffix(";") }.filter { it.isNotEmpty() }.forEach { db.execSQL(it) }
+        db.execSQL(OUTBOX); db.execSQL(SYNC_META)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        // FTS4 external-content triggers made every DELETE on recognition fail; search uses LIKE, so drop them.
-        for (sql in listOf(
-            "drop trigger if exists recognition_ai", "drop trigger if exists recognition_ad",
-            "drop trigger if exists recognition_au", "drop table if exists recognition_fts"
-        )) db.execSQL(sql)
+        if (oldVersion < 2) {
+            // FTS4 external-content triggers made every DELETE on recognition fail; search uses LIKE, so drop them.
+            for (sql in listOf(
+                "drop trigger if exists recognition_ai", "drop trigger if exists recognition_ad",
+                "drop trigger if exists recognition_au", "drop table if exists recognition_fts"
+            )) db.execSQL(sql)
+        }
+        if (oldVersion < 3) {
+            db.execSQL(OUTBOX); db.execSQL(SYNC_META)
+            // Everything that already exists must be pushed once sync is configured.
+            for (t in listOf("notebooks", "pages", "text_blocks", "assets")) db.execSQL("insert or ignore into outbox(table_name, row_id) select '$t', id from $t")
+            db.execSQL("insert or ignore into outbox(table_name, row_id) select 'stroke_batches', page_id from stroke_batches")
+            db.execSQL("insert or ignore into outbox(table_name, row_id) select distinct 'recognition', page_id from recognition")
+        }
     }
 
     companion object {
-        const val VERSION = 2
+        const val VERSION = 3
+
+        /** Rows changed locally and not yet pushed. row_id is the page id for stroke_batches and recognition. */
+        const val OUTBOX = "create table if not exists outbox (table_name text not null, row_id text not null, primary key (table_name, row_id))"
+        const val SYNC_META = "create table if not exists sync_meta (key text primary key, value text not null)"
 
         private val SCHEMA = """
             create table notebooks (
