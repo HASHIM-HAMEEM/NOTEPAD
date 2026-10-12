@@ -152,7 +152,7 @@ class NotePadRepository(context: Context) {
             """select r.page_id, p.notebook_id, n.title, r.text, r.source,
                       (select count(*) from pages p2 where p2.notebook_id = p.notebook_id and p2.sort_key <= p.sort_key and p2.deleted_at is null) as idx
                from recognition r join pages p on p.id = r.page_id join notebooks n on n.id = p.notebook_id
-               where p.deleted_at is null and n.deleted_at is null and r.text like ? escape '\\'
+               where p.deleted_at is null and n.deleted_at is null and r.text like ? escape '\'
                order by n.updated_at desc limit 100""", arrayOf(like)
         ).use { c ->
             buildList {
