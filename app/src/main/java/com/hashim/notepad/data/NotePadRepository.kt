@@ -77,6 +77,45 @@ class NotePadRepository(context: Context) {
         notifyChanged(); id
     }
 
+    fun textBlocks(pageId: String): Flow<List<TextBlock>> = flow {
+        emit(loadTextBlocks(pageId))
+        changes.collect { emit(loadTextBlocks(pageId)) }
+    }.flowOn(Dispatchers.IO)
+
+    private fun loadTextBlocks(pageId: String): List<TextBlock> = helper.readableDatabase.rawQuery(
+        "select id, page_id, x_pt, y_pt, w_pt, direction, content, updated_at from text_blocks where page_id = ? and deleted_at is null order by y_pt", arrayOf(pageId)
+    ).use { c -> buildList { while (c.moveToNext()) add(TextBlock(c.getString(0), c.getString(1), c.getFloat(2), c.getFloat(3), c.getFloat(4), c.getString(5), c.getString(6), c.getLong(7))) } }
+
+    suspend fun addTextBlock(pageId: String, xPt: Float, yPt: Float, wPt: Float, content: String): String = withContext(Dispatchers.IO) {
+        val id = UUID.randomUUID().toString()
+        helper.writableDatabase.insertOrThrow("text_blocks", null, ContentValues().apply {
+            put("id", id); put("page_id", pageId); put("x_pt", xPt); put("y_pt", yPt); put("w_pt", wPt); put("direction", "auto"); put("content", content); put("updated_at", System.currentTimeMillis())
+        })
+        indexTextBlocks(pageId); notifyChanged(); id
+    }
+
+    suspend fun updateTextBlock(id: String, pageId: String, content: String? = null, xPt: Float? = null, yPt: Float? = null) = withContext(Dispatchers.IO) {
+        helper.writableDatabase.update("text_blocks", ContentValues().apply {
+            content?.let { put("content", it) }; xPt?.let { put("x_pt", it) }; yPt?.let { put("y_pt", it) }; put("updated_at", System.currentTimeMillis())
+        }, "id = ?", arrayOf(id))
+        indexTextBlocks(pageId); notifyChanged()
+    }
+
+    suspend fun deleteTextBlock(id: String, pageId: String) = withContext(Dispatchers.IO) {
+        helper.writableDatabase.update("text_blocks", ContentValues().apply { put("deleted_at", System.currentTimeMillis()) }, "id = ?", arrayOf(id))
+        indexTextBlocks(pageId); notifyChanged()
+    }
+
+    /** Keeps typed text searchable alongside recognised handwriting. */
+    private fun indexTextBlocks(pageId: String) {
+        val db = helper.writableDatabase
+        val text = loadTextBlocks(pageId).joinToString("\n") { it.content }
+        db.delete("recognition", "page_id = ? and source = 'text'", arrayOf(pageId))
+        if (text.isNotBlank()) db.insertOrThrow("recognition", null, ContentValues().apply {
+            put("id", UUID.randomUUID().toString()); put("page_id", pageId); put("source", "text"); put("text", text); put("updated_at", System.currentTimeMillis())
+        })
+    }
+
     suspend fun setNotebookLanguage(id: String, language: String) = withContext(Dispatchers.IO) {
         helper.writableDatabase.update("notebooks", ContentValues().apply { put("language", language) }, "id = ?", arrayOf(id))
         notifyChanged()

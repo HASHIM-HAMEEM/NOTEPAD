@@ -41,3 +41,5 @@ data class Asset(
 )
 
 data class SearchHit(val pageId: String, val notebookId: String, val notebookTitle: String, val pageIndex: Int, val snippet: String, val source: String)
+
+data class TextBlock(val id: String, val pageId: String, val xPt: Float, val yPt: Float, val wPt: Float, val direction: String, val content: String, val updatedAt: Long)

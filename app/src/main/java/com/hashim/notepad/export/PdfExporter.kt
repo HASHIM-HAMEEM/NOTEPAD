@@ -12,6 +12,7 @@ import com.hashim.notepad.data.NotePadRepository
 import com.hashim.notepad.data.Page
 import com.hashim.notepad.data.PageKind
 import com.hashim.notepad.ink.StrokeStore
+import com.hashim.notepad.ink.TextBlockPainter
 import com.hashim.notepad.pdf.PdfPageSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
@@ -37,6 +38,7 @@ class PdfExporter(private val context: Context, private val repo: NotePadReposit
                     val identity = Matrix()
                     for (s in strokes) renderer.draw(canvas, s, identity)
                 }
+                for (b in repo.textBlocks(page.id).first()) TextBlockPainter.draw(canvas, b, false)
                 doc.finishPage(pdfPage)
             }
             val dir = File(context.cacheDir, "exports").apply { mkdirs() }

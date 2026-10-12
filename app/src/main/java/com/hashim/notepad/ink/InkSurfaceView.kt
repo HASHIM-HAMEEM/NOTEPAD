@@ -17,6 +17,7 @@ import androidx.ink.rendering.android.canvas.CanvasStrokeRenderer
 import androidx.ink.strokes.Stroke
 import androidx.input.motionprediction.MotionEventPredictor
 import com.hashim.notepad.data.PageKind
+import com.hashim.notepad.data.TextBlock
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
@@ -33,6 +34,12 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     var fingerDraws: Boolean = false
     var onSample: ((PointerSample) -> Unit)? = null
     var onStrokesChanged: ((List<Stroke>) -> Unit)? = null
+    /** Text tool: tap on empty space → (xPt, yPt, null); tap on a block → (xPt, yPt, block). */
+    var onTextTap: ((Float, Float, TextBlock?) -> Unit)? = null
+    var textBlocks: List<TextBlock> = emptyList()
+        set(value) { field = value; strokeLayer.invalidate() }
+    var selectedTextBlockId: String? = null
+        set(value) { field = value; strokeLayer.invalidate() }
 
     var pageWidthPt = 595f; private set
     var pageHeightPt = 842f; private set
@@ -87,6 +94,11 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
                 canvas.drawBitmap(bmp, m, bitmapPaint)
             }
             for (s in strokes) renderer.draw(canvas, s, pageToView)
+            if (textBlocks.isNotEmpty()) {
+                canvas.save(); canvas.concat(pageToView)
+                for (b in textBlocks) TextBlockPainter.draw(canvas, b, b.id == selectedTextBlockId)
+                canvas.restore()
+            }
         }
 
         private fun drawTemplate(canvas: Canvas) {
@@ -168,6 +180,13 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         if (!isStylus && !fingerDraws) return handleFingerNavigation(event)
         if (!isStylus && event.pointerCount > 1) { cancelCurrent(event); return handleFingerNavigation(event) }
 
+        if (brushSpec.tool == InkTool.TEXT) {
+            if (event.actionMasked == MotionEvent.ACTION_UP) {
+                val pt = floatArrayOf(event.x, event.y); viewToPage.mapPoints(pt)
+                onTextTap?.invoke(pt[0], pt[1], textBlocks.lastOrNull { TextBlockPainter.hit(it, pt[0], pt[1]) })
+            }
+            return true
+        }
         val eraserNow = toolType == MotionEvent.TOOL_TYPE_ERASER || brushSpec.tool == InkTool.ERASER ||
             (event.buttonState and MotionEvent.BUTTON_STYLUS_PRIMARY) != 0
 

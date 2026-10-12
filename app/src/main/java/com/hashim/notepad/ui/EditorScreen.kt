@@ -28,6 +28,7 @@ import androidx.ink.strokes.Stroke
 import com.hashim.notepad.data.NotePadRepository
 import com.hashim.notepad.data.Page
 import com.hashim.notepad.data.PageKind
+import com.hashim.notepad.data.TextBlock
 import com.hashim.notepad.ink.BrushSpec
 import com.hashim.notepad.ink.InkSurfaceView
 import com.hashim.notepad.ink.InkTool
@@ -63,6 +64,11 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
     var loadedFor by remember { mutableStateOf<String?>(null) }
     var dirtyStrokes by remember { mutableStateOf<List<Stroke>?>(null) }
     var pageBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    val textBlocks by repo.textBlocks(pageId).collectAsState(initial = emptyList())
+    var editingBlock by remember { mutableStateOf<TextBlock?>(null) }
+    var newBlockAt by remember { mutableStateOf<Pair<Float, Float>?>(null) }
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(textBlocks, surface) { surface?.textBlocks = textBlocks }
 
     val spec = BrushSpec(tool, color, size)
     LaunchedEffect(spec, fingerDraws, surface) { surface?.let { it.brushSpec = spec; it.fingerDraws = fingerDraws } }
@@ -129,6 +135,7 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
                     ToolButton(Icons.Default.Edit, "Pen", tool == InkTool.PEN) { tool = InkTool.PEN }
                     ToolButton(Icons.Default.Brush, "Highlighter", tool == InkTool.HIGHLIGHTER) { tool = InkTool.HIGHLIGHTER }
                     ToolButton(Icons.Default.Clear, "Eraser", tool == InkTool.ERASER) { tool = InkTool.ERASER }
+                    ToolButton(Icons.Default.TextFields, "Text", tool == InkTool.TEXT) { tool = InkTool.TEXT }
                     VerticalDivider(Modifier.height(24.dp).padding(horizontal = 4.dp))
                     PALETTE.forEach { c -> ColorDot(c, c == color) { color = c } }
                     VerticalDivider(Modifier.height(24.dp).padding(horizontal = 4.dp))
@@ -163,12 +170,52 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
             factory = { ctx ->
                 InkSurfaceView(ctx).also { v ->
                     v.onSample = { sample = it }
+                    v.onTextTap = { x, y, block -> if (block != null) editingBlock = block else newBlockAt = x to y }
                     v.addOnLayoutChangeListener { view, _, _, _, _, _, _, _, _ -> if (view.width != surfaceWidth) surfaceWidth = view.width }
                     surface = v
                 }
             },
         )
     }
+
+    newBlockAt?.let { (x, y) ->
+        TextBlockDialog(initial = "", onDismiss = { newBlockAt = null }, onDelete = null) { content ->
+            val p = page
+            if (p != null) scope.launch { repo.addTextBlock(p.id, (x - 10f).coerceIn(0f, p.widthPt - 120f), y, (p.widthPt - x).coerceIn(120f, p.widthPt - 24f), content) }
+            newBlockAt = null
+        }
+    }
+    editingBlock?.let { b ->
+        TextBlockDialog(initial = b.content, onDismiss = { editingBlock = null },
+            onDelete = { scope.launch { repo.deleteTextBlock(b.id, b.pageId) }; editingBlock = null }) { content ->
+            scope.launch { repo.updateTextBlock(b.id, b.pageId, content = content) }
+            editingBlock = null
+        }
+    }
+}
+
+@Composable
+private fun TextBlockDialog(initial: String, onDismiss: () -> Unit, onDelete: (() -> Unit)?, onSave: (String) -> Unit) {
+    var text by remember { mutableStateOf(initial) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (initial.isEmpty()) "New text" else "Edit text") },
+        text = {
+            OutlinedTextField(
+                value = text, onValueChange = { text = it }, minLines = 3, maxLines = 12,
+                modifier = Modifier.fillMaxWidth(),
+                textStyle = MaterialTheme.typography.bodyLarge,
+                placeholder = { Text("اكتب هنا · لکھیں · Type here") },
+            )
+        },
+        confirmButton = { TextButton(enabled = text.isNotBlank(), onClick = { onSave(text.trim()) }) { Text("Save") } },
+        dismissButton = {
+            Row {
+                if (onDelete != null) TextButton(onClick = onDelete) { Text("Delete") }
+                TextButton(onClick = onDismiss) { Text("Cancel") }
+            }
+        },
+    )
 }
 
 @Composable
