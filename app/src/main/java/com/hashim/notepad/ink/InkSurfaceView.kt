@@ -342,18 +342,45 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     private fun focusX(e: MotionEvent): Float { var s = 0f; for (i in 0 until e.pointerCount) s += e.getX(i); return s / e.pointerCount }
     private fun focusY(e: MotionEvent): Float { var s = 0f; for (i in 0 until e.pointerCount) s += e.getY(i); return s / e.pointerCount }
 
+    /** STROKE removes whole strokes; PIXEL cuts out only the touched segment and keeps the rest as new strokes. */
+    var pixelEraser = false
+
     private fun eraseAt(viewX: Float, viewY: Float) {
         val pt = floatArrayOf(viewX, viewY); viewToPage.mapPoints(pt)
-        val radius = ERASER_RADIUS_PX / scale
-        val it = strokes.iterator()
-        var removed = false
-        while (it.hasNext()) {
-            val inputs = it.next().inputs
-            var hit = false; var i = 0
-            while (i < inputs.size && !hit) { val p = inputs[i]; if (hypot(p.x - pt[0], p.y - pt[1]) <= radius) hit = true; i++ }
-            if (hit) { it.remove(); removed = true }
+        val radius = (if (pixelEraser) PIXEL_ERASER_RADIUS_PX else ERASER_RADIUS_PX) / scale
+        var changed = false
+        var i = 0
+        while (i < strokes.size) {
+            val s = strokes[i]
+            val inputs = s.inputs
+            var hit = false; var k = 0
+            while (k < inputs.size && !hit) { val p = inputs[k]; if (hypot(p.x - pt[0], p.y - pt[1]) <= radius) hit = true; k++ }
+            if (!hit) { i++; continue }
+            changed = true
+            if (!pixelEraser) { strokes.removeAt(i); continue }
+            val pieces = splitStroke(s, pt[0], pt[1], radius)
+            strokes.removeAt(i)
+            strokes.addAll(i, pieces)
+            i += pieces.size
         }
-        if (removed) { strokeLayer.invalidate(); notifyChanged() }
+        if (changed) { undone.clear(); strokeLayer.invalidate(); notifyChanged() }
+    }
+
+    private fun splitStroke(s: Stroke, cx: Float, cy: Float, radius: Float): List<Stroke> {
+        val out = ArrayList<Stroke>()
+        var batch: MutableStrokeInputBatch? = null
+        var count = 0
+        val inputs = s.inputs
+        fun flush() { val b = batch; if (b != null && count >= 2) out.add(Stroke(s.brush, b)); batch = null; count = 0 }
+        for (k in 0 until inputs.size) {
+            val p = inputs[k]
+            if (hypot(p.x - cx, p.y - cy) <= radius) { flush(); continue }
+            val b = batch ?: MutableStrokeInputBatch().also { batch = it }
+            b.add(StrokeInput.create(p.x, p.y, p.elapsedTimeMillis, p.toolType, p.strokeUnitLengthCm, p.pressure, p.tiltRadians, p.orientationRadians))
+            count++
+        }
+        flush()
+        return out
     }
 
     private fun report(event: MotionEvent, idx: Int) {
@@ -369,5 +396,5 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         ))
     }
 
-    private companion object { const val MARGIN_PX = 12f; const val ERASER_RADIUS_PX = 14f }
+    private companion object { const val MARGIN_PX = 12f; const val ERASER_RADIUS_PX = 14f; const val PIXEL_ERASER_RADIUS_PX = 9f }
 }

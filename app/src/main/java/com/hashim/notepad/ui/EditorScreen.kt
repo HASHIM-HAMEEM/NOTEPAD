@@ -16,6 +16,7 @@ import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -61,7 +62,9 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
     var showLab by remember { mutableStateOf(false) }
     var sample by remember { mutableStateOf(PointerSample()) }
     var hasSelection by remember { mutableStateOf(false) }
+    var pixelEraser by rememberSaveable { mutableStateOf(false) }
     var surface by remember { mutableStateOf<InkSurfaceView?>(null) }
+    LaunchedEffect(pixelEraser, surface) { surface?.pixelEraser = pixelEraser }
     LaunchedEffect(notebook?.coverColor, surface) {
         val hex = notebook?.coverColor ?: return@LaunchedEffect
         runCatching { android.graphics.Color.parseColor(hex) }.onSuccess { surface?.setPaperColor(it) }
@@ -141,6 +144,7 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
                     ToolButton(Icons.Default.Edit, "Pen", tool == InkTool.PEN) { tool = InkTool.PEN }
                     ToolButton(Icons.Default.Brush, "Highlighter", tool == InkTool.HIGHLIGHTER) { tool = InkTool.HIGHLIGHTER }
                     ToolButton(Icons.Default.Clear, "Eraser", tool == InkTool.ERASER) { tool = InkTool.ERASER }
+                    if (tool == InkTool.ERASER) FilterChip(selected = pixelEraser, onClick = { pixelEraser = !pixelEraser }, label = { Text(if (pixelEraser) "Pixel" else "Stroke") }, modifier = Modifier.padding(horizontal = 4.dp))
                     ToolButton(Icons.Default.TextFields, "Text", tool == InkTool.TEXT) { tool = InkTool.TEXT }
                     ToolButton(Icons.Default.HighlightAlt, "Lasso", tool == InkTool.LASSO) { tool = InkTool.LASSO }
                     if (hasSelection) IconButton(onClick = { surface?.deleteSelection() }) { Icon(Icons.Default.DeleteOutline, "Delete selection") }
