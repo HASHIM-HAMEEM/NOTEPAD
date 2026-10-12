@@ -13,6 +13,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.foundation.clickable
+import androidx.compose.ui.graphics.Color
 import androidx.compose.material.icons.filled.Unarchive
 import com.hashim.notepad.export.BundleCodec
 import androidx.compose.material3.*
@@ -39,7 +42,15 @@ fun NotebooksScreen(
     onImportingChanged: (Boolean) -> Unit,
     onOpen: (String) -> Unit,
     onSearch: () -> Unit,
+    themeMode: ThemeMode,
+    dynamicColor: Boolean,
+    onThemeChange: (ThemeMode) -> Unit,
+    onDynamicChange: (Boolean) -> Unit,
+    selectedId: String? = null,
+    compact: Boolean = false,
 ) {
+    var showSettings by remember { mutableStateOf(false) }
+    var paperFor by remember { mutableStateOf<Notebook?>(null) }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val notebooks by repo.notebooks().collectAsState(initial = emptyList())
@@ -74,6 +85,7 @@ fun NotebooksScreen(
                 title = { Text("Notebooks") },
                 actions = {
                     IconButton(onClick = onSearch) { Icon(Icons.Default.Search, "Search") }
+                    IconButton(onClick = { showSettings = true }) { Icon(Icons.Default.Tune, "Settings") }
                     IconButton(onClick = { pickBundle.launch(arrayOf("application/zip", "application/octet-stream")) }, enabled = !importing) {
                         Icon(Icons.Default.Unarchive, "Import notebook bundle")
                     }
@@ -95,14 +107,17 @@ fun NotebooksScreen(
                 }
             } else {
                 LazyVerticalGrid(
-                    columns = GridCells.Adaptive(180.dp),
+                    columns = GridCells.Adaptive(if (compact) 130.dp else 180.dp),
                     contentPadding = PaddingValues(16.dp),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     items(notebooks, key = { it.id }) { nb ->
+                        val paper = nb.coverColor?.let { runCatching { Color(android.graphics.Color.parseColor(it)) }.getOrNull() }
                         OutlinedCard(
-                            Modifier.aspectRatio(0.78f).combinedClickable(onClick = { onOpen(nb.id) }, onLongClick = { toDelete = nb })
+                            Modifier.aspectRatio(0.78f).combinedClickable(onClick = { onOpen(nb.id) }, onLongClick = { toDelete = nb }),
+                            colors = CardDefaults.outlinedCardColors(containerColor = paper ?: MaterialTheme.colorScheme.surface, contentColor = if (nb.coverColor == "#1F1F22") Color.White else MaterialTheme.colorScheme.onSurface),
+                            border = if (nb.id == selectedId) androidx.compose.foundation.BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else CardDefaults.outlinedCardBorder(),
                         ) {
                             Column(Modifier.fillMaxSize().padding(14.dp), verticalArrangement = Arrangement.SpaceBetween) {
                                 Text(nb.title, style = MaterialTheme.typography.titleMedium, maxLines = 3, overflow = TextOverflow.Ellipsis)
@@ -135,10 +150,42 @@ fun NotebooksScreen(
     toDelete?.let { nb ->
         AlertDialog(
             onDismissRequest = { toDelete = null },
-            title = { Text("Delete “${nb.title}”?") },
-            text = { Text("The notebook and its ${nb.pageCount} pages will be removed.") },
+            title = { Text(nb.title) },
+            text = { Text("${nb.pageCount} pages") },
             confirmButton = { TextButton(onClick = { scope.launch { repo.deleteNotebook(nb.id) }; toDelete = null }) { Text("Delete") } },
-            dismissButton = { TextButton(onClick = { toDelete = null }) { Text("Cancel") } },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = { paperFor = nb; toDelete = null }) { Text("Paper colour") }
+                    TextButton(onClick = { toDelete = null }) { Text("Cancel") }
+                }
+            },
+        )
+    }
+    paperFor?.let { nb ->
+        AlertDialog(
+            onDismissRequest = { paperFor = null },
+            title = { Text("Paper colour") },
+            text = { Column { PAPER_COLORS.forEach { (hex, label) -> TextButton(onClick = { scope.launch { repo.setNotebookPaper(nb.id, hex) }; paperFor = null }, modifier = Modifier.fillMaxWidth()) { Text(label) } } } },
+            confirmButton = {}, dismissButton = { TextButton(onClick = { paperFor = null }) { Text("Cancel") } },
+        )
+    }
+    if (showSettings) {
+        AlertDialog(
+            onDismissRequest = { showSettings = false },
+            title = { Text("Appearance") },
+            text = {
+                Column {
+                    ThemeMode.entries.forEach { m ->
+                        Row(Modifier.fillMaxWidth().clickable { onThemeChange(m) }.padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                            RadioButton(selected = themeMode == m, onClick = { onThemeChange(m) }); Text(m.label)
+                        }
+                    }
+                    Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("System accent colour"); Switch(checked = dynamicColor, onCheckedChange = onDynamicChange)
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { showSettings = false }) { Text("Done") } },
         )
     }
 }

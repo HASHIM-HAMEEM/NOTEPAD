@@ -6,6 +6,11 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Box
 import com.hashim.notepad.data.NotePadRepository
 import com.hashim.notepad.pdf.PdfImporter
 
@@ -17,7 +22,7 @@ sealed interface Screen {
 }
 
 @Composable
-fun NotePadApp(initialPdf: Uri?) {
+fun NotePadApp(initialPdf: Uri?, themeMode: ThemeMode, dynamicColor: Boolean, onThemeChange: (ThemeMode) -> Unit, onDynamicChange: (Boolean) -> Unit) {
     val context = LocalContext.current
     val repo = remember { NotePadRepository(context) }
     val importer = remember { PdfImporter(context, repo) }
@@ -49,13 +54,30 @@ fun NotePadApp(initialPdf: Uri?) {
             onImportingChanged = { importing = it },
             onOpen = { screen = Screen.Pages(it) },
             onSearch = { screen = Screen.Search },
+            themeMode = themeMode, dynamicColor = dynamicColor, onThemeChange = onThemeChange, onDynamicChange = onDynamicChange,
         )
         Screen.Search -> SearchScreen(repo = repo, onBack = { screen = Screen.Notebooks }, onOpenPage = { nb, page -> screen = Screen.Editor(nb, page) })
-        is Screen.Pages -> PagesScreen(
-            repo = repo, notebookId = s.notebookId, exporter = exporter, recognizer = recognizer, bundles = bundles,
-            onBack = { screen = Screen.Notebooks },
-            onOpenPage = { screen = Screen.Editor(s.notebookId, it) },
-        )
+        is Screen.Pages -> androidx.compose.foundation.layout.BoxWithConstraints {
+            val twoPane = maxWidth >= 840.dp
+            if (twoPane) androidx.compose.foundation.layout.Row {
+                androidx.compose.foundation.layout.Box(Modifier.width(320.dp)) {
+                    NotebooksScreen(
+                        repo = repo, importer = importer, bundles = bundles, importing = importing, onImportingChanged = { importing = it },
+                        onOpen = { screen = Screen.Pages(it) }, onSearch = { screen = Screen.Search }, selectedId = s.notebookId, compact = true,
+                        themeMode = themeMode, dynamicColor = dynamicColor, onThemeChange = onThemeChange, onDynamicChange = onDynamicChange,
+                    )
+                }
+                androidx.compose.material3.VerticalDivider()
+                androidx.compose.foundation.layout.Box(Modifier.weight(1f)) {
+                    PagesScreen(repo = repo, notebookId = s.notebookId, exporter = exporter, recognizer = recognizer, bundles = bundles,
+                        onBack = { screen = Screen.Notebooks }, onOpenPage = { screen = Screen.Editor(s.notebookId, it) }, showBack = false)
+                }
+            } else PagesScreen(
+                repo = repo, notebookId = s.notebookId, exporter = exporter, recognizer = recognizer, bundles = bundles,
+                onBack = { screen = Screen.Notebooks },
+                onOpenPage = { screen = Screen.Editor(s.notebookId, it) },
+            )
+        }
         is Screen.Editor -> EditorScreen(
             repo = repo, notebookId = s.notebookId, pageId = s.pageId, recognizer = recognizer,
             onBack = { screen = Screen.Pages(s.notebookId) },

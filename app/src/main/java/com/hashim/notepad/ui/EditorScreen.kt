@@ -48,7 +48,8 @@ private val PALETTE = listOf(0xFF1A1A1A, 0xFF1E5EFF, 0xFFD62839, 0xFF1B8A5A, 0xF
 fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, recognizer: InkRecognizer, onBack: () -> Unit, onNavigateToPage: (String) -> Unit) {
     val context = LocalContext.current
     val notebooks by repo.notebooks().collectAsState(initial = emptyList())
-    val language = notebooks.firstOrNull { it.id == notebookId }?.language ?: "ar"
+    val notebook = notebooks.firstOrNull { it.id == notebookId }
+    val language = notebook?.language ?: "ar"
     val pages by repo.pages(notebookId).collectAsState(initial = emptyList())
     val page = pages.firstOrNull { it.id == pageId }
     val index = pages.indexOfFirst { it.id == pageId }
@@ -61,6 +62,10 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
     var sample by remember { mutableStateOf(PointerSample()) }
     var hasSelection by remember { mutableStateOf(false) }
     var surface by remember { mutableStateOf<InkSurfaceView?>(null) }
+    LaunchedEffect(notebook?.coverColor, surface) {
+        val hex = notebook?.coverColor ?: return@LaunchedEffect
+        runCatching { android.graphics.Color.parseColor(hex) }.onSuccess { surface?.setPaperColor(it) }
+    }
     var surfaceWidth by remember { mutableIntStateOf(0) }
     var loadedFor by remember { mutableStateOf<String?>(null) }
     var dirtyStrokes by remember { mutableStateOf<List<Stroke>?>(null) }

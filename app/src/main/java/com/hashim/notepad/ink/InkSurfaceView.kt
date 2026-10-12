@@ -165,6 +165,8 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         fitToWidth()
     }
 
+    fun setPaperColor(argb: Int) { paperPaint.color = argb; templatePaint.color = if (argb == 0xFF1F1F22.toInt()) 0xFF3A3A40.toInt() else 0xFFC9CDD6.toInt(); strokeLayer.invalidate() }
+
     fun setPage(bitmap: Bitmap?) { pageBitmap = bitmap; strokeLayer.invalidate() }
 
     fun setStrokes(list: List<Stroke>) { strokes.clear(); strokes.addAll(list); undone.clear(); strokeLayer.invalidate(); notifyChanged() }

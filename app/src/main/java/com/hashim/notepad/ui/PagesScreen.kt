@@ -30,7 +30,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun PagesScreen(
     repo: NotePadRepository, notebookId: String, exporter: PdfExporter, recognizer: InkRecognizer, bundles: BundleCodec,
-    onBack: () -> Unit, onOpenPage: (String) -> Unit,
+    onBack: () -> Unit, onOpenPage: (String) -> Unit, showBack: Boolean = true,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -46,7 +46,7 @@ fun PagesScreen(
         topBar = {
             TopAppBar(
                 title = { Text(title) },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
+                navigationIcon = { if (showBack) IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
                 actions = {
                     TextButton(onClick = { showLanguage = true }) { Text(InkRecognizer.LANGUAGES.firstOrNull { it.first == notebook?.language }?.second ?: "ar") }
                     IconButton(enabled = busy == null, onClick = {

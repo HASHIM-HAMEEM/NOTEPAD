@@ -116,6 +116,11 @@ class NotePadRepository(context: Context) {
         })
     }
 
+    suspend fun setNotebookPaper(id: String, hex: String) = withContext(Dispatchers.IO) {
+        helper.writableDatabase.update("notebooks", ContentValues().apply { put("cover_color", hex) }, "id = ?", arrayOf(id))
+        notifyChanged()
+    }
+
     suspend fun setNotebookLanguage(id: String, language: String) = withContext(Dispatchers.IO) {
         helper.writableDatabase.update("notebooks", ContentValues().apply { put("language", language) }, "id = ?", arrayOf(id))
         notifyChanged()
