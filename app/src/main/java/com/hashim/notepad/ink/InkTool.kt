@@ -3,7 +3,7 @@ package com.hashim.notepad.ink
 import androidx.ink.brush.Brush
 import androidx.ink.brush.StockBrushes
 
-enum class InkTool { PEN, HIGHLIGHTER, ERASER, TEXT }
+enum class InkTool { PEN, HIGHLIGHTER, ERASER, TEXT, LASSO }
 
 data class BrushSpec(val tool: InkTool, val colorArgb: Int, val size: Float) {
     fun toBrush(): Brush = when (tool) {

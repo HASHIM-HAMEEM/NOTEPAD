@@ -14,7 +14,13 @@ import androidx.ink.authoring.InProgressStrokeId
 import androidx.ink.authoring.InProgressStrokesFinishedListener
 import androidx.ink.authoring.InProgressStrokesView
 import androidx.ink.rendering.android.canvas.CanvasStrokeRenderer
+import androidx.ink.strokes.MutableStrokeInputBatch
 import androidx.ink.strokes.Stroke
+import androidx.ink.strokes.StrokeInput
+import android.graphics.DashPathEffect
+import android.graphics.Path
+import android.graphics.RectF
+import android.graphics.Region
 import androidx.input.motionprediction.MotionEventPredictor
 import com.hashim.notepad.data.PageKind
 import com.hashim.notepad.data.TextBlock
@@ -61,6 +67,19 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     private var lastPanY = 0f
     private var panning = false
 
+    // Lasso state (page coordinates)
+    private val lassoPath = Path()
+    private val lassoPoints = ArrayList<Float>()
+    private var lassoActive = false
+    private val selected = LinkedHashSet<Stroke>()
+    private var selectionBounds: RectF? = null
+    private var movingSelection = false
+    private var moveLastX = 0f
+    private var moveLastY = 0f
+    var onSelectionChanged: ((Boolean) -> Unit)? = null
+    private val lassoPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF1E5EFF.toInt(); style = Paint.Style.STROKE; strokeWidth = 2f; pathEffect = DashPathEffect(floatArrayOf(10f, 8f), 0f) }
+    private val selectionFill = Paint().apply { color = 0x141E5EFF; style = Paint.Style.FILL }
+
     private val renderer = CanvasStrokeRenderer.create()
     private val predictor = MotionEventPredictor.newInstance(this)
     private val templatePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFC9CDD6.toInt(); strokeWidth = 0f; style = Paint.Style.STROKE }
@@ -94,6 +113,14 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
                 canvas.drawBitmap(bmp, m, bitmapPaint)
             }
             for (s in strokes) renderer.draw(canvas, s, pageToView)
+            selectionBounds?.let { b ->
+                canvas.save(); canvas.concat(pageToView)
+                canvas.drawRect(b, selectionFill)
+                canvas.save(); canvas.scale(1f, 1f); canvas.restore()
+                canvas.restore()
+                val vb = RectF(b); pageToView.mapRect(vb); canvas.drawRect(vb, lassoPaint)
+            }
+            if (lassoActive) { canvas.save(); canvas.concat(pageToView); canvas.drawPath(lassoPath, lassoPaint); canvas.restore() }
             if (textBlocks.isNotEmpty()) {
                 canvas.save(); canvas.concat(pageToView)
                 for (b in textBlocks) TextBlockPainter.draw(canvas, b, b.id == selectedTextBlockId)
@@ -146,7 +173,75 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     fun canRedo() = undone.isNotEmpty()
     fun undo() { if (strokes.isNotEmpty()) { undone.add(strokes.removeAt(strokes.size - 1)); strokeLayer.invalidate(); notifyChanged() } }
     fun redo() { if (undone.isNotEmpty()) { strokes.add(undone.removeAt(undone.size - 1)); strokeLayer.invalidate(); notifyChanged() } }
-    fun clear() { strokes.clear(); undone.clear(); strokeLayer.invalidate(); notifyChanged() }
+    fun clear() { strokes.clear(); undone.clear(); clearSelection(); strokeLayer.invalidate(); notifyChanged() }
+
+    fun hasSelection() = selected.isNotEmpty()
+
+    fun clearSelection() { selected.clear(); selectionBounds = null; strokeLayer.invalidate(); onSelectionChanged?.invoke(false) }
+
+    fun deleteSelection() {
+        if (selected.isEmpty()) return
+        strokes.removeAll(selected); undone.clear(); clearSelection(); notifyChanged()
+    }
+
+    private fun handleLasso(event: MotionEvent, idx: Int): Boolean {
+        val pt = floatArrayOf(event.getX(idx), event.getY(idx)); viewToPage.mapPoints(pt)
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
+                val b = selectionBounds
+                if (b != null && b.contains(pt[0], pt[1])) { movingSelection = true; moveLastX = pt[0]; moveLastY = pt[1] }
+                else { clearSelection(); lassoActive = true; lassoPath.reset(); lassoPath.moveTo(pt[0], pt[1]); lassoPoints.clear(); lassoPoints.add(pt[0]); lassoPoints.add(pt[1]) }
+            }
+            MotionEvent.ACTION_MOVE -> {
+                if (movingSelection) { moveSelection(pt[0] - moveLastX, pt[1] - moveLastY); moveLastX = pt[0]; moveLastY = pt[1] }
+                else if (lassoActive) { lassoPath.lineTo(pt[0], pt[1]); lassoPoints.add(pt[0]); lassoPoints.add(pt[1]); strokeLayer.invalidate() }
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP, MotionEvent.ACTION_CANCEL -> {
+                if (movingSelection) { movingSelection = false; undone.clear(); notifyChanged() }
+                else if (lassoActive) { lassoActive = false; lassoPath.close(); selectInside(); strokeLayer.invalidate() }
+            }
+        }
+        return true
+    }
+
+    private fun selectInside() {
+        if (lassoPoints.size < 6) return
+        val bounds = RectF(); lassoPath.computeBounds(bounds, true)
+        val region = Region()
+        region.setPath(lassoPath, Region(bounds.left.toInt() - 1, bounds.top.toInt() - 1, bounds.right.toInt() + 1, bounds.bottom.toInt() + 1))
+        selected.clear()
+        val sel = RectF()
+        for (s in strokes) {
+            val inputs = s.inputs
+            var inside = 0
+            for (i in 0 until inputs.size) { val p = inputs[i]; if (region.contains(p.x.toInt(), p.y.toInt())) inside++ }
+            if (inputs.size > 0 && inside * 2 >= inputs.size) {
+                selected.add(s)
+                for (i in 0 until inputs.size) { val p = inputs[i]; if (sel.isEmpty) sel.set(p.x, p.y, p.x, p.y) else sel.union(p.x, p.y) }
+            }
+        }
+        selectionBounds = if (selected.isEmpty()) null else RectF(sel).apply { inset(-6f, -6f) }
+        onSelectionChanged?.invoke(selected.isNotEmpty())
+    }
+
+    private fun moveSelection(dx: Float, dy: Float) {
+        if (selected.isEmpty()) return
+        val moved = LinkedHashSet<Stroke>()
+        for (s in selected) {
+            val batch = MutableStrokeInputBatch()
+            val inputs = s.inputs
+            for (i in 0 until inputs.size) {
+                val p = inputs[i]
+                batch.add(StrokeInput.create(p.x + dx, p.y + dy, p.elapsedTimeMillis, p.toolType, p.strokeUnitLengthCm, p.pressure, p.tiltRadians, p.orientationRadians))
+            }
+            val ns = Stroke(s.brush, batch)
+            val at = strokes.indexOf(s); if (at >= 0) strokes[at] = ns
+            moved.add(ns)
+        }
+        selected.clear(); selected.addAll(moved)
+        selectionBounds?.offset(dx, dy)
+        strokeLayer.invalidate()
+    }
 
     private fun notifyChanged() { onStrokesChanged?.invoke(strokes.toList()) }
 
@@ -180,6 +275,9 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         if (!isStylus && !fingerDraws) return handleFingerNavigation(event)
         if (!isStylus && event.pointerCount > 1) { cancelCurrent(event); return handleFingerNavigation(event) }
 
+        if (brushSpec.tool == InkTool.LASSO) return handleLasso(event, if (event.actionMasked == MotionEvent.ACTION_MOVE) event.findPointerIndex(currentPointerId).takeIf { it >= 0 } ?: 0 else idx).also {
+            if (event.actionMasked == MotionEvent.ACTION_DOWN) currentPointerId = event.getPointerId(idx)
+        }
         if (brushSpec.tool == InkTool.TEXT) {
             if (event.actionMasked == MotionEvent.ACTION_UP) {
                 val pt = floatArrayOf(event.x, event.y); viewToPage.mapPoints(pt)

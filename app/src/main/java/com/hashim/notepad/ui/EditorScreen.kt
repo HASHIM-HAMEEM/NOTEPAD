@@ -59,6 +59,7 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
     var fingerDraws by remember { mutableStateOf(false) }
     var showLab by remember { mutableStateOf(false) }
     var sample by remember { mutableStateOf(PointerSample()) }
+    var hasSelection by remember { mutableStateOf(false) }
     var surface by remember { mutableStateOf<InkSurfaceView?>(null) }
     var surfaceWidth by remember { mutableIntStateOf(0) }
     var loadedFor by remember { mutableStateOf<String?>(null) }
@@ -71,7 +72,7 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
     LaunchedEffect(textBlocks, surface) { surface?.textBlocks = textBlocks }
 
     val spec = BrushSpec(tool, color, size)
-    LaunchedEffect(spec, fingerDraws, surface) { surface?.let { it.brushSpec = spec; it.fingerDraws = fingerDraws } }
+    LaunchedEffect(spec, fingerDraws, surface) { surface?.let { it.brushSpec = spec; it.fingerDraws = fingerDraws; if (spec.tool != InkTool.LASSO) it.clearSelection() } }
 
     // Load page geometry + strokes once the surface exists.
     LaunchedEffect(page?.id, surface) {
@@ -136,6 +137,8 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
                     ToolButton(Icons.Default.Brush, "Highlighter", tool == InkTool.HIGHLIGHTER) { tool = InkTool.HIGHLIGHTER }
                     ToolButton(Icons.Default.Clear, "Eraser", tool == InkTool.ERASER) { tool = InkTool.ERASER }
                     ToolButton(Icons.Default.TextFields, "Text", tool == InkTool.TEXT) { tool = InkTool.TEXT }
+                    ToolButton(Icons.Default.HighlightAlt, "Lasso", tool == InkTool.LASSO) { tool = InkTool.LASSO }
+                    if (hasSelection) IconButton(onClick = { surface?.deleteSelection() }) { Icon(Icons.Default.DeleteOutline, "Delete selection") }
                     VerticalDivider(Modifier.height(24.dp).padding(horizontal = 4.dp))
                     PALETTE.forEach { c -> ColorDot(c, c == color) { color = c } }
                     VerticalDivider(Modifier.height(24.dp).padding(horizontal = 4.dp))
@@ -170,6 +173,7 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
             factory = { ctx ->
                 InkSurfaceView(ctx).also { v ->
                     v.onSample = { sample = it }
+                    v.onSelectionChanged = { hasSelection = it }
                     v.onTextTap = { x, y, block -> if (block != null) editingBlock = block else newBlockAt = x to y }
                     v.addOnLayoutChangeListener { view, _, _, _, _, _, _, _, _ -> if (view.width != surfaceWidth) surfaceWidth = view.width }
                     surface = v
