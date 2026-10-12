@@ -103,6 +103,8 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
     var pixelEraser by rememberSaveable { mutableStateOf(false) }
     var surface by remember { mutableStateOf<InkSurfaceView?>(null) }
     var zoomPercent by remember { mutableIntStateOf(100) }
+    var rulerVisible by remember { mutableStateOf(false) }
+    val darkTheme = MaterialTheme.colorScheme.isDark
     val exporter = remember(context, repo) { PdfExporter(context, repo) }
     LaunchedEffect(pixelEraser, surface) { surface?.pixelEraser = pixelEraser }
     LaunchedEffect(notebook?.coverColor, surface) {
@@ -122,6 +124,8 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
     val opacity = if (tool == InkTool.HIGHLIGHTER) highlighterOpacity else markerOpacity
     val spec = BrushSpec(tool, color, size, pen, opacity)
     LaunchedEffect(surface, zoomBox, language) { surface?.setZoomBox(zoomBox, language != "en") }
+    LaunchedEffect(surface, rulerVisible) { surface?.setRulerVisible(rulerVisible) }
+    LaunchedEffect(surface, darkTheme) { surface?.setRulerDarkTheme(darkTheme) }
     LaunchedEffect(spec, fingerDraws, surface) { surface?.let { it.brushSpec = spec; it.fingerDraws = fingerDraws; if (spec.tool != InkTool.LASSO) it.clearSelection() } }
 
     // Load page geometry + strokes once the surface exists.
@@ -336,6 +340,10 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
                     ShelfCanvasItem("Eraser", ShelfDrawing.ERASER, tool == InkTool.ERASER, color) { selectTool(InkTool.ERASER) }
                     ShelfCanvasItem("Lasso", ShelfDrawing.LASSO, tool == InkTool.LASSO, color) { selectTool(InkTool.LASSO) }
                     ShelfCanvasItem("Text", ShelfDrawing.TEXT, tool == InkTool.TEXT, color) { selectTool(InkTool.TEXT) }
+                    ShelfCanvasItem("Ruler", ShelfDrawing.RULER, rulerVisible, color) {
+                        rulerVisible = !rulerVisible
+                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    }
                     Box(Modifier.padding(horizontal = 6.dp, vertical = 18.dp).width(1.dp).height(32.dp).background(MaterialTheme.colorScheme.outlineVariant))
                     Box {
                         IconButton(onClick = { colorPop = true }, modifier = Modifier.size(40.dp)) {
@@ -478,7 +486,7 @@ private fun TextBlockDialog(initial: String, onDismiss: () -> Unit, onDelete: ((
 @Composable
 private fun rememberSaveableTool() = remember { mutableStateOf(InkTool.PEN) }
 
-private enum class ShelfDrawing { BALLPOINT, PENCIL, FOUNTAIN, MARKER, HIGHLIGHTER, CALLIGRAPHY, ERASER, LASSO, TEXT }
+private enum class ShelfDrawing { BALLPOINT, PENCIL, FOUNTAIN, MARKER, HIGHLIGHTER, CALLIGRAPHY, ERASER, LASSO, TEXT, RULER }
 
 private fun PenType.toShelfStyle(): ShelfDrawing = when (this) {
     PenType.BALLPOINT -> ShelfDrawing.BALLPOINT
@@ -519,6 +527,36 @@ private fun ShelfCanvasItem(label: String, style: ShelfDrawing, selected: Boolea
             )
             val bodyTopLeft = Offset(bodyLeft, bodyTop)
             val bodySize = Size(bodyWidth, bodyBottom - bodyTop)
+
+            if (style == ShelfDrawing.RULER) {
+                val rulerLeft = 2.dp.toPx()
+                val rulerTop = 18.dp.toPx()
+                val rulerWidth = size.width - 4.dp.toPx()
+                val rulerHeight = 28.dp.toPx()
+                drawRoundRect(
+                    color = Color.White.copy(alpha = 0.68f),
+                    topLeft = Offset(rulerLeft, rulerTop),
+                    size = Size(rulerWidth, rulerHeight),
+                    cornerRadius = CornerRadius(3.dp.toPx()),
+                )
+                drawRoundRect(
+                    color = outline,
+                    topLeft = Offset(rulerLeft, rulerTop),
+                    size = Size(rulerWidth, rulerHeight),
+                    cornerRadius = CornerRadius(3.dp.toPx()),
+                    style = DrawStroke(width = 1f),
+                )
+                for (i in 1..6) {
+                    val x = rulerLeft + rulerWidth * i / 7f
+                    drawLine(
+                        color = outline,
+                        start = Offset(x, rulerTop + 4.dp.toPx()),
+                        end = Offset(x, rulerTop + if (i % 2 == 0) 14.dp.toPx() else 10.dp.toPx()),
+                        strokeWidth = 1.dp.toPx(),
+                    )
+                }
+                return@Canvas
+            }
 
             if (style == ShelfDrawing.ERASER) {
                 val eraserTop = 18.dp.toPx()
@@ -635,7 +673,7 @@ private fun ShelfCanvasItem(label: String, style: ShelfDrawing, selected: Boolea
                     drawLine(onSurface, Offset(9.dp.toPx(), 31.dp.toPx()), Offset(19.dp.toPx(), 31.dp.toPx()), 2.dp.toPx())
                     drawLine(onSurface, Offset(14.dp.toPx(), 31.dp.toPx()), Offset(14.dp.toPx(), 42.dp.toPx()), 2.dp.toPx())
                 }
-                ShelfDrawing.ERASER -> Unit
+                ShelfDrawing.ERASER, ShelfDrawing.RULER -> Unit
             }
         }
     }
