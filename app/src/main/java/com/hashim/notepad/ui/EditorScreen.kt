@@ -517,7 +517,7 @@ private fun PenType.toShelfStyle(): ShelfDrawing = when (this) {
 @Composable
 private fun ShelfCanvasItem(label: String, style: ShelfDrawing, selected: Boolean, color: Int, onClick: () -> Unit) {
     val rise by animateDpAsState(
-        targetValue = if (selected) (-18).dp else 0.dp,
+        targetValue = if (selected) (-12).dp else 0.dp,
         animationSpec = spring(dampingRatio = 0.6f, stiffness = 400f),
         label = "$label-rise",
     )
@@ -529,15 +529,15 @@ private fun ShelfCanvasItem(label: String, style: ShelfDrawing, selected: Boolea
         Modifier.width(42.dp).height(76.dp).clipToBounds().clickable(onClickLabel = label, onClick = onClick),
         contentAlignment = Alignment.TopCenter,
     ) {
-        Canvas(Modifier.requiredSize(42.dp, 96.dp).offset(y = 18.dp + rise)) {
+        Canvas(Modifier.requiredSize(42.dp, 96.dp).offset(y = 28.dp + rise)) {
             val centerX = size.width / 2f
             val bodyTop = 20.dp.toPx()
             val bodyBottom = size.height + 20.dp.toPx()
             val bodyLeft = 10.dp.toPx()
             val bodyWidth = size.width - bodyLeft * 2f
             val bodyCorner = CornerRadius(5.dp.toPx())
-            val penColor = Color(color)
-            val itemColor = if (style == ShelfDrawing.HIGHLIGHTER) penColor.copy(alpha = 0.45f) else penColor
+            val inkColor = Color(color)
+            val itemColor = if (style == ShelfDrawing.HIGHLIGHTER) inkColor.copy(alpha = 0.45f) else inkColor
             val bodyBrush = Brush.verticalGradient(
                 colors = if (dark) listOf(Color(0xFF3A3B40), Color(0xFF2A2B2F)) else listOf(Color.White, Color(0xFFE6E8EC)),
                 startY = bodyTop,
@@ -547,7 +547,15 @@ private fun ShelfCanvasItem(label: String, style: ShelfDrawing, selected: Boolea
             val bodySize = Size(bodyWidth, bodyBottom - bodyTop)
 
             if (selected && style != ShelfDrawing.RULER && style != ShelfDrawing.ERASER) {
-                drawCircle(penColor.copy(alpha = 0.18f), 18.dp.toPx(), Offset(centerX, 13.dp.toPx()))
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colors = listOf(inkColor.copy(alpha = if (dark) 0.24f else 0.2f), Color.Transparent),
+                        center = Offset(centerX, 18.dp.toPx()),
+                        radius = 18.dp.toPx(),
+                    ),
+                    radius = 18.dp.toPx(),
+                    center = Offset(centerX, 18.dp.toPx()),
+                )
             }
             if (style == ShelfDrawing.RULER) {
                 val rulerLeft = 3.dp.toPx()
@@ -610,12 +618,17 @@ private fun ShelfCanvasItem(label: String, style: ShelfDrawing, selected: Boolea
             drawRoundRect(bodyBrush, bodyTopLeft, bodySize, bodyCorner)
             drawRoundRect(outline, bodyTopLeft, bodySize, bodyCorner, style = DrawStroke(width = 1f))
             drawRoundRect(
-                brush = Brush.horizontalGradient(listOf(Color.White.copy(alpha = 0.55f), Color.White.copy(alpha = 0.08f), Color.Transparent)),
-                topLeft = Offset(bodyLeft + 3.dp.toPx(), bodyTop + 3.dp.toPx()),
-                size = Size(4.dp.toPx(), bodySize.height - 6.dp.toPx()),
-                cornerRadius = CornerRadius(2.dp.toPx()),
+                color = Color.White.copy(alpha = if (dark) 0.38f else 0.68f),
+                topLeft = Offset(bodyLeft + bodyWidth * 0.3f, bodyTop + 4.dp.toPx()),
+                size = Size(3.dp.toPx(), bodySize.height - 8.dp.toPx()),
+                cornerRadius = CornerRadius(1.5.dp.toPx()),
             )
-            drawLine(Color.Black.copy(alpha = 0.12f), Offset(bodyLeft + bodyWidth - 2.dp.toPx(), bodyTop + 3.dp.toPx()), Offset(bodyLeft + bodyWidth - 2.dp.toPx(), size.height), 1.dp.toPx())
+            drawRoundRect(
+                color = Color.Black.copy(alpha = if (dark) 0.36f else 0.2f),
+                topLeft = Offset(bodyLeft + bodyWidth - 2.dp.toPx(), bodyTop + 4.dp.toPx()),
+                size = Size(2.dp.toPx(), bodySize.height - 8.dp.toPx()),
+                cornerRadius = CornerRadius(1.dp.toPx()),
+            )
 
             when (style) {
                 ShelfDrawing.BALLPOINT -> {
@@ -690,6 +703,7 @@ private fun ShelfCanvasItem(label: String, style: ShelfDrawing, selected: Boolea
                     drawPath(nib, itemColor)
                     drawLine(outline, Offset(9.dp.toPx(), 18.dp.toPx()), Offset(20.dp.toPx(), 8.dp.toPx()), 1.dp.toPx())
                     drawRoundRect(Brush.verticalGradient(listOf(Color(0xFFC9CDD3), Color(0xFF8E949C))), Offset(bodyLeft, bodyTop + 17.dp.toPx()), Size(bodyWidth, 7.dp.toPx()), CornerRadius(2.dp.toPx()))
+                    drawRoundRect(itemColor, Offset(bodyLeft, bodyTop + 17.dp.toPx()), Size(bodyWidth, 4.dp.toPx()), CornerRadius(2.dp.toPx()))
                 }
                 ShelfDrawing.LASSO -> {
                     val loop = Path().apply {

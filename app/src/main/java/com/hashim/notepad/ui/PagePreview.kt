@@ -77,7 +77,7 @@ fun PagePreview(repo: NotePadRepository, page: Page?, paperColor: Color, modifie
             val n = c.nativeCanvas
             val texturePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 shader = PaperTexture.shader()
-                alpha = 96
+                alpha = 40
                 colorFilter = PorterDuffColorFilter(paperColor.toArgbInt(), PorterDuff.Mode.MULTIPLY)
             }
             n.drawRect(0f, 0f, size.width, size.height, texturePaint)

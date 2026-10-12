@@ -49,7 +49,6 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.hashim.notepad.data.Notebook
 import com.hashim.notepad.data.NotePadRepository
 import com.hashim.notepad.data.PageKind
@@ -128,7 +127,7 @@ fun NotebooksScreen(
         },
     ) { padding ->
         LazyVerticalGrid(
-            columns = GridCells.Adaptive(if (compact) 128.dp else 168.dp),
+            columns = GridCells.Adaptive(200.dp),
             modifier = Modifier.fillMaxSize().padding(padding),
             contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 112.dp),
             horizontalArrangement = Arrangement.spacedBy(16.dp),
@@ -141,7 +140,7 @@ fun NotebooksScreen(
                     onNew = { showNew = true },
                 )
             }
-            if (notebooks.isNotEmpty()) {
+            if (notebooks.size >= 4) {
                 val recent = notebooks.sortedByDescending { it.updatedAt }.take(3)
                 item(span = { GridItemSpan(maxLineSpan) }) {
                     Column {
@@ -347,6 +346,22 @@ private fun BookCover(title: String, color: Color, isPdf: Boolean, modifier: Mod
                 }
                 canvas.nativeCanvas.drawRect(0f, 0f, size.width, size.height, paint)
             }
+            val brightness = (color.red + color.green + color.blue) / 3f
+            val threadColor = if (brightness < 0.5f) Color.White.copy(alpha = 0.06f) else Color.Black.copy(alpha = 0.06f)
+            val threadSpacing = 6.dp.toPx()
+            var threadX = -size.height
+            while (threadX < size.width) {
+                drawLine(threadColor, Offset(threadX, 0f), Offset(threadX + size.height, size.height), 0.75f.dp.toPx())
+                drawLine(threadColor, Offset(threadX, 0f), Offset(threadX - size.height, size.height), 0.75f.dp.toPx())
+                threadX += threadSpacing
+            }
+            drawRect(
+                brush = Brush.linearGradient(
+                    colors = listOf(Color.White.copy(alpha = 0.08f), Color.Transparent, Color.Black.copy(alpha = 0.035f)),
+                    start = Offset(0f, 0f),
+                    end = Offset(size.width, size.height),
+                ),
+            )
             val spineWidth = 10.dp.toPx()
             drawRect(spine, size = androidx.compose.ui.geometry.Size(spineWidth, size.height))
             var y = 10.dp.toPx()
@@ -357,22 +372,49 @@ private fun BookCover(title: String, color: Color, isPdf: Boolean, modifier: Mod
             drawLine(Color.White.copy(alpha = 0.18f), Offset(spineWidth + 2.dp.toPx(), 0f), Offset(spineWidth + 2.dp.toPx(), size.height), 1.dp.toPx())
         }
         Box(
-            Modifier.align(Alignment.CenterEnd).padding(end = 12.dp).width(7.dp).fillMaxHeight(0.92f)
-                .background(spine.copy(alpha = 0.82f), RoundedCornerShape(4.dp)),
-        )
+            Modifier.align(Alignment.CenterEnd).padding(end = 18.dp).width(6.dp).fillMaxHeight(0.92f)
+                .background(spine.copy(alpha = 0.88f), RoundedCornerShape(3.dp)),
+        ) {
+            Canvas(Modifier.fillMaxSize()) {
+                drawLine(Color.White.copy(alpha = 0.48f), Offset(1f, 0f), Offset(1f, size.height), 1f)
+            }
+        }
         Surface(
             Modifier.fillMaxWidth(if (isPdf) 0.68f else 1f).padding(start = 18.dp, end = 18.dp, top = 18.dp),
-            shape = RoundedCornerShape(3.dp),
+            shape = RoundedCornerShape(6.dp),
             color = Color(0xFFF4EBDD).copy(alpha = 0.94f),
         ) {
-            Text(
-                title,
-                Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-                color = Color(0xFF382D22),
-                style = MaterialTheme.typography.titleSmall.copy(fontFamily = titleFontFamily(title), fontSize = 13.sp),
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Box {
+                Text(
+                    title,
+                    Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                    color = Color(0xFF382D22),
+                    style = MaterialTheme.typography.titleMedium.copy(fontFamily = titleFontFamily(title), fontWeight = FontWeight.SemiBold),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Canvas(Modifier.matchParentSize()) {
+                    val edge = 5.dp.toPx()
+                    drawRect(
+                        brush = Brush.verticalGradient(
+                            colors = listOf(Color.Black.copy(alpha = 0.08f), Color.Transparent),
+                            startY = 0f,
+                            endY = edge,
+                        ),
+                        topLeft = Offset.Zero,
+                        size = androidx.compose.ui.geometry.Size(size.width, edge),
+                    )
+                    drawRect(
+                        brush = Brush.verticalGradient(
+                            colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.07f)),
+                            startY = size.height - edge,
+                            endY = size.height,
+                        ),
+                        topLeft = Offset(0f, size.height - edge),
+                        size = androidx.compose.ui.geometry.Size(size.width, edge),
+                    )
+                }
+            }
         }
         if (isPdf) {
             Surface(
