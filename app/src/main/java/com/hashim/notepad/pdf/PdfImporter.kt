@@ -7,6 +7,7 @@ import com.hashim.notepad.data.Asset
 import com.hashim.notepad.data.NotePadRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.first
 import java.io.File
 import java.security.DigestInputStream
 import java.security.MessageDigest
@@ -32,7 +33,20 @@ class PdfImporter(private val context: Context, private val repo: NotePadReposit
             Asset(assetId, "pdf", target.absolutePath, target.length(), sha, sizes.size, name),
             sizes,
         )
+        indexTextLayer(notebookId, target)
         notebookId
+    }
+
+    /** Makes the PDF's own text layer searchable (source = "pdf"); scanned pages simply yield nothing. */
+    private suspend fun indexTextLayer(notebookId: String, file: File) {
+        val pages = repo.pages(notebookId).first()
+        PdfPageSource(context, file).use { src ->
+            for (p in pages) {
+                val idx = p.pdfPageIndex ?: continue
+                val text = runCatching { src.text(idx) }.getOrDefault("").trim()
+                if (text.isNotEmpty()) repo.saveRecognition(p.id, "pdf", null, text)
+            }
+        }
     }
 
     private fun displayName(uri: Uri): String {

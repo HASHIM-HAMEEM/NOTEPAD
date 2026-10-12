@@ -36,5 +36,16 @@ class PdfPageSource(context: Context, file: File) : Closeable {
         }
     }
 
+    /** Text layer of a page ("" for scanned pages). */
+    fun text(pageIndex: Int): String {
+        val page = document.openPage(pageIndex) ?: return ""
+        return page.use { pg ->
+            pg.openTextPage().use { tp ->
+                val n = tp.textPageCountChars()
+                if (n <= 0) "" else (tp.textPageGetText(0, n) ?: "")
+            }
+        }
+    }
+
     override fun close() { document.close(); pfd.close() }
 }
