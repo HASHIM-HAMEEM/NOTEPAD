@@ -26,6 +26,7 @@ object StrokeStore {
     private const val TAG_BALLPOINT = 2
     private const val TAG_PENCIL = 3
     private const val TAG_MARKER = 4
+    private const val TAG_CALLIGRAPHY = 5
 
     fun encode(strokes: List<Stroke>): ByteArray {
         val bos = ByteArrayOutputStream()
@@ -53,6 +54,7 @@ object StrokeStore {
                     TAG_HIGHLIGHTER -> StockBrushes.highlighter()
                     TAG_BALLPOINT, TAG_MARKER -> StockBrushes.marker()
                     TAG_PENCIL -> StockBrushes.pencilUnstable
+                    TAG_CALLIGRAPHY -> InkBrushFamilies.calligraphy
                     else -> StockBrushes.pressurePen()
                 }
                 Stroke(Brush.createWithColorIntArgb(family, color, size, eps), StrokeInputBatch.decode(data.inputStream()))
@@ -66,6 +68,7 @@ object StrokeStore {
         stroke.brush.family == StockBrushes.marker() &&
             stroke.brush.colorIntArgb ushr 24 == MARKER_ALPHA -> TAG_MARKER
         stroke.brush.family == StockBrushes.marker() -> TAG_BALLPOINT
+        stroke.brush.family == InkBrushFamilies.calligraphy -> TAG_CALLIGRAPHY
         else -> TAG_PEN
     }
 

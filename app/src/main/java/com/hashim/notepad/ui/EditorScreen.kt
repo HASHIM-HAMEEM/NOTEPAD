@@ -2,12 +2,15 @@ package com.hashim.notepad.ui
 
 import android.graphics.Bitmap
 import android.util.Log
+import android.widget.Toast
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -16,38 +19,37 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.Undo
+import androidx.compose.material.icons.outlined.IosShare
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.drawscope.Stroke as DrawStroke
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.foundation.layout.*
-import androidx.compose.material3.*
-import androidx.compose.material.icons.filled.*
-import androidx.compose.material.icons.automirrored.filled.*
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.ui.draw.clip
 import androidx.ink.strokes.Stroke
 import com.hashim.notepad.data.NotePadRepository
 import com.hashim.notepad.data.Page
 import com.hashim.notepad.data.PageKind
 import com.hashim.notepad.data.TextBlock
+import com.hashim.notepad.export.PdfExporter
 import com.hashim.notepad.ink.BrushSpec
 import com.hashim.notepad.ink.InkSurfaceView
 import com.hashim.notepad.ink.InkTool
@@ -58,11 +60,15 @@ import com.hashim.notepad.pdf.PdfPageSource
 import com.hashim.notepad.recognition.InkRecognizer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 
 private val PALETTE = listOf(0xFF1A1A1A, 0xFF1E5EFF, 0xFFD62839, 0xFF1B8A5A, 0xFFF5B301).map { it.toInt() }
+private val EXTRA_PALETTE = listOf(
+    0xFF3449B5, 0xFF008D9D, 0xFF2E7D32, 0xFFFFB300,
+    0xFFEF6C00, 0xFFD32F2F, 0xFF7E57C2, 0xFF80868B,
+).map { it.toInt() }
 
 @Composable
 fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, recognizer: InkRecognizer, onBack: () -> Unit, onNavigateToPage: (String) -> Unit) {
@@ -86,6 +92,9 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
     LaunchedEffect(pen) { preferences.edit().putString("pen", pen.name).apply() }
     var color by remember { mutableIntStateOf(PALETTE[0]) }
     var size by remember { mutableFloatStateOf(2.5f) }
+    var markerOpacity by remember { mutableFloatStateOf(230f / 255f) }
+    var highlighterOpacity by remember { mutableFloatStateOf(0.45f) }
+    var recentColors by remember { mutableStateOf(emptyList<Int>()) }
     var fingerDraws by remember { mutableStateOf(false) }
     var zoomBox by remember { mutableStateOf(false) }
     var showLab by remember { mutableStateOf(false) }
@@ -93,6 +102,8 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
     var hasSelection by remember { mutableStateOf(false) }
     var pixelEraser by rememberSaveable { mutableStateOf(false) }
     var surface by remember { mutableStateOf<InkSurfaceView?>(null) }
+    var zoomPercent by remember { mutableIntStateOf(100) }
+    val exporter = remember(context, repo) { PdfExporter(context, repo) }
     LaunchedEffect(pixelEraser, surface) { surface?.pixelEraser = pixelEraser }
     LaunchedEffect(notebook?.coverColor, surface) {
         val hex = notebook?.coverColor ?: return@LaunchedEffect
@@ -108,7 +119,8 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
     val scope = rememberCoroutineScope()
     LaunchedEffect(textBlocks, surface) { surface?.textBlocks = textBlocks }
 
-    val spec = BrushSpec(tool, color, size, pen)
+    val opacity = if (tool == InkTool.HIGHLIGHTER) highlighterOpacity else markerOpacity
+    val spec = BrushSpec(tool, color, size, pen, opacity)
     LaunchedEffect(surface, zoomBox, language) { surface?.setZoomBox(zoomBox, language != "en") }
     LaunchedEffect(spec, fingerDraws, surface) { surface?.let { it.brushSpec = spec; it.fingerDraws = fingerDraws; if (spec.tool != InkTool.LASSO) it.clearSelection() } }
 
@@ -162,10 +174,9 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
         }
     }
 
-    var chrome by rememberSaveable { mutableStateOf(true) }
     var colorPop by remember { mutableStateOf(false) }
-    var sizePop by remember { mutableStateOf(false) }
-    var penPop by remember { mutableStateOf(false) }
+    var penPopover by remember { mutableStateOf<PenType?>(null) }
+    var highlighterPopover by remember { mutableStateOf(false) }
     var morePop by remember { mutableStateOf(false) }
     val haptics = LocalHapticFeedback.current
 
@@ -174,15 +185,51 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
             tool = next
             haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
         }
+        penPopover = null
+        highlighterPopover = false
     }
 
+    fun selectPen(next: PenType) {
+        if (tool == InkTool.PEN && pen == next) {
+            penPopover = next
+            return
+        }
+        tool = InkTool.PEN
+        pen = next
+        penPopover = null
+        highlighterPopover = false
+        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+    }
+
+    fun selectHighlighter() {
+        if (tool == InkTool.HIGHLIGHTER) {
+            highlighterPopover = true
+            return
+        }
+        tool = InkTool.HIGHLIGHTER
+        penPopover = null
+        highlighterPopover = false
+        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+    }
+
+    fun chooseColor(next: Int) {
+        if (next != color) {
+            recentColors = (listOf(color) + recentColors.filterNot { it == color || it == next })
+                .distinct().take(8)
+            color = next
+        }
+        colorPop = false
+    }
+
+    val statusBarHeight = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceContainerLow)) {
         AndroidView(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.fillMaxSize().padding(top = statusBarHeight + 76.dp),
             factory = { ctx ->
                 InkSurfaceView(ctx).also { v ->
                     v.onSample = { sample = it }
                     v.onSelectionChanged = { hasSelection = it }
+                    v.onZoomChanged = { zoomPercent = it }
                     v.onTextTap = { x, y, block -> if (block != null) editingBlock = block else newBlockAt = x to y }
                     v.addOnLayoutChangeListener { view, _, _, _, _, _, _, _, _ -> if (view.width != surfaceWidth) surfaceWidth = view.width }
                     surface = v
@@ -190,122 +237,182 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
             },
         )
 
-        // ---- floating toolbar
-        androidx.compose.animation.AnimatedVisibility(
-            visible = chrome,
-            enter = androidx.compose.animation.slideInVertically(tween(Motion.medium, easing = Motion.emphasizedDecelerate)) { -it } + fadeIn(tween(Motion.medium)),
-            exit = androidx.compose.animation.slideOutVertically(tween(Motion.short, easing = Motion.emphasizedAccelerate)) { -it } + fadeOut(tween(Motion.short)),
-            modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = 10.dp, start = 12.dp, end = 12.dp),
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RectangleShape,
+            color = MaterialTheme.colorScheme.surfaceContainer,
+            shadowElevation = 1.dp,
         ) {
-            Surface(
-                shape = CircleShape, color = MaterialTheme.colorScheme.surface, tonalElevation = 2.dp, shadowElevation = 8.dp,
-                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
-            ) {
-                Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 6.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
-                    PillDivider()
-                    Box {
-                        ToolButton(
-                            Icons.Default.Edit,
-                            "Pen",
-                            tool == InkTool.PEN,
-                            onLongClick = { selectTool(InkTool.PEN); penPop = true },
-                        ) {
-                            if (tool == InkTool.PEN) penPop = true else selectTool(InkTool.PEN)
-                        }
-                        DropdownMenu(expanded = penPop, onDismissRequest = { penPop = false }, shape = MaterialTheme.shapes.large) {
-                            PenType.values().forEach { type ->
-                                DropdownMenuItem(
-                                    text = {
-                                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                                            PenTypePreview(type, color)
-                                            Text(type.label)
-                                        }
-                                    },
-                                    trailingIcon = { if (pen == type) Icon(Icons.Default.Check, "Selected") },
-                                    onClick = {
-                                        if (pen != type) {
-                                            pen = type
-                                            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                        }
-                                        penPop = false
-                                    },
+            Column {
+                Spacer(Modifier.height(statusBarHeight))
+                Row(
+                    Modifier.fillMaxWidth().height(76.dp).padding(horizontal = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                IconButton(onClick = onBack, modifier = Modifier.size(48.dp)) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
+                }
+                Row(
+                    Modifier.weight(1f).fillMaxHeight().horizontalScroll(rememberScrollState()).padding(horizontal = 2.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.Bottom,
+                ) {
+                    listOf(PenType.BALLPOINT, PenType.PENCIL, PenType.FOUNTAIN, PenType.MARKER).forEach { type ->
+                        Box {
+                            ShelfCanvasItem(
+                                label = type.label,
+                                style = type.toShelfStyle(),
+                                selected = tool == InkTool.PEN && pen == type,
+                                color = color,
+                                onClick = { selectPen(type) },
+                            )
+                            DropdownMenu(
+                                expanded = penPopover == type,
+                                onDismissRequest = { penPopover = null },
+                                shape = MaterialTheme.shapes.large,
+                            ) {
+                                BrushSettingsPopover(
+                                    title = type.label,
+                                    color = color,
+                                    brushSize = size,
+                                    onSizeChange = { size = it },
+                                    opacity = markerOpacity,
+                                    onOpacityChange = { markerOpacity = it },
+                                    showOpacity = type == PenType.MARKER,
                                 )
                             }
                         }
                     }
-                    ToolButton(Icons.Default.Brush, "Highlighter", tool == InkTool.HIGHLIGHTER) { selectTool(InkTool.HIGHLIGHTER) }
-                    ToolButton(Icons.Default.Clear, "Eraser", tool == InkTool.ERASER) { if (tool == InkTool.ERASER) pixelEraser = !pixelEraser else selectTool(InkTool.ERASER) }
-                    androidx.compose.animation.AnimatedVisibility(tool == InkTool.ERASER) {
-                        Text(if (pixelEraser) "pixel" else "stroke", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(end = 6.dp))
-                    }
-                    ToolButton(Icons.Default.TextFields, "Text", tool == InkTool.TEXT) { selectTool(InkTool.TEXT) }
-                    ToolButton(Icons.Default.HighlightAlt, "Lasso", tool == InkTool.LASSO) { selectTool(InkTool.LASSO) }
-                    androidx.compose.animation.AnimatedVisibility(hasSelection) {
-                        IconButton(onClick = { surface?.deleteSelection() }) { Icon(Icons.Default.DeleteOutline, "Delete selection", tint = MaterialTheme.colorScheme.error) }
-                    }
-                    PillDivider()
+                    Box(Modifier.padding(horizontal = 6.dp, vertical = 18.dp).width(1.dp).height(32.dp).background(MaterialTheme.colorScheme.outlineVariant))
                     Box {
-                        IconButton(onClick = { colorPop = true; sizePop = false }) {
-                            Box(Modifier.size(22.dp).background(Color(color), CircleShape).border(2.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape))
+                        ShelfCanvasItem(
+                            label = "Highlighter",
+                            style = ShelfDrawing.HIGHLIGHTER,
+                            selected = tool == InkTool.HIGHLIGHTER,
+                            color = color,
+                            onClick = { selectHighlighter() },
+                        )
+                        DropdownMenu(
+                            expanded = highlighterPopover,
+                            onDismissRequest = { highlighterPopover = false },
+                            shape = MaterialTheme.shapes.large,
+                        ) {
+                            BrushSettingsPopover(
+                                title = "Highlighter",
+                                color = color,
+                                    brushSize = size,
+                                onSizeChange = { size = it },
+                                opacity = highlighterOpacity,
+                                onOpacityChange = { highlighterOpacity = it },
+                                showOpacity = true,
+                            )
+                        }
+                    }
+                    Box {
+                        ShelfCanvasItem(
+                            label = PenType.CALLIGRAPHY.label,
+                            style = ShelfDrawing.CALLIGRAPHY,
+                            selected = tool == InkTool.PEN && pen == PenType.CALLIGRAPHY,
+                            color = color,
+                            onClick = { selectPen(PenType.CALLIGRAPHY) },
+                        )
+                        DropdownMenu(
+                            expanded = penPopover == PenType.CALLIGRAPHY,
+                            onDismissRequest = { penPopover = null },
+                            shape = MaterialTheme.shapes.large,
+                        ) {
+                            BrushSettingsPopover(
+                                title = PenType.CALLIGRAPHY.label,
+                                color = color,
+                                brushSize = size,
+                                onSizeChange = { size = it },
+                                opacity = markerOpacity,
+                                onOpacityChange = { markerOpacity = it },
+                                showOpacity = false,
+                            )
+                        }
+                    }
+                    Box(Modifier.padding(horizontal = 6.dp, vertical = 18.dp).width(1.dp).height(32.dp).background(MaterialTheme.colorScheme.outlineVariant))
+                    ShelfCanvasItem("Eraser", ShelfDrawing.ERASER, tool == InkTool.ERASER, color) { selectTool(InkTool.ERASER) }
+                    ShelfCanvasItem("Lasso", ShelfDrawing.LASSO, tool == InkTool.LASSO, color) { selectTool(InkTool.LASSO) }
+                    ShelfCanvasItem("Text", ShelfDrawing.TEXT, tool == InkTool.TEXT, color) { selectTool(InkTool.TEXT) }
+                    Box(Modifier.padding(horizontal = 6.dp, vertical = 18.dp).width(1.dp).height(32.dp).background(MaterialTheme.colorScheme.outlineVariant))
+                    Box {
+                        IconButton(onClick = { colorPop = true }, modifier = Modifier.size(40.dp)) {
+                            ColorWheelButton(color)
                         }
                         DropdownMenu(expanded = colorPop, onDismissRequest = { colorPop = false }, shape = MaterialTheme.shapes.large) {
-                            Row(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                PALETTE.forEach { c -> ColorDot(c, c == color) { color = c; colorPop = false } }
-                            }
-                        }
-                    }
-                    Box {
-                        IconButton(onClick = { sizePop = true; colorPop = false }) {
-                            Box(Modifier.size((6 + size * 1.6f).dp.coerceAtMost(22.dp)).background(MaterialTheme.colorScheme.onSurface, CircleShape))
-                        }
-                        DropdownMenu(expanded = sizePop, onDismissRequest = { sizePop = false }, shape = MaterialTheme.shapes.large) {
-                            Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp).width(220.dp)) {
-                                Text("Stroke width", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Box(Modifier.fillMaxWidth().height(36.dp), contentAlignment = Alignment.Center) {
-                                    Box(Modifier.fillMaxWidth(0.8f).height((size * 1.6f).dp).background(Color(color), CircleShape))
+                            Column(Modifier.padding(8.dp)) {
+                                (PALETTE + EXTRA_PALETTE).chunked(4).forEach { row ->
+                                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        row.forEach { swatch ->
+                                            ColorDot(swatch, swatch == color, 32.dp) { chooseColor(swatch) }
+                                        }
+                                    }
                                 }
-                                Slider(value = size, onValueChange = { size = it }, valueRange = 1f..10f)
                             }
                         }
                     }
-                    PillDivider()
-                    IconButton(onClick = { surface?.undo() }) { Icon(Icons.AutoMirrored.Filled.Undo, "Undo") }
-                    IconButton(onClick = { surface?.redo() }) { Icon(Icons.AutoMirrored.Filled.Redo, "Redo") }
-                    PillDivider()
+                    recentColors.filterNot { it == color }.take(2).forEach { swatch ->
+                        ColorDot(swatch, false, 26.dp) { chooseColor(swatch) }
+                    }
+                }
+                IconButton(onClick = { surface?.undo() }, modifier = Modifier.size(44.dp)) {
+                    Icon(Icons.AutoMirrored.Filled.Undo, "Undo")
+                }
+                IconButton(onClick = { surface?.redo() }, modifier = Modifier.size(44.dp)) {
+                    Icon(Icons.AutoMirrored.Filled.Redo, "Redo")
+                }
+                IconButton(
+                    onClick = {
+                        scope.launch {
+                            runCatching { exporter.exportNotebook(notebookId, notebook?.title ?: "Notebook") }
+                                .onSuccess { exporter.share(it) }
+                                .onFailure { Toast.makeText(context, "Export failed: ${it.message}", Toast.LENGTH_LONG).show() }
+                        }
+                    },
+                    modifier = Modifier.size(44.dp),
+                ) {
+                    Icon(Icons.Outlined.IosShare, "Share notebook as PDF")
+                }
                     Box {
-                        IconButton(onClick = { morePop = true }) { Icon(Icons.Default.MoreHoriz, "More") }
+                        IconButton(onClick = { morePop = true }, modifier = Modifier.size(44.dp)) {
+                            Icon(Icons.Default.MoreVert, "More")
+                        }
                         DropdownMenu(expanded = morePop, onDismissRequest = { morePop = false }, shape = MaterialTheme.shapes.large) {
+                            if (hasSelection) {
+                                DropdownMenuItem(
+                                    text = { Text("Delete selection") },
+                                    leadingIcon = { Icon(Icons.Default.DeleteOutline, null, tint = MaterialTheme.colorScheme.error) },
+                                    onClick = { surface?.deleteSelection(); morePop = false },
+                                )
+                            }
                             ToggleItem("Zoom box", "Magnified line for small writing", zoomBox) { zoomBox = it }
                             ToggleItem("Finger draws", "Otherwise finger pans and zooms", fingerDraws) { fingerDraws = it }
                             ToggleItem("Pen diagnostics", "Pressure, tilt and latency", showLab) { showLab = it }
+                            ToggleItem("Pixel eraser", "Erase pixels instead of whole strokes", pixelEraser) { pixelEraser = it }
                         }
                     }
-                    IconButton(onClick = { chrome = false }) { Icon(Icons.Default.KeyboardArrowUp, "Hide toolbar") }
                 }
             }
         }
-        // collapsed handle
-        androidx.compose.animation.AnimatedVisibility(
-            visible = !chrome, enter = fadeIn(tween(Motion.medium)), exit = fadeOut(tween(Motion.short)),
-            modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = 6.dp),
-        ) {
-            Surface(onClick = { chrome = true }, shape = CircleShape, color = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f), shadowElevation = 4.dp) {
-                Icon(Icons.Default.KeyboardArrowDown, "Show toolbar", Modifier.padding(horizontal = 18.dp, vertical = 4.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
 
-        // ---- page pill
-        androidx.compose.animation.AnimatedVisibility(
-            visible = chrome && pages.isNotEmpty(), enter = fadeIn(tween(Motion.medium)), exit = fadeOut(tween(Motion.short)),
-            modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = if (zoomBox) 64.dp else 16.dp),
+        if (pages.isNotEmpty()) Row(
+            Modifier.align(Alignment.BottomStart).navigationBarsPadding()
+                .padding(start = 16.dp, bottom = if (showLab) 64.dp else 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Surface(shape = CircleShape, color = MaterialTheme.colorScheme.surface, tonalElevation = 2.dp, shadowElevation = 6.dp,
-                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))) {
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 4.dp)) {
-                    IconButton(enabled = index > 0, onClick = { onNavigateToPage(pages[index - 1].id) }) { Icon(Icons.Default.ChevronLeft, "Previous page") }
-                    Text("${index + 1} / ${pages.size}", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(horizontal = 6.dp))
-                    IconButton(enabled = index in 0 until pages.size - 1, onClick = { onNavigateToPage(pages[index + 1].id) }) { Icon(Icons.Default.ChevronRight, "Next page") }
+            Text(
+                "${index + 1} / ${pages.size}    ${zoomPercent}%",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (pages.size > 1) {
+                IconButton(enabled = index > 0, onClick = { if (index > 0) onNavigateToPage(pages[index - 1].id) }, modifier = Modifier.size(32.dp)) {
+                    Icon(Icons.Default.ChevronLeft, "Previous page", modifier = Modifier.size(18.dp))
+                }
+                IconButton(enabled = index in 0 until pages.size - 1, onClick = { if (index < pages.lastIndex) onNavigateToPage(pages[index + 1].id) }, modifier = Modifier.size(32.dp)) {
+                    Icon(Icons.Default.ChevronRight, "Next page", modifier = Modifier.size(18.dp))
                 }
             }
         }
@@ -371,41 +478,211 @@ private fun TextBlockDialog(initial: String, onDismiss: () -> Unit, onDelete: ((
 @Composable
 private fun rememberSaveableTool() = remember { mutableStateOf(InkTool.PEN) }
 
-@Composable
-private fun PillDivider() { VerticalDivider(Modifier.height(22.dp).padding(horizontal = 4.dp), color = MaterialTheme.colorScheme.outlineVariant) }
+private enum class ShelfDrawing { BALLPOINT, PENCIL, FOUNTAIN, MARKER, HIGHLIGHTER, CALLIGRAPHY, ERASER, LASSO, TEXT }
 
-@Composable
-@OptIn(ExperimentalFoundationApi::class)
-private fun ToolButton(
-    icon: ImageVector,
-    label: String,
-    selected: Boolean,
-    onLongClick: (() -> Unit)? = null,
-    onClick: () -> Unit,
-) {
-    val bg by animateColorAsState(if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent, tween(Motion.short), label = "toolBg")
-    val fg by animateColorAsState(if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant, tween(Motion.short), label = "toolFg")
-    Box(Modifier.size(40.dp).clip(CircleShape).background(bg).combinedClickable(onClick = onClick, onLongClick = onLongClick), contentAlignment = Alignment.Center) { Icon(icon, label, tint = fg) }
+private fun PenType.toShelfStyle(): ShelfDrawing = when (this) {
+    PenType.BALLPOINT -> ShelfDrawing.BALLPOINT
+    PenType.PENCIL -> ShelfDrawing.PENCIL
+    PenType.FOUNTAIN -> ShelfDrawing.FOUNTAIN
+    PenType.MARKER -> ShelfDrawing.MARKER
+    PenType.CALLIGRAPHY -> ShelfDrawing.CALLIGRAPHY
 }
 
 @Composable
-private fun PenTypePreview(pen: PenType, argb: Int) {
-    Canvas(Modifier.size(32.dp, 22.dp)) {
-        val path = Path().apply {
-            moveTo(2.dp.toPx(), size.height * 0.78f)
-            cubicTo(size.width * 0.24f, size.height * 0.04f, size.width * 0.68f, size.height * 0.98f, size.width - 2.dp.toPx(), size.height * 0.22f)
+private fun ShelfCanvasItem(label: String, style: ShelfDrawing, selected: Boolean, color: Int, onClick: () -> Unit) {
+    val rise by animateDpAsState(
+        targetValue = if (selected) (-12).dp else 0.dp,
+        animationSpec = spring(dampingRatio = 0.7f),
+        label = "$label-rise",
+    )
+    val dark = MaterialTheme.colorScheme.isDark
+    val outline = MaterialTheme.colorScheme.outlineVariant
+    val onSurface = MaterialTheme.colorScheme.onSurface
+
+    Box(
+        Modifier.width(34.dp).height(76.dp).clickable(onClickLabel = label, onClick = onClick),
+        contentAlignment = Alignment.BottomCenter,
+    ) {
+        Canvas(Modifier.size(28.dp, 64.dp).offset(y = rise).clipToBounds()) {
+            val centerX = size.width / 2f
+            val bodyTop = 16.dp.toPx()
+            val bodyBottom = size.height + 8.dp.toPx()
+            val bodyLeft = 6.dp.toPx()
+            val bodyWidth = size.width - 12.dp.toPx()
+            val bodyCorner = CornerRadius(5.dp.toPx())
+            val penColor = Color(color)
+            val itemColor = if (style == ShelfDrawing.HIGHLIGHTER) penColor.copy(alpha = 0.45f) else penColor
+            val bodyBrush = Brush.verticalGradient(
+                colors = if (dark) listOf(Color(0xFF3A3B40), Color(0xFF2A2B2F)) else listOf(Color.White, Color(0xFFE6E8EC)),
+                startY = bodyTop,
+                endY = bodyBottom,
+            )
+            val bodyTopLeft = Offset(bodyLeft, bodyTop)
+            val bodySize = Size(bodyWidth, bodyBottom - bodyTop)
+
+            if (style == ShelfDrawing.ERASER) {
+                val eraserTop = 18.dp.toPx()
+                val eraserLeft = 4.dp.toPx()
+                val eraserWidth = size.width - 8.dp.toPx()
+                drawRoundRect(
+                    color = if (dark) Color(0xFFE6E7EA) else Color.White,
+                    topLeft = Offset(eraserLeft, eraserTop),
+                    size = Size(eraserWidth, 31.dp.toPx()),
+                    cornerRadius = CornerRadius(4.dp.toPx()),
+                )
+                drawRoundRect(
+                    color = Color(0xFFB8BDC5),
+                    topLeft = Offset(eraserLeft, eraserTop + 12.dp.toPx()),
+                    size = Size(eraserWidth, 6.dp.toPx()),
+                    cornerRadius = CornerRadius(2.dp.toPx()),
+                )
+                drawRoundRect(
+                    color = outline,
+                    topLeft = Offset(eraserLeft, eraserTop),
+                    size = Size(eraserWidth, 31.dp.toPx()),
+                    cornerRadius = CornerRadius(4.dp.toPx()),
+                    style = DrawStroke(width = 1f),
+                )
+                return@Canvas
+            }
+
+            drawRoundRect(bodyBrush, bodyTopLeft, bodySize, bodyCorner)
+            drawRoundRect(outline, bodyTopLeft, bodySize, bodyCorner, style = DrawStroke(width = 1f))
+
+            when (style) {
+                ShelfDrawing.BALLPOINT -> {
+                    val tip = Path().apply {
+                        moveTo(centerX, 3.dp.toPx())
+                        lineTo(centerX - 5.dp.toPx(), 17.dp.toPx())
+                        lineTo(centerX + 5.dp.toPx(), 17.dp.toPx())
+                        close()
+                    }
+                    drawPath(tip, itemColor)
+                    drawCircle(itemColor, 1.4.dp.toPx(), Offset(centerX, 3.dp.toPx()))
+                }
+                ShelfDrawing.PENCIL -> {
+                    val wood = Path().apply {
+                        moveTo(centerX, 3.dp.toPx())
+                        lineTo(centerX - 6.dp.toPx(), 18.dp.toPx())
+                        lineTo(centerX + 6.dp.toPx(), 18.dp.toPx())
+                        close()
+                    }
+                    val lead = Path().apply {
+                        moveTo(centerX, 3.dp.toPx())
+                        lineTo(centerX - 1.8.dp.toPx(), 8.dp.toPx())
+                        lineTo(centerX + 1.8.dp.toPx(), 8.dp.toPx())
+                        close()
+                    }
+                    drawPath(wood, Color(0xFFE9C89A))
+                    drawPath(lead, itemColor)
+                }
+                ShelfDrawing.FOUNTAIN -> {
+                    val nib = Path().apply {
+                        moveTo(centerX, 3.dp.toPx())
+                        lineTo(centerX - 7.dp.toPx(), 17.dp.toPx())
+                        lineTo(centerX - 4.dp.toPx(), 23.dp.toPx())
+                        lineTo(centerX + 4.dp.toPx(), 23.dp.toPx())
+                        lineTo(centerX + 7.dp.toPx(), 17.dp.toPx())
+                        close()
+                    }
+                    drawPath(nib, Color(0xFFB9BEC7))
+                    drawLine(Color(0xFF656A72), Offset(centerX, 5.dp.toPx()), Offset(centerX, 21.dp.toPx()), 1.dp.toPx())
+                    drawCircle(itemColor, 1.5.dp.toPx(), Offset(centerX, 15.dp.toPx()))
+                }
+                ShelfDrawing.MARKER -> {
+                    drawRoundRect(
+                        color = itemColor,
+                        topLeft = Offset(3.dp.toPx(), 6.dp.toPx()),
+                        size = Size(size.width - 6.dp.toPx(), 13.dp.toPx()),
+                        cornerRadius = CornerRadius(2.dp.toPx()),
+                    )
+                    drawRect(itemColor, Offset(bodyLeft, bodyTop), Size(bodyWidth, 5.dp.toPx()))
+                }
+                ShelfDrawing.HIGHLIGHTER -> {
+                    drawRoundRect(
+                        color = itemColor,
+                        topLeft = Offset(3.dp.toPx(), 6.dp.toPx()),
+                        size = Size(size.width - 6.dp.toPx(), 14.dp.toPx()),
+                        cornerRadius = CornerRadius(1.dp.toPx()),
+                    )
+                    drawRect(itemColor, Offset(bodyLeft, bodyTop), Size(bodyWidth, 5.dp.toPx()))
+                }
+                ShelfDrawing.CALLIGRAPHY -> {
+                    val nib = Path().apply {
+                        moveTo(4.dp.toPx(), 15.dp.toPx())
+                        lineTo(13.dp.toPx(), 3.dp.toPx())
+                        lineTo(24.dp.toPx(), 8.dp.toPx())
+                        lineTo(16.dp.toPx(), 21.dp.toPx())
+                        lineTo(8.dp.toPx(), 19.dp.toPx())
+                        close()
+                    }
+                    drawPath(nib, itemColor)
+                    drawLine(outline, Offset(9.dp.toPx(), 18.dp.toPx()), Offset(20.dp.toPx(), 8.dp.toPx()), 1.dp.toPx())
+                }
+                ShelfDrawing.LASSO -> {
+                    val loop = Path().apply {
+                        moveTo(9.dp.toPx(), 39.dp.toPx())
+                        cubicTo(3.dp.toPx(), 31.dp.toPx(), 9.dp.toPx(), 26.dp.toPx(), 15.dp.toPx(), 31.dp.toPx())
+                        cubicTo(21.dp.toPx(), 36.dp.toPx(), 17.dp.toPx(), 42.dp.toPx(), 12.dp.toPx(), 40.dp.toPx())
+                    }
+                    drawPath(
+                        loop,
+                        onSurface,
+                        style = DrawStroke(width = 1.5.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(2.dp.toPx(), 2.dp.toPx()))),
+                    )
+                }
+                ShelfDrawing.TEXT -> {
+                    drawLine(onSurface, Offset(9.dp.toPx(), 31.dp.toPx()), Offset(19.dp.toPx(), 31.dp.toPx()), 2.dp.toPx())
+                    drawLine(onSurface, Offset(14.dp.toPx(), 31.dp.toPx()), Offset(14.dp.toPx(), 42.dp.toPx()), 2.dp.toPx())
+                }
+                ShelfDrawing.ERASER -> Unit
+            }
         }
-        val (width, alpha) = when (pen) {
-            PenType.BALLPOINT -> 1.3f to 1f
-            PenType.FOUNTAIN -> 2f to 1f
-            PenType.PENCIL -> 1.5f to 0.58f
-            PenType.MARKER -> 4f to 0.9f
-            PenType.CALLIGRAPHY -> 3.5f to 1f
+    }
+}
+
+@Composable
+private fun BrushSettingsPopover(
+    title: String,
+    color: Int,
+    brushSize: Float,
+    onSizeChange: (Float) -> Unit,
+    opacity: Float,
+    onOpacityChange: (Float) -> Unit,
+    showOpacity: Boolean,
+) {
+    Column(Modifier.width(248.dp).padding(horizontal = 16.dp, vertical = 12.dp)) {
+        Text(title, style = MaterialTheme.typography.titleSmall)
+        Canvas(Modifier.fillMaxWidth().height(40.dp)) {
+            drawLine(
+                Color(color).copy(alpha = if (showOpacity) opacity else 1f),
+                Offset(12.dp.toPx(), size.height / 2f),
+                Offset(size.width - 12.dp.toPx(), size.height / 2f),
+                strokeWidth = (brushSize * 1.25f).dp.toPx().coerceAtLeast(1.dp.toPx()),
+                cap = androidx.compose.ui.graphics.StrokeCap.Round,
+            )
         }
-        drawPath(
-            path,
-            Color(argb).copy(alpha = alpha),
-            style = androidx.compose.ui.graphics.drawscope.Stroke(width = width, cap = StrokeCap.Round),
+        Text("Stroke width", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Slider(value = brushSize, onValueChange = onSizeChange, valueRange = 1f..10f)
+        if (showOpacity) {
+            Text("Opacity", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Slider(value = opacity, onValueChange = onOpacityChange, valueRange = 0.1f..1f)
+        }
+    }
+}
+
+@Composable
+private fun ColorWheelButton(color: Int) {
+    Canvas(Modifier.size(32.dp)) {
+        val radius = size.minDimension / 2f
+        val ringWidth = 3.dp.toPx()
+        drawCircle(Color(color), radius = radius - ringWidth)
+        drawCircle(
+            brush = Brush.sweepGradient(
+                listOf(Color.Red, Color.Yellow, Color.Green, Color.Cyan, Color.Blue, Color.Magenta, Color.Red),
+            ),
+            radius = radius - ringWidth / 2f,
+            style = DrawStroke(width = ringWidth),
         )
     }
 }
@@ -420,11 +697,11 @@ private fun ToggleItem(title: String, subtitle: String, checked: Boolean, onChan
 }
 
 @Composable
-private fun ColorDot(argb: Int, selected: Boolean, onClick: () -> Unit) {
-    val ring by animateFloatAsState(if (selected) 1f else 0f, tween(Motion.short), label = "ring")
+private fun ColorDot(argb: Int, selected: Boolean, dotSize: Dp = 32.dp, onClick: () -> Unit) {
+    val ring by animateFloatAsState(if (selected) 1f else 0f, label = "ring")
     Box(
-        Modifier.size(32.dp).clip(CircleShape).clickable(onClick = onClick)
+        Modifier.size(dotSize).clip(CircleShape).clickable(onClick = onClick)
             .border((2 * ring).dp, MaterialTheme.colorScheme.onSurface.copy(alpha = ring), CircleShape)
-            .padding(4.dp).background(Color(argb), CircleShape)
+            .padding(dotSize * 0.14f).background(Color(argb), CircleShape)
     )
 }

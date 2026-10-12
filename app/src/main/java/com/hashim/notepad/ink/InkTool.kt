@@ -6,6 +6,7 @@ import androidx.ink.brush.BrushPaint
 import androidx.ink.brush.BrushTip
 import androidx.ink.brush.ExperimentalInkCustomBrushApi
 import androidx.ink.brush.StockBrushes
+import kotlin.math.roundToInt
 
 enum class InkTool { PEN, HIGHLIGHTER, ERASER, TEXT, LASSO }
 
@@ -22,11 +23,12 @@ data class BrushSpec(
     val colorArgb: Int,
     val size: Float,
     val pen: PenType = PenType.FOUNTAIN,
+    val opacity: Float = if (tool == InkTool.HIGHLIGHTER) 0.45f else 230f / 255f,
 ) {
     @OptIn(ExperimentalInkCustomBrushApi::class)
     fun toBrush(): Brush = when (tool) {
         InkTool.HIGHLIGHTER -> Brush.createWithColorIntArgb(
-            StockBrushes.highlighter(), colorArgb.withAlpha(0x66), size * 4f, EPSILON
+            StockBrushes.highlighter(), colorArgb.withAlpha((opacity.coerceIn(0f, 1f) * 255f).roundToInt()), size * 4f, EPSILON
         )
         InkTool.PEN -> when (pen) {
             PenType.BALLPOINT -> Brush.createWithColorIntArgb(
@@ -39,7 +41,7 @@ data class BrushSpec(
                 StockBrushes.pencilUnstable, colorArgb, size * 1.2f, EPSILON
             )
             PenType.MARKER -> Brush.createWithColorIntArgb(
-                StockBrushes.marker(), colorArgb.withAlpha(0xE6), size * 2.2f, EPSILON
+                StockBrushes.marker(), colorArgb.withAlpha((opacity.coerceIn(0f, 1f) * 255f).roundToInt()), size * 2.2f, EPSILON
             )
             PenType.CALLIGRAPHY -> Brush.createWithColorIntArgb(
                 InkBrushFamilies.calligraphy, colorArgb, size * 2.5f, EPSILON
@@ -54,7 +56,7 @@ data class BrushSpec(
 private fun Int.withAlpha(alpha: Int): Int = (this and 0x00FFFFFF) or (alpha shl 24)
 
 @OptIn(ExperimentalInkCustomBrushApi::class)
-private object InkBrushFamilies {
+internal object InkBrushFamilies {
     val calligraphy: BrushFamily by lazy {
         val tip = BrushTip.builder()
             .setScaleX(1f)

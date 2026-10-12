@@ -30,6 +30,7 @@ import com.hashim.notepad.data.TextBlock
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 
 /**
  * Pen surface. World coordinates are PDF points on the page (origin top-left). A page bitmap
@@ -43,6 +44,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     var fingerDraws: Boolean = false
     var onSample: ((PointerSample) -> Unit)? = null
     var onStrokesChanged: ((List<Stroke>) -> Unit)? = null
+    var onZoomChanged: ((Int) -> Unit)? = null
     /** Text tool: tap on empty space → (xPt, yPt, null); tap on a block → (xPt, yPt, block). */
     var onTextTap: ((Float, Float, TextBlock?) -> Unit)? = null
     var textBlocks: List<TextBlock> = emptyList()
@@ -152,6 +154,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     private var scale = 1f
     private var panX = 0f
     private var panY = 0f
+    private var lastReportedZoomPercent = Int.MIN_VALUE
     private var pageBitmap: Bitmap? = null
     private var currentStrokeId: InProgressStrokeId? = null
     private var currentPointerId = -1
@@ -392,6 +395,11 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         pageToView.reset(); pageToView.postScale(scale, scale); pageToView.postTranslate(panX, panY)
         pageToView.invert(viewToPage)
         updateZoom()
+        val zoomPercent = (scale / minScale() * 100f).roundToInt()
+        if (zoomPercent != lastReportedZoomPercent) {
+            lastReportedZoomPercent = zoomPercent
+            onZoomChanged?.invoke(zoomPercent)
+        }
         strokeLayer.invalidate()
     }
 
