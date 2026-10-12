@@ -297,7 +297,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
                 if (currentStrokeId != null || erasing) return true
                 currentPointerId = event.getPointerId(idx)
                 erasing = eraserNow
-                if (erasing) eraseAt(event.getX(idx), event.getY(idx))
+                if (erasing) { lastErase = null; eraseAt(event.getX(idx), event.getY(idx)) }
                 else currentStrokeId = wetLayer.startStroke(event, currentPointerId, brushSpec.toBrush(), viewToPage, identity)
                 report(event, idx); return true
             }
@@ -347,20 +347,22 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     /** STROKE removes whole strokes; PIXEL cuts out only the touched segment and keeps the rest as new strokes. */
     var pixelEraser = false
 
+    private var lastErase: FloatArray? = null
+
+    /** Erases along the segment from the previous eraser sample to this one, so fast pen moves cannot skip over strokes. */
     private fun eraseAt(viewX: Float, viewY: Float) {
         val pt = floatArrayOf(viewX, viewY); viewToPage.mapPoints(pt)
+        val prev = lastErase ?: pt
+        lastErase = pt
         val radius = (if (pixelEraser) PIXEL_ERASER_RADIUS_PX else ERASER_RADIUS_PX) / scale
         var changed = false
         var i = 0
         while (i < strokes.size) {
             val s = strokes[i]
-            val inputs = s.inputs
-            var hit = false; var k = 0
-            while (k < inputs.size && !hit) { val p = inputs[k]; if (hypot(p.x - pt[0], p.y - pt[1]) <= radius) hit = true; k++ }
-            if (!hit) { i++; continue }
+            if (!hitsSegment(s, prev, pt, radius)) { i++; continue }
             changed = true
             if (!pixelEraser) { strokes.removeAt(i); continue }
-            val pieces = splitStroke(s, pt[0], pt[1], radius)
+            val pieces = splitStroke(s, prev, pt, radius)
             strokes.removeAt(i)
             strokes.addAll(i, pieces)
             i += pieces.size
@@ -368,21 +370,70 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         if (changed) { undone.clear(); strokeLayer.invalidate(); notifyChanged() }
     }
 
-    private fun splitStroke(s: Stroke, cx: Float, cy: Float, radius: Float): List<Stroke> {
+    private fun hitsSegment(s: Stroke, a: FloatArray, b: FloatArray, r: Float): Boolean {
+        val inputs = s.inputs
+        if (inputs.size == 0) return false
+        var px = inputs[0].x; var py = inputs[0].y
+        if (inputs.size == 1) return segPointDist(a[0], a[1], b[0], b[1], px, py) <= r
+        for (k in 1 until inputs.size) {
+            val q = inputs[k]
+            if (segSegDist(a[0], a[1], b[0], b[1], px, py, q.x, q.y) <= r) return true
+            px = q.x; py = q.y
+        }
+        return false
+    }
+
+    private fun splitStroke(s: Stroke, a: FloatArray, b: FloatArray, r: Float): List<Stroke> {
+        val inputs = s.inputs
+        val pts = ArrayList<StrokeInput>()
+        val step = (r / 2f).coerceAtLeast(0.5f)
+        for (k in 0 until inputs.size) {
+            val qi = copyInput(inputs[k])
+            if (pts.isNotEmpty()) {
+                val p = pts.last()
+                val n = (hypot(qi.x - p.x, qi.y - p.y) / step).toInt()
+                for (j in 1 until n) pts.add(lerp(p, qi, j.toFloat() / n))
+            }
+            pts.add(qi)
+        }
         val out = ArrayList<Stroke>()
         var batch: MutableStrokeInputBatch? = null
         var count = 0
-        val inputs = s.inputs
-        fun flush() { val b = batch; if (b != null && count >= 2) out.add(Stroke(s.brush, b)); batch = null; count = 0 }
-        for (k in 0 until inputs.size) {
-            val p = inputs[k]
-            if (hypot(p.x - cx, p.y - cy) <= radius) { flush(); continue }
-            val b = batch ?: MutableStrokeInputBatch().also { batch = it }
-            b.add(StrokeInput.create(p.x, p.y, p.elapsedTimeMillis, p.toolType, p.strokeUnitLengthCm, p.pressure, p.tiltRadians, p.orientationRadians))
-            count++
+        fun flush() { val bt = batch; if (bt != null && count >= 2) out.add(Stroke(s.brush, bt)); batch = null; count = 0 }
+        for (p in pts) {
+            if (segPointDist(a[0], a[1], b[0], b[1], p.x, p.y) <= r) { flush(); continue }
+            val bt = batch ?: MutableStrokeInputBatch().also { batch = it }
+            bt.add(p); count++
         }
         flush()
         return out
+    }
+
+    private fun copyInput(p: StrokeInput) =
+        StrokeInput.create(p.x, p.y, p.elapsedTimeMillis, p.toolType, p.strokeUnitLengthCm, p.pressure, p.tiltRadians, p.orientationRadians)
+
+    private fun lerp(p: StrokeInput, q: StrokeInput, t: Float) = StrokeInput.create(
+        p.x + (q.x - p.x) * t, p.y + (q.y - p.y) * t,
+        p.elapsedTimeMillis + ((q.elapsedTimeMillis - p.elapsedTimeMillis) * t).toLong(),
+        p.toolType, p.strokeUnitLengthCm, p.pressure, p.tiltRadians, p.orientationRadians
+    )
+
+    private fun segPointDist(ax: Float, ay: Float, bx: Float, by: Float, px: Float, py: Float): Float {
+        val dx = bx - ax; val dy = by - ay; val l2 = dx * dx + dy * dy
+        val t = if (l2 == 0f) 0f else (((px - ax) * dx + (py - ay) * dy) / l2).coerceIn(0f, 1f)
+        return hypot(px - (ax + t * dx), py - (ay + t * dy))
+    }
+
+    private fun cross(ox: Float, oy: Float, ax: Float, ay: Float, bx: Float, by: Float) = (ax - ox) * (by - oy) - (ay - oy) * (bx - ox)
+
+    private fun segSegDist(ax: Float, ay: Float, bx: Float, by: Float, cx: Float, cy: Float, dx: Float, dy: Float): Float {
+        val d1 = cross(cx, cy, dx, dy, ax, ay); val d2 = cross(cx, cy, dx, dy, bx, by)
+        val d3 = cross(ax, ay, bx, by, cx, cy); val d4 = cross(ax, ay, bx, by, dx, dy)
+        if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) return 0f
+        return minOf(
+            segPointDist(ax, ay, bx, by, cx, cy), segPointDist(ax, ay, bx, by, dx, dy),
+            segPointDist(cx, cy, dx, dy, ax, ay), segPointDist(cx, cy, dx, dy, bx, by)
+        )
     }
 
     private fun report(event: MotionEvent, idx: Int) {
