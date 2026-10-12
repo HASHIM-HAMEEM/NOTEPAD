@@ -52,7 +52,12 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     private var pageKind = PageKind.BLANK
 
     private val strokes = ArrayList<Stroke>()
-    private val undone = ArrayList<Stroke>()
+    private val history = ArrayList<List<Stroke>>()
+    private val future = ArrayList<List<Stroke>>()
+    private var eraseDirty = false
+
+    /** Call before any mutation of [strokes]; keeps the last 100 states. */
+    private fun snapshot() { history.add(ArrayList(strokes)); if (history.size > 100) history.removeAt(0); future.clear() }
     private val identity = Matrix()
     private val pageToView = Matrix()
     private val viewToPage = Matrix()
@@ -147,8 +152,8 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         eagerInit()
         addFinishedStrokesListener(object : InProgressStrokesFinishedListener {
             override fun onStrokesFinished(strokes: Map<InProgressStrokeId, Stroke>) {
+                snapshot()
                 this@InkSurfaceView.strokes.addAll(strokes.values)
-                undone.clear()
                 strokeLayer.invalidate()
                 post { removeFinishedStrokes(strokes.keys) }
                 notifyChanged()
@@ -171,13 +176,21 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
 
     fun setPage(bitmap: Bitmap?) { pageBitmap = bitmap; strokeLayer.invalidate() }
 
-    fun setStrokes(list: List<Stroke>) { strokes.clear(); strokes.addAll(list); undone.clear(); strokeLayer.invalidate(); notifyChanged() }
+    fun setStrokes(list: List<Stroke>) { strokes.clear(); strokes.addAll(list); history.clear(); future.clear(); strokeLayer.invalidate(); notifyChanged() }
     fun strokes(): List<Stroke> = strokes.toList()
-    fun canUndo() = strokes.isNotEmpty()
-    fun canRedo() = undone.isNotEmpty()
-    fun undo() { if (strokes.isNotEmpty()) { undone.add(strokes.removeAt(strokes.size - 1)); strokeLayer.invalidate(); notifyChanged() } }
-    fun redo() { if (undone.isNotEmpty()) { strokes.add(undone.removeAt(undone.size - 1)); strokeLayer.invalidate(); notifyChanged() } }
-    fun clear() { strokes.clear(); undone.clear(); clearSelection(); strokeLayer.invalidate(); notifyChanged() }
+    fun canUndo() = history.isNotEmpty()
+    fun canRedo() = future.isNotEmpty()
+    fun undo() {
+        if (history.isEmpty()) return
+        future.add(ArrayList(strokes)); strokes.clear(); strokes.addAll(history.removeAt(history.size - 1))
+        clearSelection(); strokeLayer.invalidate(); notifyChanged()
+    }
+    fun redo() {
+        if (future.isEmpty()) return
+        history.add(ArrayList(strokes)); strokes.clear(); strokes.addAll(future.removeAt(future.size - 1))
+        clearSelection(); strokeLayer.invalidate(); notifyChanged()
+    }
+    fun clear() { if (strokes.isEmpty()) return; snapshot(); strokes.clear(); clearSelection(); strokeLayer.invalidate(); notifyChanged() }
 
     fun hasSelection() = selected.isNotEmpty()
 
@@ -185,7 +198,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
 
     fun deleteSelection() {
         if (selected.isEmpty()) return
-        strokes.removeAll(selected); undone.clear(); clearSelection(); notifyChanged()
+        snapshot(); strokes.removeAll(selected); clearSelection(); notifyChanged()
     }
 
     private fun handleLasso(event: MotionEvent, idx: Int): Boolean {
@@ -193,7 +206,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
                 val b = selectionBounds
-                if (b != null && b.contains(pt[0], pt[1])) { movingSelection = true; moveLastX = pt[0]; moveLastY = pt[1] }
+                if (b != null && b.contains(pt[0], pt[1])) { snapshot(); movingSelection = true; moveLastX = pt[0]; moveLastY = pt[1] }
                 else { clearSelection(); lassoActive = true; lassoPath.reset(); lassoPath.moveTo(pt[0], pt[1]); lassoPoints.clear(); lassoPoints.add(pt[0]); lassoPoints.add(pt[1]) }
             }
             MotionEvent.ACTION_MOVE -> {
@@ -201,7 +214,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
                 else if (lassoActive) { lassoPath.lineTo(pt[0], pt[1]); lassoPoints.add(pt[0]); lassoPoints.add(pt[1]); strokeLayer.invalidate() }
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP, MotionEvent.ACTION_CANCEL -> {
-                if (movingSelection) { movingSelection = false; undone.clear(); notifyChanged() }
+                if (movingSelection) { movingSelection = false; notifyChanged() }
                 else if (lassoActive) { lassoActive = false; lassoPath.close(); selectInside(); strokeLayer.invalidate() }
             }
         }
@@ -298,7 +311,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
                 if (currentStrokeId != null || erasing) return true
                 currentPointerId = event.getPointerId(idx)
                 erasing = eraserNow
-                if (erasing) { lastErase = null; eraseAt(event.getX(idx), event.getY(idx)) }
+                if (erasing) { lastErase = null; snapshot(); eraseDirty = false; eraseAt(event.getX(idx), event.getY(idx)) }
                 else currentStrokeId = wetLayer.startStroke(event, currentPointerId, brushSpec.toBrush(), viewToPage, identity)
                 report(event, idx); return true
             }
@@ -313,7 +326,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
                 if (event.getPointerId(idx) != currentPointerId) return true
-                if (erasing) eraseAt(event.getX(idx), event.getY(idx))
+                if (erasing) { eraseAt(event.getX(idx), event.getY(idx)); if (!eraseDirty && history.isNotEmpty()) history.removeAt(history.size - 1) }
                 currentStrokeId?.let { wetLayer.finishStroke(event, currentPointerId, it) }
                 currentStrokeId = null; currentPointerId = -1; erasing = false; return true
             }
@@ -369,7 +382,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
             strokes.addAll(i, pieces)
             i += pieces.size
         }
-        if (changed) { undone.clear(); strokeLayer.invalidate(); notifyChanged() }
+        if (changed) { eraseDirty = true; strokeLayer.invalidate(); notifyChanged() }
     }
 
     private fun hitsSegment(s: Stroke, a: FloatArray, b: FloatArray, r: Float): Boolean {
