@@ -147,7 +147,7 @@ class NotePadRepository(context: Context) {
     suspend fun search(query: String): List<SearchHit> = withContext(Dispatchers.IO) {
         val q = query.trim()
         if (q.isEmpty()) return@withContext emptyList()
-        val like = "%" + q.replace("%", "\\%") + "%"
+        val like = "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
         helper.readableDatabase.rawQuery(
             """select r.page_id, p.notebook_id, n.title, r.text, r.source,
                       (select count(*) from pages p2 where p2.notebook_id = p.notebook_id and p2.sort_key <= p.sort_key and p2.deleted_at is null) as idx

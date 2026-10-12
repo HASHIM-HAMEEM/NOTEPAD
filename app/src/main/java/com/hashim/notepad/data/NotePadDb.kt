@@ -20,10 +20,16 @@ class NotePadDb(context: Context) : SQLiteOpenHelper(context, "notepad.db", null
         SCHEMA.split(Regex(";\\s*\\n(?=\\s*create)")).map { it.trim().removeSuffix(";") }.filter { it.isNotEmpty() }.forEach { db.execSQL(it) }
     }
 
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        // FTS4 external-content triggers made every DELETE on recognition fail; search uses LIKE, so drop them.
+        for (sql in listOf(
+            "drop trigger if exists recognition_ai", "drop trigger if exists recognition_ad",
+            "drop trigger if exists recognition_au", "drop table if exists recognition_fts"
+        )) db.execSQL(sql)
+    }
 
     companion object {
-        const val VERSION = 1
+        const val VERSION = 2
 
         private val SCHEMA = """
             create table notebooks (
@@ -89,17 +95,6 @@ class NotePadDb(context: Context) : SQLiteOpenHelper(context, "notepad.db", null
               text text not null,
               updated_at integer not null
             );
-            create virtual table recognition_fts using fts4(content='recognition', text, page_id);
-            create trigger recognition_ai after insert on recognition begin
-              insert into recognition_fts(rowid, text, page_id) values (new.rowid, new.text, new.page_id);
-            end;
-            create trigger recognition_ad after delete on recognition begin
-              insert into recognition_fts(recognition_fts, rowid, text, page_id) values ('delete', old.rowid, old.text, old.page_id);
-            end;
-            create trigger recognition_au after update on recognition begin
-              insert into recognition_fts(recognition_fts, rowid, text, page_id) values ('delete', old.rowid, old.text, old.page_id);
-              insert into recognition_fts(rowid, text, page_id) values (new.rowid, new.text, new.page_id);
-            end
         """.trimIndent()
     }
 }
