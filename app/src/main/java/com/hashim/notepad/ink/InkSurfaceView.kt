@@ -41,7 +41,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
 
     private val strokeLayer = object : View(context) {
         override fun onDraw(canvas: Canvas) {
-            pageBitmap?.let { canvas.drawBitmap(it, 0f, 0f, null) }
+            pageBitmap?.let { canvas.drawColor(0xFFE6E6E6.toInt()); canvas.drawBitmap(it, 0f, 0f, null) }
             for (s in strokes) renderer.draw(canvas, s, identity)
         }
     }

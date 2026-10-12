@@ -15,7 +15,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        setContent { NotePadTheme { SpikeScreen() } }
+        val initialPdf = intent?.data
+        setContent { NotePadTheme { SpikeScreen(initialPdf) } }
     }
 }
 

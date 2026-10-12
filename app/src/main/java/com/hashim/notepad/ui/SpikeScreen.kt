@@ -41,7 +41,7 @@ private val PALETTE = listOf(0xFF1A1A1A, 0xFF1E5EFF, 0xFFD62839, 0xFF1B8A5A, 0xF
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SpikeScreen() {
+fun SpikeScreen(initialPdf: Uri? = null) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var tool by remember { mutableStateOf(InkTool.PEN) }
@@ -57,10 +57,16 @@ fun SpikeScreen() {
     val strokeFile = remember { File(context.filesDir, "spike-strokes.bin") }
 
     fun renderPage() {
+        android.util.Log.i("NotePad", "renderPage pdf=${pdf != null} width=$surfaceWidth page=$pageIndex")
         val src = pdf ?: return
         val w = surfaceWidth.takeIf { it > 0 } ?: return
         scope.launch {
-            val bmp = withContext(Dispatchers.Default) { runCatching { src.render(pageIndex, w) }.getOrNull() }
+            val bmp = withContext(Dispatchers.Default) {
+                runCatching { src.render(pageIndex, w) }
+                    .onFailure { android.util.Log.e("NotePad", "render failed", it) }
+                    .onSuccess { android.util.Log.i("NotePad", "rendered page $pageIndex ${it.width}x${it.height}") }
+                    .getOrNull()
+            }
             pageBitmap = bmp
             surface?.setPage(bmp)
         }
@@ -73,6 +79,12 @@ fun SpikeScreen() {
             .onFailure { Toast.makeText(context, "Could not open PDF: ${it.message}", Toast.LENGTH_LONG).show() }
     }
 
+    LaunchedEffect(initialPdf) {
+        initialPdf ?: return@LaunchedEffect
+        runCatching { PdfPageSource(context, initialPdf) }
+            .onSuccess { pdf?.close(); pdf = it; pageIndex = 0 }
+            .onFailure { Toast.makeText(context, "Could not open PDF: ${it.message}", Toast.LENGTH_LONG).show() }
+    }
     LaunchedEffect(surfaceWidth, pdf) { renderPage() }
     DisposableEffect(Unit) { onDispose { pdf?.close() } }
 
