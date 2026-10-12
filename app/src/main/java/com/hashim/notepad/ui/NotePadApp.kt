@@ -13,6 +13,7 @@ sealed interface Screen {
     data object Notebooks : Screen
     data class Pages(val notebookId: String) : Screen
     data class Editor(val notebookId: String, val pageId: String) : Screen
+    data object Search : Screen
 }
 
 @Composable
@@ -20,6 +21,8 @@ fun NotePadApp(initialPdf: Uri?) {
     val context = LocalContext.current
     val repo = remember { NotePadRepository(context) }
     val importer = remember { PdfImporter(context, repo) }
+    val exporter = remember { com.hashim.notepad.export.PdfExporter(context, repo) }
+    val recognizer = remember { com.hashim.notepad.recognition.InkRecognizer() }
     var screen by remember { mutableStateOf<Screen>(Screen.Notebooks) }
     var importing by rememberSaveable { mutableStateOf(false) }
 
@@ -44,14 +47,16 @@ fun NotePadApp(initialPdf: Uri?) {
             repo = repo, importer = importer, importing = importing,
             onImportingChanged = { importing = it },
             onOpen = { screen = Screen.Pages(it) },
+            onSearch = { screen = Screen.Search },
         )
+        Screen.Search -> SearchScreen(repo = repo, onBack = { screen = Screen.Notebooks }, onOpenPage = { nb, page -> screen = Screen.Editor(nb, page) })
         is Screen.Pages -> PagesScreen(
-            repo = repo, notebookId = s.notebookId,
+            repo = repo, notebookId = s.notebookId, exporter = exporter, recognizer = recognizer,
             onBack = { screen = Screen.Notebooks },
             onOpenPage = { screen = Screen.Editor(s.notebookId, it) },
         )
         is Screen.Editor -> EditorScreen(
-            repo = repo, notebookId = s.notebookId, pageId = s.pageId,
+            repo = repo, notebookId = s.notebookId, pageId = s.pageId, recognizer = recognizer,
             onBack = { screen = Screen.Pages(s.notebookId) },
             onNavigateToPage = { screen = Screen.Editor(s.notebookId, it) },
         )

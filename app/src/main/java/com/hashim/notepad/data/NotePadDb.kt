@@ -17,7 +17,7 @@ class NotePadDb(context: Context) : SQLiteOpenHelper(context, "notepad.db", null
     }
 
     override fun onCreate(db: SQLiteDatabase) {
-        SCHEMA.split(";\n").map { it.trim() }.filter { it.isNotEmpty() }.forEach { db.execSQL(it) }
+        SCHEMA.split(Regex(";\\s*\\n(?=\\s*create)")).map { it.trim().removeSuffix(";") }.filter { it.isNotEmpty() }.forEach { db.execSQL(it) }
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
@@ -30,6 +30,7 @@ class NotePadDb(context: Context) : SQLiteOpenHelper(context, "notepad.db", null
               id text primary key,
               title text not null,
               cover_color text,
+              language text not null default 'ar',
               sort_order integer not null default 0,
               deleted_at integer,
               created_at integer not null,
@@ -88,7 +89,7 @@ class NotePadDb(context: Context) : SQLiteOpenHelper(context, "notepad.db", null
               text text not null,
               updated_at integer not null
             );
-            create virtual table recognition_fts using fts5(text, page_id unindexed, content='recognition', content_rowid='rowid');
+            create virtual table recognition_fts using fts4(content='recognition', text, page_id);
             create trigger recognition_ai after insert on recognition begin
               insert into recognition_fts(rowid, text, page_id) values (new.rowid, new.text, new.page_id);
             end;

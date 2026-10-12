@@ -29,13 +29,13 @@ class NotePadRepository(context: Context) {
     }.flowOn(Dispatchers.IO)
 
     private fun loadNotebooks(): List<Notebook> = helper.readableDatabase.rawQuery(
-        """select n.id, n.title, n.cover_color, n.sort_order, n.created_at, n.updated_at,
+        """select n.id, n.title, n.cover_color, n.sort_order, n.created_at, n.updated_at, n.language,
                   (select count(*) from pages p where p.notebook_id = n.id and p.deleted_at is null) as page_count
            from notebooks n where n.deleted_at is null order by n.updated_at desc""", null
     ).use { c ->
         buildList {
             while (c.moveToNext()) add(
-                Notebook(c.getString(0), c.getString(1), c.getStringOrNull(2), c.getInt(3), c.getLong(4), c.getLong(5), c.getInt(6))
+                Notebook(c.getString(0), c.getString(1), c.getStringOrNull(2), c.getString(7), c.getInt(3), c.getLong(4), c.getLong(5), c.getInt(6))
             )
         }
     }
@@ -74,6 +74,51 @@ class NotePadRepository(context: Context) {
             put("created_at", now); put("updated_at", now)
         })
         notifyChanged(); id
+    }
+
+    suspend fun setNotebookLanguage(id: String, language: String) = withContext(Dispatchers.IO) {
+        helper.writableDatabase.update("notebooks", ContentValues().apply { put("language", language) }, "id = ?", arrayOf(id))
+        notifyChanged()
+    }
+
+    suspend fun saveRecognition(pageId: String, source: String, language: String?, text: String) = withContext(Dispatchers.IO) {
+        val db = helper.writableDatabase
+        db.beginTransaction()
+        try {
+            db.delete("recognition", "page_id = ? and source = ?", arrayOf(pageId, source))
+            if (text.isNotBlank()) db.insertOrThrow("recognition", null, ContentValues().apply {
+                put("id", UUID.randomUUID().toString()); put("page_id", pageId); put("source", source); put("language", language)
+                put("text", text); put("updated_at", System.currentTimeMillis())
+            })
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+        notifyChanged()
+    }
+
+    suspend fun recognizedText(pageId: String): String? = withContext(Dispatchers.IO) {
+        helper.readableDatabase.rawQuery("select text from recognition where page_id = ? and source = 'ink'", arrayOf(pageId)).use { c -> if (c.moveToFirst()) c.getString(0) else null }
+    }
+
+    suspend fun search(query: String): List<SearchHit> = withContext(Dispatchers.IO) {
+        val q = query.trim()
+        if (q.isEmpty()) return@withContext emptyList()
+        val like = "%" + q.replace("%", "\\%") + "%"
+        helper.readableDatabase.rawQuery(
+            """select r.page_id, p.notebook_id, n.title, r.text, r.source,
+                      (select count(*) from pages p2 where p2.notebook_id = p.notebook_id and p2.sort_key <= p.sort_key and p2.deleted_at is null) as idx
+               from recognition r join pages p on p.id = r.page_id join notebooks n on n.id = p.notebook_id
+               where p.deleted_at is null and n.deleted_at is null and r.text like ? escape '\\'
+               order by n.updated_at desc limit 100""", arrayOf(like)
+        ).use { c ->
+            buildList {
+                while (c.moveToNext()) {
+                    val text = c.getString(3)
+                    val at = text.indexOf(q, ignoreCase = true).coerceAtLeast(0)
+                    val snippet = text.substring((at - 40).coerceAtLeast(0), (at + q.length + 60).coerceAtMost(text.length)).replace('\n', ' ')
+                    add(SearchHit(c.getString(0), c.getString(1), c.getString(2), c.getInt(5), snippet, c.getString(4)))
+                }
+            }
+        }
     }
 
     suspend fun renameNotebook(id: String, title: String) = withContext(Dispatchers.IO) {

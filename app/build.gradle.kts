@@ -54,4 +54,7 @@ dependencies {
     implementation(libs.ink.nativeloader)
     implementation(libs.input.motionprediction)
     implementation(libs.pdfium.android)
+    implementation(libs.mlkit.digital.ink)
+    implementation(libs.kotlinx.coroutines.play.services)
+    implementation(libs.androidx.documentfile)
 }

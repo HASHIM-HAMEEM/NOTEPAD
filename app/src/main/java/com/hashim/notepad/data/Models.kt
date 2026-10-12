@@ -10,6 +10,7 @@ data class Notebook(
     val id: String,
     val title: String,
     val coverColor: String?,
+    val language: String,
     val sortOrder: Int,
     val createdAt: Long,
     val updatedAt: Long,
@@ -38,3 +39,5 @@ data class Asset(
     val pageCount: Int?,
     val name: String?,
 )
+
+data class SearchHit(val pageId: String, val notebookId: String, val notebookTitle: String, val pageIndex: Int, val snippet: String, val source: String)

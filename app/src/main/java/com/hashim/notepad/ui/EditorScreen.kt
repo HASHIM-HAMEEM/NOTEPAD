@@ -34,6 +34,7 @@ import com.hashim.notepad.ink.InkTool
 import com.hashim.notepad.ink.PointerSample
 import com.hashim.notepad.ink.StrokeStore
 import com.hashim.notepad.pdf.PdfPageSource
+import com.hashim.notepad.recognition.InkRecognizer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -43,8 +44,10 @@ import java.io.File
 private val PALETTE = listOf(0xFF1A1A1A, 0xFF1E5EFF, 0xFFD62839, 0xFF1B8A5A, 0xFFF5B301).map { it.toInt() }
 
 @Composable
-fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, onBack: () -> Unit, onNavigateToPage: (String) -> Unit) {
+fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, recognizer: InkRecognizer, onBack: () -> Unit, onNavigateToPage: (String) -> Unit) {
     val context = LocalContext.current
+    val notebooks by repo.notebooks().collectAsState(initial = emptyList())
+    val language = notebooks.firstOrNull { it.id == notebookId }?.language ?: "ar"
     val pages by repo.pages(notebookId).collectAsState(initial = emptyList())
     val page = pages.firstOrNull { it.id == pageId }
     val index = pages.indexOfFirst { it.id == pageId }
@@ -98,6 +101,12 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, on
         delay(600)
         val bytes = withContext(Dispatchers.Default) { StrokeStore.encode(strokes) }
         repo.saveStrokes(p.id, bytes, strokes.size)
+        delay(2500)
+        if (recognizer.isModelDownloaded(language)) {
+            runCatching { recognizer.recognize(strokes, language, p.widthPt, p.heightPt) }
+                .onSuccess { repo.saveRecognition(p.id, "ink", language, it) }
+                .onFailure { Log.w("NotePad", "recognition", it) }
+        }
     }
     DisposableEffect(Unit) {
         onDispose {

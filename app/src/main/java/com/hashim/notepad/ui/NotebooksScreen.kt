@@ -12,6 +12,7 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.PictureAsPdf
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -34,6 +35,7 @@ fun NotebooksScreen(
     importing: Boolean,
     onImportingChanged: (Boolean) -> Unit,
     onOpen: (String) -> Unit,
+    onSearch: () -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -57,6 +59,7 @@ fun NotebooksScreen(
             TopAppBar(
                 title = { Text("Notebooks") },
                 actions = {
+                    IconButton(onClick = onSearch) { Icon(Icons.Default.Search, "Search") }
                     IconButton(onClick = { pickPdf.launch(arrayOf("application/pdf")) }, enabled = !importing) {
                         Icon(Icons.Default.PictureAsPdf, "Import PDF")
                     }

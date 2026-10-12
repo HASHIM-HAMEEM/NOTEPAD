@@ -8,6 +8,13 @@ import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.IosShare
+import androidx.compose.material.icons.filled.Spellcheck
+import androidx.compose.ui.platform.LocalContext
+import android.widget.Toast
+import com.hashim.notepad.export.PdfExporter
+import com.hashim.notepad.ink.StrokeStore
+import com.hashim.notepad.recognition.InkRecognizer
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -19,11 +26,18 @@ import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun PagesScreen(repo: NotePadRepository, notebookId: String, onBack: () -> Unit, onOpenPage: (String) -> Unit) {
+fun PagesScreen(
+    repo: NotePadRepository, notebookId: String, exporter: PdfExporter, recognizer: InkRecognizer,
+    onBack: () -> Unit, onOpenPage: (String) -> Unit,
+) {
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    var busy by remember { mutableStateOf<String?>(null) }
+    var showLanguage by remember { mutableStateOf(false) }
     val pages by repo.pages(notebookId).collectAsState(initial = emptyList())
     val notebooks by repo.notebooks().collectAsState(initial = emptyList())
-    val title = notebooks.firstOrNull { it.id == notebookId }?.title ?: ""
+    val notebook = notebooks.firstOrNull { it.id == notebookId }
+    val title = notebook?.title ?: ""
     var showAdd by remember { mutableStateOf(false) }
 
     Scaffold(
@@ -31,13 +45,44 @@ fun PagesScreen(repo: NotePadRepository, notebookId: String, onBack: () -> Unit,
             TopAppBar(
                 title = { Text(title) },
                 navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
+                actions = {
+                    TextButton(onClick = { showLanguage = true }) { Text(InkRecognizer.LANGUAGES.firstOrNull { it.first == notebook?.language }?.second ?: "ar") }
+                    IconButton(enabled = busy == null, onClick = {
+                        scope.launch {
+                            busy = "Recognising…"
+                            runCatching {
+                                val lang = notebook?.language ?: "ar"
+                                recognizer.ensureModel(lang)
+                                for (p in pages) {
+                                    val bytes = repo.loadStrokes(p.id) ?: continue
+                                    val strokes = StrokeStore.decode(bytes)
+                                    val text = recognizer.recognize(strokes, lang, p.widthPt, p.heightPt)
+                                    repo.saveRecognition(p.id, "ink", lang, text)
+                                }
+                            }.onFailure { Toast.makeText(context, "Recognition failed: ${it.message}", Toast.LENGTH_LONG).show() }
+                                .onSuccess { Toast.makeText(context, "Handwriting indexed for search", Toast.LENGTH_SHORT).show() }
+                            busy = null
+                        }
+                    }) { Icon(Icons.Default.Spellcheck, "Recognise handwriting") }
+                    IconButton(enabled = busy == null, onClick = {
+                        scope.launch {
+                            busy = "Exporting…"
+                            runCatching { exporter.exportNotebook(notebookId, title) }
+                                .onSuccess { exporter.share(it) }
+                                .onFailure { Toast.makeText(context, "Export failed: ${it.message}", Toast.LENGTH_LONG).show() }
+                            busy = null
+                        }
+                    }) { Icon(Icons.Default.IosShare, "Export PDF") }
+                },
             )
         },
         floatingActionButton = { FloatingActionButton(onClick = { showAdd = true }) { Icon(Icons.Default.Add, "Add page") } },
     ) { padding ->
+        Column(Modifier.padding(padding).fillMaxSize()) {
+        busy?.let { LinearProgressIndicator(Modifier.fillMaxWidth()); Text(it, Modifier.padding(horizontal = 16.dp, vertical = 4.dp), style = MaterialTheme.typography.labelMedium) }
         LazyVerticalGrid(
             columns = GridCells.Adaptive(140.dp),
-            modifier = Modifier.padding(padding).fillMaxSize(),
+            modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(16.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -56,6 +101,23 @@ fun PagesScreen(repo: NotePadRepository, notebookId: String, onBack: () -> Unit,
                 }
             }
         }
+        }
+    }
+
+    if (showLanguage) {
+        AlertDialog(
+            onDismissRequest = { showLanguage = false },
+            title = { Text("Handwriting language") },
+            text = {
+                Column {
+                    InkRecognizer.LANGUAGES.forEach { (tag, label) ->
+                        TextButton(onClick = { scope.launch { repo.setNotebookLanguage(notebookId, tag) }; showLanguage = false }, modifier = Modifier.fillMaxWidth()) { Text(label) }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = { TextButton(onClick = { showLanguage = false }) { Text("Cancel") } },
+        )
     }
 
     if (showAdd) {

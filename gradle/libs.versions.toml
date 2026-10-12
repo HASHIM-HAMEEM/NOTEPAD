@@ -8,6 +8,9 @@ ink = "1.0.0"
 motionPrediction = "1.0.0"
 pdfium = "2.0.3"
 coreKtx = "1.17.0"
+mlkitInk = "19.0.0"
+coroutinesPlay = "1.11.0"
+documentfile = "1.1.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -28,6 +31,9 @@ ink-strokes = { group = "androidx.ink", name = "ink-strokes", version.ref = "ink
 ink-storage = { group = "androidx.ink", name = "ink-storage", version.ref = "ink" }
 ink-nativeloader = { group = "androidx.ink", name = "ink-nativeloader", version.ref = "ink" }
 input-motionprediction = { group = "androidx.input", name = "input-motionprediction", version.ref = "motionPrediction" }
+mlkit-digital-ink = { group = "com.google.mlkit", name = "digital-ink-recognition", version.ref = "mlkitInk" }
+kotlinx-coroutines-play-services = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-play-services", version.ref = "coroutinesPlay" }
+androidx-documentfile = { group = "androidx.documentfile", name = "documentfile", version.ref = "documentfile" }
 pdfium-android = { group = "io.legere", name = "pdfiumandroid", version.ref = "pdfium" }
 
 [plugins]
