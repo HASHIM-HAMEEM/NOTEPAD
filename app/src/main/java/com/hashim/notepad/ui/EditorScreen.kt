@@ -2,9 +2,12 @@ package com.hashim.notepad.ui
 
 import android.graphics.Bitmap
 import android.util.Log
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -20,7 +23,11 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
@@ -44,6 +51,7 @@ import com.hashim.notepad.data.TextBlock
 import com.hashim.notepad.ink.BrushSpec
 import com.hashim.notepad.ink.InkSurfaceView
 import com.hashim.notepad.ink.InkTool
+import com.hashim.notepad.ink.PenType
 import com.hashim.notepad.ink.PointerSample
 import com.hashim.notepad.ink.StrokeStore
 import com.hashim.notepad.pdf.PdfPageSource
@@ -67,6 +75,15 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
     val index = pages.indexOfFirst { it.id == pageId }
 
     var tool by rememberSaveableTool()
+    val preferences = remember(context) { context.getSharedPreferences("notepad", 0) }
+    var pen by rememberSaveable {
+        mutableStateOf(
+            runCatching {
+                PenType.valueOf(preferences.getString("pen", PenType.FOUNTAIN.name) ?: PenType.FOUNTAIN.name)
+            }.getOrDefault(PenType.FOUNTAIN)
+        )
+    }
+    LaunchedEffect(pen) { preferences.edit().putString("pen", pen.name).apply() }
     var color by remember { mutableIntStateOf(PALETTE[0]) }
     var size by remember { mutableFloatStateOf(2.5f) }
     var fingerDraws by remember { mutableStateOf(false) }
@@ -91,7 +108,7 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
     val scope = rememberCoroutineScope()
     LaunchedEffect(textBlocks, surface) { surface?.textBlocks = textBlocks }
 
-    val spec = BrushSpec(tool, color, size)
+    val spec = BrushSpec(tool, color, size, pen)
     LaunchedEffect(surface, zoomBox, language) { surface?.setZoomBox(zoomBox, language != "en") }
     LaunchedEffect(spec, fingerDraws, surface) { surface?.let { it.brushSpec = spec; it.fingerDraws = fingerDraws; if (spec.tool != InkTool.LASSO) it.clearSelection() } }
 
@@ -148,8 +165,16 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
     var chrome by rememberSaveable { mutableStateOf(true) }
     var colorPop by remember { mutableStateOf(false) }
     var sizePop by remember { mutableStateOf(false) }
+    var penPop by remember { mutableStateOf(false) }
     var morePop by remember { mutableStateOf(false) }
-    val haptics = androidx.compose.ui.platform.LocalHapticFeedback.current
+    val haptics = LocalHapticFeedback.current
+
+    fun selectTool(next: InkTool) {
+        if (tool != next) {
+            tool = next
+            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+        }
+    }
 
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceContainerLow)) {
         AndroidView(
@@ -179,14 +204,43 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
                 Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 6.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                     IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
                     PillDivider()
-                    ToolButton(Icons.Default.Edit, "Pen", tool == InkTool.PEN) { tool = InkTool.PEN }
-                    ToolButton(Icons.Default.Brush, "Highlighter", tool == InkTool.HIGHLIGHTER) { tool = InkTool.HIGHLIGHTER }
-                    ToolButton(Icons.Default.Clear, "Eraser", tool == InkTool.ERASER) { if (tool == InkTool.ERASER) pixelEraser = !pixelEraser else tool = InkTool.ERASER }
+                    Box {
+                        ToolButton(
+                            Icons.Default.Edit,
+                            "Pen",
+                            tool == InkTool.PEN,
+                            onLongClick = { selectTool(InkTool.PEN); penPop = true },
+                        ) {
+                            if (tool == InkTool.PEN) penPop = true else selectTool(InkTool.PEN)
+                        }
+                        DropdownMenu(expanded = penPop, onDismissRequest = { penPop = false }, shape = MaterialTheme.shapes.large) {
+                            PenType.values().forEach { type ->
+                                DropdownMenuItem(
+                                    text = {
+                                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                            PenTypePreview(type, color)
+                                            Text(type.label)
+                                        }
+                                    },
+                                    trailingIcon = { if (pen == type) Icon(Icons.Default.Check, "Selected") },
+                                    onClick = {
+                                        if (pen != type) {
+                                            pen = type
+                                            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        }
+                                        penPop = false
+                                    },
+                                )
+                            }
+                        }
+                    }
+                    ToolButton(Icons.Default.Brush, "Highlighter", tool == InkTool.HIGHLIGHTER) { selectTool(InkTool.HIGHLIGHTER) }
+                    ToolButton(Icons.Default.Clear, "Eraser", tool == InkTool.ERASER) { if (tool == InkTool.ERASER) pixelEraser = !pixelEraser else selectTool(InkTool.ERASER) }
                     androidx.compose.animation.AnimatedVisibility(tool == InkTool.ERASER) {
                         Text(if (pixelEraser) "pixel" else "stroke", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(end = 6.dp))
                     }
-                    ToolButton(Icons.Default.TextFields, "Text", tool == InkTool.TEXT) { tool = InkTool.TEXT }
-                    ToolButton(Icons.Default.HighlightAlt, "Lasso", tool == InkTool.LASSO) { tool = InkTool.LASSO }
+                    ToolButton(Icons.Default.TextFields, "Text", tool == InkTool.TEXT) { selectTool(InkTool.TEXT) }
+                    ToolButton(Icons.Default.HighlightAlt, "Lasso", tool == InkTool.LASSO) { selectTool(InkTool.LASSO) }
                     androidx.compose.animation.AnimatedVisibility(hasSelection) {
                         IconButton(onClick = { surface?.deleteSelection() }) { Icon(Icons.Default.DeleteOutline, "Delete selection", tint = MaterialTheme.colorScheme.error) }
                     }
@@ -321,10 +375,39 @@ private fun rememberSaveableTool() = remember { mutableStateOf(InkTool.PEN) }
 private fun PillDivider() { VerticalDivider(Modifier.height(22.dp).padding(horizontal = 4.dp), color = MaterialTheme.colorScheme.outlineVariant) }
 
 @Composable
-private fun ToolButton(icon: ImageVector, label: String, selected: Boolean, onClick: () -> Unit) {
+@OptIn(ExperimentalFoundationApi::class)
+private fun ToolButton(
+    icon: ImageVector,
+    label: String,
+    selected: Boolean,
+    onLongClick: (() -> Unit)? = null,
+    onClick: () -> Unit,
+) {
     val bg by animateColorAsState(if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent, tween(Motion.short), label = "toolBg")
     val fg by animateColorAsState(if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant, tween(Motion.short), label = "toolFg")
-    Box(Modifier.size(40.dp).clip(CircleShape).background(bg).clickable(onClick = onClick), contentAlignment = Alignment.Center) { Icon(icon, label, tint = fg) }
+    Box(Modifier.size(40.dp).clip(CircleShape).background(bg).combinedClickable(onClick = onClick, onLongClick = onLongClick), contentAlignment = Alignment.Center) { Icon(icon, label, tint = fg) }
+}
+
+@Composable
+private fun PenTypePreview(pen: PenType, argb: Int) {
+    Canvas(Modifier.size(32.dp, 22.dp)) {
+        val path = Path().apply {
+            moveTo(2.dp.toPx(), size.height * 0.78f)
+            cubicTo(size.width * 0.24f, size.height * 0.04f, size.width * 0.68f, size.height * 0.98f, size.width - 2.dp.toPx(), size.height * 0.22f)
+        }
+        val (width, alpha) = when (pen) {
+            PenType.BALLPOINT -> 1.3f to 1f
+            PenType.FOUNTAIN -> 2f to 1f
+            PenType.PENCIL -> 1.5f to 0.58f
+            PenType.MARKER -> 4f to 0.9f
+            PenType.CALLIGRAPHY -> 3.5f to 1f
+        }
+        drawPath(
+            path,
+            Color(argb).copy(alpha = alpha),
+            style = androidx.compose.ui.graphics.drawscope.Stroke(width = width, cap = StrokeCap.Round),
+        )
+    }
 }
 
 @Composable

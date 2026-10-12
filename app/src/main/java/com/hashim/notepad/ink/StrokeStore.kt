@@ -1,6 +1,7 @@
 package com.hashim.notepad.ink
 
 import androidx.ink.brush.Brush
+import androidx.ink.brush.ExperimentalInkCustomBrushApi
 import androidx.ink.brush.StockBrushes
 import androidx.ink.storage.decode
 import androidx.ink.storage.encode
@@ -16,18 +17,22 @@ import java.io.DataOutputStream
  * [familyTag, colorArgb, size, epsilon, inputBytesLength, inputBytes].
  * Inputs use the Ink library's own gzip-compressed protobuf encoding; coordinates are page points.
  */
+@OptIn(ExperimentalInkCustomBrushApi::class)
 object StrokeStore {
     private const val MAGIC = 0x4E50494B // "NPIK"
     private const val VERSION = 1
     private const val TAG_PEN = 0
     private const val TAG_HIGHLIGHTER = 1
+    private const val TAG_BALLPOINT = 2
+    private const val TAG_PENCIL = 3
+    private const val TAG_MARKER = 4
 
     fun encode(strokes: List<Stroke>): ByteArray {
         val bos = ByteArrayOutputStream()
         DataOutputStream(bos).use { out ->
             out.writeInt(MAGIC); out.writeInt(VERSION); out.writeInt(strokes.size)
             for (s in strokes) {
-                out.writeInt(if (s.brush.family == StockBrushes.highlighter()) TAG_HIGHLIGHTER else TAG_PEN)
+                out.writeInt(familyTag(s))
                 out.writeInt(s.brush.colorIntArgb); out.writeFloat(s.brush.size); out.writeFloat(s.brush.epsilon)
                 val bytes = ByteArrayOutputStream().also { s.inputs.encode(it) }.toByteArray()
                 out.writeInt(bytes.size); out.write(bytes)
@@ -44,9 +49,25 @@ object StrokeStore {
             return List(n) {
                 val tag = inp.readInt(); val color = inp.readInt(); val size = inp.readFloat(); val eps = inp.readFloat()
                 val data = ByteArray(inp.readInt()).also { inp.readFully(it) }
-                val family = if (tag == TAG_HIGHLIGHTER) StockBrushes.highlighter() else StockBrushes.pressurePen()
+                val family = when (tag) {
+                    TAG_HIGHLIGHTER -> StockBrushes.highlighter()
+                    TAG_BALLPOINT, TAG_MARKER -> StockBrushes.marker()
+                    TAG_PENCIL -> StockBrushes.pencilUnstable
+                    else -> StockBrushes.pressurePen()
+                }
                 Stroke(Brush.createWithColorIntArgb(family, color, size, eps), StrokeInputBatch.decode(data.inputStream()))
             }
         }
     }
+
+    private fun familyTag(stroke: Stroke): Int = when {
+        stroke.brush.family == StockBrushes.highlighter() -> TAG_HIGHLIGHTER
+        stroke.brush.family == StockBrushes.pencilUnstable -> TAG_PENCIL
+        stroke.brush.family == StockBrushes.marker() &&
+            stroke.brush.colorIntArgb ushr 24 == MARKER_ALPHA -> TAG_MARKER
+        stroke.brush.family == StockBrushes.marker() -> TAG_BALLPOINT
+        else -> TAG_PEN
+    }
+
+    private const val MARKER_ALPHA = 0xE6
 }

@@ -22,6 +22,7 @@ import androidx.ink.strokes.Stroke
 import com.hashim.notepad.data.NotePadRepository
 import com.hashim.notepad.data.Page
 import com.hashim.notepad.data.PageKind
+import com.hashim.notepad.ink.InkTextures
 import com.hashim.notepad.ink.StrokeStore
 import com.hashim.notepad.pdf.PdfPageSource
 import kotlinx.coroutines.Dispatchers
@@ -32,7 +33,7 @@ import java.io.File
 private object PreviewCache {
     val bitmaps = LruCache<String, Bitmap>(24)
     val strokes = LruCache<String, List<Stroke>>(64)
-    val renderer: CanvasStrokeRenderer by lazy { CanvasStrokeRenderer.create() }
+    val renderer: CanvasStrokeRenderer by lazy { CanvasStrokeRenderer.create(InkTextures.textureStore) }
 }
 
 /**

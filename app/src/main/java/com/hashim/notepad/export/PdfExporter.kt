@@ -11,6 +11,7 @@ import androidx.ink.rendering.android.canvas.CanvasStrokeRenderer
 import com.hashim.notepad.data.NotePadRepository
 import com.hashim.notepad.data.Page
 import com.hashim.notepad.data.PageKind
+import com.hashim.notepad.ink.InkTextures
 import com.hashim.notepad.ink.StrokeStore
 import com.hashim.notepad.ink.TextBlockPainter
 import com.hashim.notepad.pdf.PdfPageSource
@@ -25,7 +26,7 @@ class PdfExporter(private val context: Context, private val repo: NotePadReposit
     suspend fun exportNotebook(notebookId: String, title: String): File = withContext(Dispatchers.Default) {
         val pages = repo.pages(notebookId).first()
         val doc = PdfDocument()
-        val renderer = CanvasStrokeRenderer.create()
+        val renderer = CanvasStrokeRenderer.create(InkTextures.textureStore)
         val sources = HashMap<String, PdfPageSource>()
         try {
             pages.forEachIndexed { i, page ->

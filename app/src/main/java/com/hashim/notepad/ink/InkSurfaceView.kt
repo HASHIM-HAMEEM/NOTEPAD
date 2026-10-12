@@ -1,14 +1,17 @@
 package com.hashim.notepad.ink
 
+import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.os.SystemClock
+import android.view.GestureDetector
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
 import android.view.View
+import android.view.animation.DecelerateInterpolator
 import android.widget.FrameLayout
 import androidx.ink.authoring.InProgressStrokeId
 import androidx.ink.authoring.InProgressStrokesFinishedListener
@@ -156,6 +159,16 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     private var lastPanX = 0f
     private var lastPanY = 0f
     private var panning = false
+    private var zoomAnimator: ValueAnimator? = null
+
+    private val doubleTapDetector = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
+        override fun onDown(event: MotionEvent) = true
+
+        override fun onDoubleTap(event: MotionEvent): Boolean {
+            toggleDoubleTapZoom(event.x, event.y)
+            return true
+        }
+    })
 
     // Lasso state (page coordinates)
     private val lassoPath = Path()
@@ -170,7 +183,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     private val lassoPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF1E5EFF.toInt(); style = Paint.Style.STROKE; strokeWidth = 2f; pathEffect = DashPathEffect(floatArrayOf(10f, 8f), 0f) }
     private val selectionFill = Paint().apply { color = 0x141E5EFF; style = Paint.Style.FILL }
 
-    private val renderer = CanvasStrokeRenderer.create()
+    private val renderer = CanvasStrokeRenderer.create(InkTextures.textureStore)
     private val predictor = MotionEventPredictor.newInstance(this)
     private val templatePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFC9CDD6.toInt(); strokeWidth = 0f; style = Paint.Style.STROKE }
     private val paperPaint = Paint().apply { color = 0xFFFFFFFF.toInt() }
@@ -179,7 +192,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
 
     private val scaleDetector = ScaleGestureDetector(context, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
         override fun onScale(d: ScaleGestureDetector): Boolean {
-            val newScale = (scale * d.scaleFactor).coerceIn(minScale(), minScale() * 6f)
+            val newScale = (scale * d.scaleFactor).coerceIn(minScale(), minScale() * 20f)
             val f = newScale / scale
             panX = d.focusX - (d.focusX - panX) * f
             panY = d.focusY - (d.focusY - panY) * f
@@ -212,7 +225,15 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
                 canvas.restore()
                 val vb = RectF(b); pageToView.mapRect(vb); canvas.drawRect(vb, lassoPaint)
             }
-            if (lassoActive) { canvas.save(); canvas.concat(pageToView); canvas.drawPath(lassoPath, lassoPaint); canvas.restore() }
+            if (lassoActive) {
+                canvas.save(); canvas.concat(pageToView)
+                lassoPaint.strokeWidth = 2f / scale
+                lassoPaint.pathEffect = DashPathEffect(floatArrayOf(10f / scale, 8f / scale), 0f)
+                canvas.drawPath(lassoPath, lassoPaint)
+                lassoPaint.strokeWidth = 2f
+                lassoPaint.pathEffect = DashPathEffect(floatArrayOf(10f, 8f), 0f)
+                canvas.restore()
+            }
             if (textBlocks.isNotEmpty()) {
                 canvas.save(); canvas.concat(pageToView)
                 for (b in textBlocks) TextBlockPainter.draw(canvas, b, b.id == selectedTextBlockId)
@@ -448,6 +469,8 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     }
 
     private fun handleFingerNavigation(event: MotionEvent): Boolean {
+        if (event.actionMasked == MotionEvent.ACTION_DOWN) zoomAnimator?.cancel()
+        if (event.pointerCount == 1) doubleTapDetector.onTouchEvent(event)
         scaleDetector.onTouchEvent(event)
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> { panning = true; lastPanX = event.x; lastPanY = event.y }
@@ -461,6 +484,31 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> panning = false
         }
         return true
+    }
+
+    private fun toggleDoubleTapZoom(tapX: Float, tapY: Float) {
+        zoomAnimator?.cancel()
+        val pagePoint = floatArrayOf(tapX, tapY)
+        viewToPage.mapPoints(pagePoint)
+        val targetScale = if (scale < minScale() * 2f) minScale() * 4f else minScale()
+        val startScale = scale
+        val startPanX = panX
+        val startPanY = panY
+        val targetPanX = tapX - pagePoint[0] * targetScale
+        val targetPanY = tapY - pagePoint[1] * targetScale
+        zoomAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 260
+            interpolator = DecelerateInterpolator()
+            addUpdateListener { animator ->
+                val fraction = animator.animatedValue as Float
+                scale = startScale + (targetScale - startScale) * fraction
+                panX = startPanX + (targetPanX - startPanX) * fraction
+                panY = startPanY + (targetPanY - startPanY) * fraction
+                clampPan()
+                updateMatrices()
+            }
+            start()
+        }
     }
 
     private fun focusX(e: MotionEvent): Float { var s = 0f; for (i in 0 until e.pointerCount) s += e.getX(i); return s / e.pointerCount }
