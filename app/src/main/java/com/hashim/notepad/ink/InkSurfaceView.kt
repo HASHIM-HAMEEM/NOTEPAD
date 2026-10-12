@@ -59,6 +59,91 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     /** Call before any mutation of [strokes]; keeps the last 100 states. */
     private fun snapshot() { history.add(ArrayList(strokes)); if (history.size > 100) history.removeAt(0); future.clear() }
     private val identity = Matrix()
+
+    // ---- zoom box: a magnified writing strip at the bottom showing one "line" window of the page
+    private var zoomEnabled = false
+    private var zoomRtl = false
+    private val zoomWindow = RectF(0f, 0f, 200f, ZOOM_LINE_PT)
+    private val zoomToView = Matrix()
+    private val viewToZoom = Matrix()
+    private var zoomScale = 1f
+    private var stripTop = 0f
+    private var inStrip = false
+    private var draggingWindow = false
+    private var dragLastX = 0f
+    private var dragLastY = 0f
+    private val zoomFramePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF1E5EFF.toInt(); style = Paint.Style.STROKE; strokeWidth = 3f }
+    private val zoomFillPaint = Paint().apply { color = 0x141E5EFF }
+    private val stripBorderPaint = Paint().apply { color = 0xFF9AA0AA.toInt(); strokeWidth = 2f }
+
+    fun setZoomBox(enabled: Boolean, rtl: Boolean) {
+        if (enabled && !zoomEnabled) { zoomRtl = rtl; zoomWindow.set(0f, 0f, 200f, ZOOM_LINE_PT); if (rtl) zoomWindow.offsetTo(pageWidthPt - 200f, 0f) }
+        zoomEnabled = enabled; zoomRtl = rtl
+        updateMatrices()
+    }
+    /** Moves the window half a width along the writing direction (dir = +1) or back (dir = -1). */
+    fun zoomShift(dir: Int) {
+        val step = zoomWindow.width() / 2f * (if (zoomRtl) -dir else dir)
+        zoomWindow.offset(step, 0f); clampZoomWindow(); updateMatrices()
+    }
+    fun zoomNewLine() {
+        val x = if (zoomRtl) pageWidthPt - zoomWindow.width() else 0f
+        zoomWindow.offsetTo(x, zoomWindow.top + zoomWindow.height()); clampZoomWindow(); updateMatrices()
+    }
+    fun zoomLineHeight(pt: Float) { zoomWindow.bottom = zoomWindow.top + pt.coerceIn(20f, 200f); clampZoomWindow(); updateMatrices() }
+
+    private fun clampZoomWindow() {
+        val w = zoomWindow.width(); val h = zoomWindow.height()
+        val left = zoomWindow.left.coerceIn(0f, (pageWidthPt - w).coerceAtLeast(0f))
+        val top = zoomWindow.top.coerceIn(0f, (pageHeightPt - h).coerceAtLeast(0f))
+        zoomWindow.set(left, top, left + w, top + h)
+    }
+
+    private fun updateZoom() {
+        if (!zoomEnabled || width == 0 || height == 0) return
+        val stripH = height * ZOOM_STRIP_FRACTION
+        stripTop = height - stripH
+        zoomScale = stripH / zoomWindow.height()
+        val w = width / zoomScale
+        if (zoomRtl) zoomWindow.left = zoomWindow.right - w else zoomWindow.right = zoomWindow.left + w
+        clampZoomWindow()
+        zoomToView.reset(); zoomToView.postTranslate(-zoomWindow.left, -zoomWindow.top); zoomToView.postScale(zoomScale, zoomScale); zoomToView.postTranslate(0f, stripTop)
+        zoomToView.invert(viewToZoom)
+    }
+
+    /** After a stroke written in the strip, slide the window along the writing direction or wrap to the next line. */
+    private fun autoAdvance(stroke: Stroke) {
+        val b = stroke.shape.computeBoundingBox() ?: return
+        val margin = zoomWindow.width() * 0.12f
+        if (!zoomRtl) {
+            if (b.xMax > zoomWindow.right - margin) { if (zoomWindow.right >= pageWidthPt - 1f) zoomNewLine() else zoomShift(1) }
+        } else {
+            if (b.xMin < zoomWindow.left + margin) { if (zoomWindow.left <= 1f) zoomNewLine() else zoomShift(1) }
+        }
+    }
+
+    private fun drawZoomStrip(canvas: Canvas) {
+        if (!zoomEnabled) return
+        canvas.save(); canvas.concat(pageToView)
+        canvas.drawRect(zoomWindow, zoomFillPaint)
+        canvas.restore()
+        val vw = RectF(zoomWindow); pageToView.mapRect(vw); canvas.drawRect(vw, zoomFramePaint)
+        canvas.save()
+        canvas.clipRect(0f, stripTop, width.toFloat(), height.toFloat())
+        canvas.drawColor(paperPaint.color)
+        canvas.save(); canvas.concat(zoomToView)
+        drawTemplate(canvas)
+        canvas.restore()
+        pageBitmap?.let { bmp ->
+            val m = Matrix(zoomToView); m.preScale(pageWidthPt / bmp.width, pageHeightPt / bmp.height); canvas.drawBitmap(bmp, m, bitmapPaint)
+        }
+        canvas.save(); canvas.concat(zoomToView)
+        for (s in strokes) renderer.draw(canvas, s, zoomToView)
+        for (b in textBlocks) TextBlockPainter.draw(canvas, b, false)
+        canvas.restore()
+        canvas.restore()
+        canvas.drawLine(0f, stripTop, width.toFloat(), stripTop, stripBorderPaint)
+    }
     private val pageToView = Matrix()
     private val viewToPage = Matrix()
     private var scale = 1f
@@ -133,19 +218,9 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
                 for (b in textBlocks) TextBlockPainter.draw(canvas, b, b.id == selectedTextBlockId)
                 canvas.restore()
             }
+            drawZoomStrip(canvas)
         }
 
-        private fun drawTemplate(canvas: Canvas) {
-            val gap = 24f
-            when (pageKind) {
-                PageKind.LINED -> { var y = gap * 3; while (y < pageHeightPt - gap) { canvas.drawLine(gap * 2, y, pageWidthPt - gap * 2, y, templatePaint); y += gap } }
-                PageKind.GRID -> {
-                    var y = gap; while (y < pageHeightPt) { canvas.drawLine(0f, y, pageWidthPt, y, templatePaint); y += gap }
-                    var x = gap; while (x < pageWidthPt) { canvas.drawLine(x, 0f, x, pageHeightPt, templatePaint); x += gap }
-                }
-                else -> Unit
-            }
-        }
     }
 
     private val wetLayer = InProgressStrokesView(context).apply {
@@ -154,6 +229,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
             override fun onStrokesFinished(strokes: Map<InProgressStrokeId, Stroke>) {
                 snapshot()
                 this@InkSurfaceView.strokes.addAll(strokes.values)
+                if (zoomEnabled && inStrip) strokes.values.lastOrNull()?.let { autoAdvance(it) }
                 strokeLayer.invalidate()
                 post { removeFinishedStrokes(strokes.keys) }
                 notifyChanged()
@@ -165,6 +241,18 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         setWillNotDraw(true)
         addView(strokeLayer, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
         addView(wetLayer, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+    }
+
+    private fun drawTemplate(canvas: Canvas) {
+        val gap = 24f
+        when (pageKind) {
+            PageKind.LINED -> { var y = gap * 3; while (y < pageHeightPt - gap) { canvas.drawLine(gap * 2, y, pageWidthPt - gap * 2, y, templatePaint); y += gap } }
+            PageKind.GRID -> {
+                var y = gap; while (y < pageHeightPt) { canvas.drawLine(0f, y, pageWidthPt, y, templatePaint); y += gap }
+                var x = gap; while (x < pageWidthPt) { canvas.drawLine(x, 0f, x, pageHeightPt, templatePaint); x += gap }
+            }
+            else -> Unit
+        }
     }
 
     fun setPageGeometry(widthPt: Float, heightPt: Float, kind: PageKind) {
@@ -282,6 +370,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     private fun updateMatrices() {
         pageToView.reset(); pageToView.postScale(scale, scale); pageToView.postTranslate(panX, panY)
         pageToView.invert(viewToPage)
+        updateZoom()
         strokeLayer.invalidate()
     }
 
@@ -290,6 +379,24 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         val idx = event.actionIndex
         val toolType = event.getToolType(idx)
         val isStylus = toolType == MotionEvent.TOOL_TYPE_STYLUS || toolType == MotionEvent.TOOL_TYPE_ERASER
+        if (zoomEnabled && event.actionMasked == MotionEvent.ACTION_DOWN) {
+            inStrip = event.y >= stripTop
+            if (!inStrip && isStylus) {
+                val pt = floatArrayOf(event.x, event.y); viewToPage.mapPoints(pt)
+                if (zoomWindow.contains(pt[0], pt[1])) { draggingWindow = true; dragLastX = pt[0]; dragLastY = pt[1]; return true }
+            }
+        }
+        if (draggingWindow) {
+            when (event.actionMasked) {
+                MotionEvent.ACTION_MOVE -> {
+                    val pt = floatArrayOf(event.x, event.y); viewToPage.mapPoints(pt)
+                    zoomWindow.offset(pt[0] - dragLastX, pt[1] - dragLastY); dragLastX = pt[0]; dragLastY = pt[1]
+                    clampZoomWindow(); updateMatrices()
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> draggingWindow = false
+            }
+            return true
+        }
         if (!isStylus && !fingerDraws) return handleFingerNavigation(event)
         if (!isStylus && event.pointerCount > 1) { cancelCurrent(event); return handleFingerNavigation(event) }
 
@@ -312,7 +419,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
                 currentPointerId = event.getPointerId(idx)
                 erasing = eraserNow
                 if (erasing) { lastErase = null; snapshot(); eraseDirty = false; eraseAt(event.getX(idx), event.getY(idx)) }
-                else currentStrokeId = wetLayer.startStroke(event, currentPointerId, brushSpec.toBrush(), viewToPage, identity)
+                else currentStrokeId = wetLayer.startStroke(event, currentPointerId, brushSpec.toBrush(), if (zoomEnabled && inStrip) viewToZoom else viewToPage, identity)
                 report(event, idx); return true
             }
             MotionEvent.ACTION_MOVE -> {
@@ -366,10 +473,10 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
 
     /** Erases along the segment from the previous eraser sample to this one, so fast pen moves cannot skip over strokes. */
     private fun eraseAt(viewX: Float, viewY: Float) {
-        val pt = floatArrayOf(viewX, viewY); viewToPage.mapPoints(pt)
+        val pt = floatArrayOf(viewX, viewY); (if (zoomEnabled && inStrip) viewToZoom else viewToPage).mapPoints(pt)
         val prev = lastErase ?: pt
         lastErase = pt
-        val radius = (if (pixelEraser) PIXEL_ERASER_RADIUS_PX else ERASER_RADIUS_PX) / scale
+        val radius = (if (pixelEraser) PIXEL_ERASER_RADIUS_PX else ERASER_RADIUS_PX) / (if (zoomEnabled && inStrip) zoomScale else scale)
         var changed = false
         var i = 0
         while (i < strokes.size) {
@@ -464,5 +571,5 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         ))
     }
 
-    private companion object { const val MARGIN_PX = 12f; const val ERASER_RADIUS_PX = 14f; const val PIXEL_ERASER_RADIUS_PX = 9f }
+    private companion object { const val ZOOM_LINE_PT = 56f; const val ZOOM_STRIP_FRACTION = 0.32f; const val MARGIN_PX = 12f; const val ERASER_RADIUS_PX = 14f; const val PIXEL_ERASER_RADIUS_PX = 9f }
 }

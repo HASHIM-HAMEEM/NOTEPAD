@@ -59,6 +59,7 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
     var color by remember { mutableIntStateOf(PALETTE[0]) }
     var size by remember { mutableFloatStateOf(2.5f) }
     var fingerDraws by remember { mutableStateOf(false) }
+    var zoomBox by remember { mutableStateOf(false) }
     var showLab by remember { mutableStateOf(false) }
     var sample by remember { mutableStateOf(PointerSample()) }
     var hasSelection by remember { mutableStateOf(false) }
@@ -80,6 +81,7 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
     LaunchedEffect(textBlocks, surface) { surface?.textBlocks = textBlocks }
 
     val spec = BrushSpec(tool, color, size)
+    LaunchedEffect(surface, zoomBox, language) { surface?.setZoomBox(zoomBox, language != "en") }
     LaunchedEffect(spec, fingerDraws, surface) { surface?.let { it.brushSpec = spec; it.fingerDraws = fingerDraws; if (spec.tool != InkTool.LASSO) it.clearSelection() } }
 
     // Load page geometry + strokes once the surface exists.
@@ -160,6 +162,8 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
                     Text(if (pages.isEmpty()) "" else "${index + 1}/${pages.size}", style = MaterialTheme.typography.labelMedium)
                     IconButton(enabled = index in 0 until pages.size - 1, onClick = { onNavigateToPage(pages[index + 1].id) }) { Icon(Icons.Default.ChevronRight, "Next page") }
                     VerticalDivider(Modifier.height(24.dp).padding(horizontal = 4.dp))
+                    FilterChip(selected = zoomBox, onClick = { zoomBox = !zoomBox }, label = { Text("Zoom box") })
+                    Spacer(Modifier.width(4.dp))
                     FilterChip(selected = fingerDraws, onClick = { fingerDraws = !fingerDraws }, label = { Text("Finger draws") })
                     Spacer(Modifier.width(4.dp))
                     FilterChip(selected = showLab, onClick = { showLab = !showLab }, label = { Text("Lab") })
@@ -177,8 +181,9 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
             )
         },
     ) { padding ->
+        Box(Modifier.fillMaxSize().padding(padding)) {
         AndroidView(
-            modifier = Modifier.fillMaxSize().padding(padding),
+            modifier = Modifier.fillMaxSize(),
             factory = { ctx ->
                 InkSurfaceView(ctx).also { v ->
                     v.onSample = { sample = it }
@@ -189,6 +194,15 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
                 }
             },
         )
+        if (zoomBox) Row(
+            Modifier.align(Alignment.BottomEnd).padding(8.dp).background(MaterialTheme.colorScheme.surface.copy(alpha = 0.92f), MaterialTheme.shapes.medium),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(onClick = { surface?.zoomShift(-1) }) { Icon(Icons.Default.ChevronLeft, "Back") }
+            IconButton(onClick = { surface?.zoomShift(1) }) { Icon(Icons.Default.ChevronRight, "Forward") }
+            IconButton(onClick = { surface?.zoomNewLine() }) { Icon(Icons.Default.KeyboardReturn, "New line") }
+        }
+        }
     }
 
     newBlockAt?.let { (x, y) ->
