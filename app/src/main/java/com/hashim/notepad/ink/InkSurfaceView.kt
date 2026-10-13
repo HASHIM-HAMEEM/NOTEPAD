@@ -44,10 +44,14 @@ import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.roundToInt
 import kotlin.math.sin
+import kotlin.math.ceil
 import android.view.HapticFeedbackConstants
 import com.hashim.notepad.pdf.PdfInvert
 
 private const val HIGHLIGHTER_STRAIGHTEN_DELAY_MS = 450L
+private const val SHAPE_STRAIGHTEN_DELAY_MS = 450L
+private const val SHAPE_HOLD_RADIUS_DP = 6f
+private const val SHAPE_SAMPLE_SPACING_PT = 2f
 private const val POINT_STROKE_UNIT_LENGTH_CM = 2.54f / 72f
 private const val STYLUS_BUTTON_PRIMARY_KEYCODE = 308
 private const val STYLUS_BUTTON_SECONDARY_KEYCODE = 309
@@ -63,6 +67,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
 
     var brushSpec: BrushSpec = BrushSpec(InkTool.PEN, 0xFF1A1A1A.toInt(), 2.5f)
     var highlighterAlwaysStraight: Boolean = false
+    var shapeStraightening: Boolean = true
     var fingerDraws: Boolean = false
     var primaryButtonAction: StylusButtonAction = StylusButtonAction.SWITCH_TO_ERASER
     var secondaryButtonAction: StylusButtonAction = StylusButtonAction.PREVIOUS_PEN
@@ -240,6 +245,8 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     private var lastReportedZoomPercent = Int.MIN_VALUE
     private var pageBitmap: Bitmap? = null
     private var currentStrokeId: InProgressStrokeId? = null
+    private data class ShapeStrokeContext(val enabled: Boolean, val pageToInput: Matrix)
+    private val shapeStrokeContexts = HashMap<InProgressStrokeId, ShapeStrokeContext>()
     private var highlighterWet: InProgressStroke? = null
     private data class StylusButtonPress(val downTime: Long, var strokeIntervened: Boolean)
     private val stylusButtonPresses = HashMap<Int, StylusButtonPress>()
@@ -397,9 +404,13 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         eagerInit()
         addFinishedStrokesListener(object : InProgressStrokesFinishedListener {
             override fun onStrokesFinished(strokes: Map<InProgressStrokeId, Stroke>) {
+                val finishedStrokes = strokes.map { (id, stroke) ->
+                    val shapeContext = shapeStrokeContexts.remove(id)
+                    if (shapeContext?.enabled == true) straightenHeldStroke(stroke, shapeContext) else stroke
+                }
                 snapshot()
-                this@InkSurfaceView.strokes.addAll(strokes.values)
-                if (zoomEnabled && inStrip) strokes.values.lastOrNull()?.let { autoAdvance(it) }
+                this@InkSurfaceView.strokes.addAll(finishedStrokes)
+                if (zoomEnabled && inStrip) finishedStrokes.lastOrNull()?.let { autoAdvance(it) }
                 strokeLayer.invalidate()
                 post { removeFinishedStrokes(strokes.keys) }
                 notifyChanged()
@@ -518,6 +529,103 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
 
     private fun drawTemplate(canvas: Canvas) {
         PageTemplateRenderer.draw(canvas, templatePaint, pageWidthPt, pageHeightPt, pageKind)
+    }
+
+    private fun straightenHeldStroke(stroke: Stroke, context: ShapeStrokeContext): Stroke {
+        val inputs = stroke.inputs
+        if (inputs.size < 2) return stroke
+        val lastInput = inputs[inputs.lastIndex]
+        val anchor = floatArrayOf(lastInput.x, lastInput.y)
+        context.pageToInput.mapPoints(anchor)
+        val holdRadius = SHAPE_HOLD_RADIUS_DP * resources.displayMetrics.density
+        var holdStart = inputs.lastIndex
+        while (holdStart > 0) {
+            val candidate = inputs[holdStart - 1]
+            val point = floatArrayOf(candidate.x, candidate.y)
+            context.pageToInput.mapPoints(point)
+            if (hypot(point[0] - anchor[0], point[1] - anchor[1]) > holdRadius) break
+            holdStart--
+        }
+        if (lastInput.elapsedTimeMillis - inputs[holdStart].elapsedTimeMillis < SHAPE_STRAIGHTEN_DELAY_MS) {
+            return stroke
+        }
+
+        val drawingInputs = (0..holdStart).map { inputs[it] }
+        val shape = ShapeRecognizer.recognize(
+            drawingInputs.map { it.x }.toFloatArray(),
+            drawingInputs.map { it.y }.toFloatArray(),
+        ) ?: return stroke
+        val generatedPoints = shapePoints(shape)
+        if (generatedPoints.size < 2) return stroke
+
+        val pressures = inputs.map { it.pressure }.sorted()
+        val pressure = if (pressures.size % 2 == 0) {
+            (pressures[pressures.size / 2 - 1] + pressures[pressures.size / 2]) / 2f
+        } else {
+            pressures[pressures.size / 2]
+        }
+        val firstInput = inputs[0]
+        val batch = MutableStrokeInputBatch()
+        generatedPoints.forEachIndexed { index, point ->
+            batch.add(
+                StrokeInput.create(
+                    point.x,
+                    point.y,
+                    firstInput.elapsedTimeMillis + index,
+                    firstInput.toolType,
+                    firstInput.strokeUnitLengthCm,
+                    pressure,
+                    firstInput.tiltRadians,
+                    firstInput.orientationRadians,
+                ),
+            )
+        }
+        return Stroke(stroke.brush, batch)
+    }
+
+    private fun shapePoints(shape: Shape): List<Shape.Point> = when (shape) {
+        is Shape.Line -> sampleSegment(
+            Shape.Point(shape.x1, shape.y1),
+            Shape.Point(shape.x2, shape.y2),
+        )
+        is Shape.Polygon -> {
+            if (shape.points.size < 3) {
+                emptyList()
+            } else {
+                buildList {
+                    shape.points.indices.forEach { index ->
+                        val segment = sampleSegment(shape.points[index], shape.points[(index + 1) % shape.points.size])
+                        addAll(segment.dropLast(1))
+                    }
+                    add(shape.points.first())
+                }
+            }
+        }
+        is Shape.Ellipse -> {
+            val circumference = 2f * Math.PI.toFloat() * kotlin.math.sqrt(
+                (shape.rx * shape.rx + shape.ry * shape.ry) / 2f,
+            )
+            val steps = ceil(circumference / SHAPE_SAMPLE_SPACING_PT).toInt().coerceAtLeast(12)
+            (0..steps).map { index ->
+                val angle = 2f * Math.PI.toFloat() * index / steps
+                Shape.Point(
+                    shape.cx + shape.rx * kotlin.math.cos(angle),
+                    shape.cy + shape.ry * kotlin.math.sin(angle),
+                )
+            }
+        }
+    }
+
+    private fun sampleSegment(start: Shape.Point, end: Shape.Point): List<Shape.Point> {
+        val length = hypot(end.x - start.x, end.y - start.y)
+        val steps = ceil(length / SHAPE_SAMPLE_SPACING_PT).toInt().coerceAtLeast(1)
+        return (0..steps).map { index ->
+            val fraction = index.toFloat() / steps
+            Shape.Point(
+                start.x + (end.x - start.x) * fraction,
+                start.y + (end.y - start.y) * fraction,
+            )
+        }
     }
 
     fun setPageGeometry(widthPt: Float, heightPt: Float, kind: PageKind) {
@@ -1205,8 +1313,14 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
                     if (brushSpec.tool == InkTool.HIGHLIGHTER) {
                         withRulerSnapEvent(event, idx) { startHighlighterStroke(it, idx) }
                     } else {
+                        val inputToPage = if (zoomEnabled && inStrip) Matrix(viewToZoom) else Matrix(viewToPage)
+                        val pageToInput = Matrix()
+                        inputToPage.invert(pageToInput)
                         currentStrokeId = withRulerSnapEvent(event, idx) {
-                            wetLayer.startStroke(it, currentPointerId, brushSpec.toBrush(), if (zoomEnabled && inStrip) viewToZoom else viewToPage, identity)
+                            wetLayer.startStroke(it, currentPointerId, brushSpec.toBrush(), inputToPage, identity)
+                        }
+                        currentStrokeId?.takeIf { brushSpec.tool == InkTool.PEN }?.let { strokeId ->
+                            shapeStrokeContexts[strokeId] = ShapeStrokeContext(shapeStraightening, pageToInput)
                         }
                     }
                 }
@@ -1431,7 +1545,10 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     }
 
     private fun cancelCurrent(event: MotionEvent) {
-        currentStrokeId?.let { wetLayer.cancelStroke(it, event) }
+        currentStrokeId?.let {
+            shapeStrokeContexts.remove(it)
+            wetLayer.cancelStroke(it, event)
+        }
         currentStrokeId = null; currentPointerId = -1; erasing = false
         resetHighlighterStroke()
         strokeLayer.invalidate()

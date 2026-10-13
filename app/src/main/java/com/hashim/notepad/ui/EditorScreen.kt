@@ -27,6 +27,7 @@ import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.outlined.IosShare
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.ControlPointDuplicate
+import androidx.compose.material.icons.outlined.Category
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.AutoFixNormal
 import androidx.compose.material.icons.outlined.Edit
@@ -186,6 +187,7 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
         )
     }
     var alwaysStraight by remember(preferences) { mutableStateOf(preferences.getBoolean("highlighter.alwaysStraight", false)) }
+    var shapeStraightening by remember(preferences) { mutableStateOf(preferences.getBoolean("shape.straightening", true)) }
     var recentColors by remember { mutableStateOf(emptyList<Int>()) }
     var fingerDraws by remember { mutableStateOf(!StylusDetector.hasStylus(context)) }
     var zoomBox by remember { mutableStateOf(false) }
@@ -253,6 +255,7 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
     LaunchedEffect(surface, darkTheme) { surface?.setRulerDarkTheme(darkTheme) }
     LaunchedEffect(surface, deskColor) { surface?.setDeskColor(deskColor.toArgb()) }
     LaunchedEffect(surface, alwaysStraight) { surface?.highlighterAlwaysStraight = alwaysStraight }
+    LaunchedEffect(surface, shapeStraightening) { surface?.shapeStraightening = shapeStraightening }
     LaunchedEffect(surface, primaryButtonAction, secondaryButtonAction) {
         surface?.primaryButtonAction = primaryButtonAction
         surface?.secondaryButtonAction = secondaryButtonAction
@@ -431,6 +434,11 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
     fun setAlwaysStraight(enabled: Boolean) {
         alwaysStraight = enabled
         preferences.edit().putBoolean("highlighter.alwaysStraight", enabled).apply()
+    }
+
+    fun setShapeStraightening(enabled: Boolean) {
+        shapeStraightening = enabled
+        preferences.edit().putBoolean("shape.straightening", enabled).apply()
     }
 
     val statusBarHeight = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
@@ -629,6 +637,13 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
                             onClick = { surface?.paste(); morePop = false },
                         )
                     }
+                    ToggleItem(
+                        "Shape straightening",
+                        "Hold to straighten pen shapes",
+                        Icons.Outlined.Category,
+                        shapeStraightening,
+                        ::setShapeStraightening,
+                    )
                     ToggleItem("Zoom box", "Magnified line for small writing", Icons.Outlined.ZoomIn, zoomBox) { zoomBox = it }
                     ToggleItem("Finger draws", "Otherwise finger pans and zooms", Icons.Outlined.TouchApp, fingerDraws) { fingerDraws = it }
                     ToggleItem("Pen diagnostics", "Pressure, tilt and latency", Icons.Outlined.Speed, showLab) { showLab = it }
