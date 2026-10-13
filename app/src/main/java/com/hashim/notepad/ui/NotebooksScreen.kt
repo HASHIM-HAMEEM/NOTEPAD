@@ -76,6 +76,7 @@ fun NotebooksScreen(
     onDynamicChange: (Boolean) -> Unit,
     selectedId: String? = null,
     compact: Boolean = false,
+    showAccountButton: Boolean = true,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -131,7 +132,7 @@ fun NotebooksScreen(
         ) {
             item(span = { GridItemSpan(maxLineSpan) }) {
                 LibraryHeader(
-                    count = notebooks.size, compact = compact, importing = importing,
+                    count = notebooks.size, compact = compact, importing = importing, showAccountButton = showAccountButton,
                     onSearch = onSearch, onAccount = onAccount, onAppearance = { showAppearance = true },
                     onNew = { showNew = true },
                 )
@@ -266,7 +267,7 @@ fun NotebooksScreen(
 /* ---------------------------------------------------------------- pieces */
 
 @Composable
-private fun LibraryHeader(count: Int, compact: Boolean, importing: Boolean, onSearch: () -> Unit, onAccount: () -> Unit, onAppearance: () -> Unit, onNew: () -> Unit) {
+private fun LibraryHeader(count: Int, compact: Boolean, importing: Boolean, showAccountButton: Boolean, onSearch: () -> Unit, onAccount: () -> Unit, onAppearance: () -> Unit, onNew: () -> Unit) {
     Column(Modifier.statusBarsPadding().padding(top = 12.dp, bottom = 4.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
@@ -278,7 +279,7 @@ private fun LibraryHeader(count: Int, compact: Boolean, importing: Boolean, onSe
             }
             if (compact) IconButton(onClick = onNew) { Icon(Icons.Default.Add, "New") }
             IconButton(onClick = onAppearance) { Icon(Icons.Outlined.Palette, "Appearance") }
-            IconButton(onClick = onAccount) { Icon(Icons.Outlined.AccountCircle, "Sync & account") }
+            if (showAccountButton) IconButton(onClick = onAccount) { Icon(Icons.Outlined.AccountCircle, "Sync & account") }
         }
         Spacer(Modifier.height(12.dp))
         Surface(
