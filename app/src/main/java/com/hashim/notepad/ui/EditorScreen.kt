@@ -68,6 +68,7 @@ import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
@@ -251,6 +252,9 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
     var toolbarPositionReady by remember { mutableStateOf(false) }
     var toolbarDragging by remember { mutableStateOf(false) }
     var toolbarDragPosition by remember { mutableStateOf(IntOffset.Zero) }
+    var toolbarDragFingerPosition by remember { mutableStateOf(Offset.Zero) }
+    var editorOriginInRoot by remember { mutableStateOf(Offset.Zero) }
+    var toolbarGripOriginInRoot by remember { mutableStateOf(Offset.Zero) }
     val toolbarX = remember { Animatable(0f) }
     val toolbarY = remember { Animatable(0f) }
     val darkTheme = MaterialTheme.colorScheme.isDark
@@ -501,7 +505,10 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
     val displayedRecentColors = (recentColors + listOf(0xFFFFFFFF.toInt(), 0xFF1B2A4E.toInt()))
         .distinct()
         .take(2)
-    BoxWithConstraints(Modifier.fillMaxSize().background(toolbarColor)) {
+    BoxWithConstraints(
+        Modifier.fillMaxSize().background(toolbarColor)
+            .onGloballyPositioned { editorOriginInRoot = it.localToRoot(Offset.Zero) },
+    ) {
         val density = androidx.compose.ui.platform.LocalDensity.current
         val verticalToolbar = toolbarEdge == EditorToolbarEdge.START || toolbarEdge == EditorToolbarEdge.END
         val narrowToolbar = maxWidth < 600.dp
@@ -545,15 +552,11 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
             return IntOffset(x, y.coerceIn(0, maxY))
         }
 
-        fun nearestToolbarEdge(position: IntOffset): EditorToolbarEdge {
-            val centerX = position.x + toolbarSize.width / 2
-            val centerY = position.y + toolbarSize.height / 2
-            return listOf(
-                EditorToolbarEdge.TOP to (centerY - statusBarPx).coerceAtLeast(0),
-                EditorToolbarEdge.BOTTOM to (containerHeightPx - navigationBarPx - centerY).coerceAtLeast(0),
-                EditorToolbarEdge.START to centerX.coerceAtLeast(0),
-                EditorToolbarEdge.END to (containerWidthPx - centerX).coerceAtLeast(0),
-            ).minBy { it.second }.first
+        fun toolbarEdgeForRelease(position: Offset): EditorToolbarEdge = when {
+            position.x < containerWidthPx * 0.18f -> EditorToolbarEdge.START
+            position.x > containerWidthPx * 0.82f -> EditorToolbarEdge.END
+            position.y < containerHeightPx * 0.5f -> EditorToolbarEdge.TOP
+            else -> EditorToolbarEdge.BOTTOM
         }
 
         LaunchedEffect(toolbarEdge, toolbarSize, maxWidth, maxHeight, statusBarHeight, navigationBarHeight, toolbarDragging) {
@@ -889,13 +892,16 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
                 ) {
                     EditorToolbarGrip(
                         enabled = toolbarPositionReady && !toolbarHidden,
-                        modifier = Modifier.padding(vertical = 2.dp),
+                        modifier = Modifier.padding(vertical = 2.dp)
+                            .onGloballyPositioned { toolbarGripOriginInRoot = it.localToRoot(Offset.Zero) },
                         gripSize = 24.dp,
-                        onDragStart = {
+                        onDragStart = { fingerPosition ->
                             toolbarDragPosition = IntOffset(toolbarX.value.roundToInt(), toolbarY.value.roundToInt())
+                            toolbarDragFingerPosition = toolbarGripOriginInRoot + fingerPosition - editorOriginInRoot
                             toolbarDragging = true
                         },
                         onDrag = { delta ->
+                            toolbarDragFingerPosition += delta
                             val maxX = (containerWidthPx - toolbarSize.width).coerceAtLeast(0)
                             val maxY = (containerHeightPx - toolbarSize.height).coerceAtLeast(0)
                             toolbarDragPosition = IntOffset(
@@ -905,10 +911,11 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
                         },
                         onDragEnd = {
                             val position = toolbarDragPosition
+                            val edge = toolbarEdgeForRelease(toolbarDragFingerPosition)
                             scope.launch {
                                 toolbarX.snapTo(position.x.toFloat())
                                 toolbarY.snapTo(position.y.toFloat())
-                                toolbarEdge = nearestToolbarEdge(position)
+                                toolbarEdge = edge
                                 toolbarDragging = false
                             }
                         },
@@ -932,12 +939,15 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
                 ) {
                     EditorToolbarGrip(
                         enabled = toolbarPositionReady && !toolbarHidden,
-                        modifier = Modifier.padding(horizontal = 4.dp),
-                        onDragStart = {
+                        modifier = Modifier.padding(horizontal = 4.dp)
+                            .onGloballyPositioned { toolbarGripOriginInRoot = it.localToRoot(Offset.Zero) },
+                        onDragStart = { fingerPosition ->
                             toolbarDragPosition = IntOffset(toolbarX.value.roundToInt(), toolbarY.value.roundToInt())
+                            toolbarDragFingerPosition = toolbarGripOriginInRoot + fingerPosition - editorOriginInRoot
                             toolbarDragging = true
                         },
                         onDrag = { delta ->
+                            toolbarDragFingerPosition += delta
                             val maxX = (containerWidthPx - toolbarSize.width).coerceAtLeast(0)
                             val minY = dockSafeTopPx.coerceAtMost((containerHeightPx - toolbarSize.height).coerceAtLeast(0))
                             val maxY = (containerHeightPx - navigationBarPx - toolbarGapPx - toolbarSize.height)
@@ -949,10 +959,11 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
                         },
                         onDragEnd = {
                             val position = toolbarDragPosition
+                            val edge = toolbarEdgeForRelease(toolbarDragFingerPosition)
                             scope.launch {
                                 toolbarX.snapTo(position.x.toFloat())
                                 toolbarY.snapTo(position.y.toFloat())
-                                toolbarEdge = nearestToolbarEdge(position)
+                                toolbarEdge = edge
                                 toolbarDragging = false
                             }
                         },
@@ -992,6 +1003,20 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
                     }
                 }
             }
+        }
+
+        if (toolbarDragging) {
+            val edgeHintModifier = when (toolbarEdgeForRelease(toolbarDragFingerPosition)) {
+                EditorToolbarEdge.TOP ->
+                    Modifier.align(Alignment.TopCenter).fillMaxWidth().height(6.dp)
+                EditorToolbarEdge.BOTTOM ->
+                    Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(6.dp)
+                EditorToolbarEdge.START ->
+                    Modifier.align(Alignment.CenterStart).fillMaxHeight().width(6.dp)
+                EditorToolbarEdge.END ->
+                    Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(6.dp)
+            }
+            Box(edgeHintModifier.background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)))
         }
 
         Surface(
@@ -1211,7 +1236,7 @@ private fun EditorToolbarGrip(
     enabled: Boolean,
     modifier: Modifier = Modifier,
     gripSize: Dp = 32.dp,
-    onDragStart: () -> Unit,
+    onDragStart: (Offset) -> Unit,
     onDrag: (Offset) -> Unit,
     onDragEnd: () -> Unit,
 ) {
@@ -1221,7 +1246,7 @@ private fun EditorToolbarGrip(
             .pointerInput(enabled) {
                 if (enabled) {
                     detectDragGestures(
-                        onDragStart = { onDragStart() },
+                        onDragStart = onDragStart,
                         onDragEnd = onDragEnd,
                         onDragCancel = onDragEnd,
                         onDrag = { change, dragAmount ->
