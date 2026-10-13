@@ -20,23 +20,45 @@ class MissingSchemaClassifierTest {
     }
 
     @Test
-    fun recognizesOnlyTheNotebookFolderColumnFallback() {
+    fun recognizesOptionalColumnsByTableAndColumn() {
         assertTrue(
-            MissingSchemaClassifier.isMissingNotebookFolderColumn(
+            MissingSchemaClassifier.isMissingOptionalColumn(
                 400,
                 """{"code":"PGRST204","message":"Could not find folder_id column of notebooks"}""",
+                "notebooks",
+                "folder_id",
             ),
         )
         assertTrue(
-            MissingSchemaClassifier.isMissingNotebookFolderColumn(
+            MissingSchemaClassifier.isMissingOptionalColumn(
                 400,
                 """{"code":"42703","message":"column notebooks.folder_id does not exist"}""",
+                "notebooks",
+                "folder_id",
+            ),
+        )
+        assertTrue(
+            MissingSchemaClassifier.isMissingOptionalColumn(
+                400,
+                """{"code":"PGRST204","message":"Could not find bookmarked column of pages"}""",
+                "pages",
+                "bookmarked",
             ),
         )
         assertFalse(
-            MissingSchemaClassifier.isMissingNotebookFolderColumn(
+            MissingSchemaClassifier.isMissingOptionalColumn(
                 400,
                 """{"code":"42703","message":"column notebooks.language does not exist"}""",
+                "notebooks",
+                "folder_id",
+            ),
+        )
+        assertFalse(
+            MissingSchemaClassifier.isMissingOptionalColumn(
+                400,
+                """{"code":"42703","message":"column pages.bookmarked does not exist"}""",
+                "notebooks",
+                "bookmarked",
             ),
         )
     }

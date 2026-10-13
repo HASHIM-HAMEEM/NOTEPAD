@@ -97,7 +97,15 @@ class SyncEngine(private val context: Context, private val repo: NotePadReposito
         when (table) {
             "notebooks" -> {
                 cv.put("id", id); cv.put("title", decText(k, r, "title_enc") ?: "Untitled"); cv.put("cover_color", str(r, "cover_color"))
-                cv.put("folder_id", str(r, "folder_id"))
+                if (r.has("folder_id")) {
+                    cv.put("folder_id", str(r, "folder_id"))
+                } else {
+                    db.rawQuery("select folder_id from notebooks where id = ?", arrayOf(id)).use { c ->
+                        if (c.moveToFirst()) {
+                            if (c.isNull(0)) cv.putNull("folder_id") else cv.put("folder_id", c.getString(0))
+                        }
+                    }
+                }
                 cv.put("language", str(r, "language") ?: "ar"); cv.put("sort_order", r.optInt("sort_order")); cv.put("deleted_at", msOrNull(r, "deleted_at"))
                 cv.put("created_at", ms(r.getString("created_at"))); cv.put("updated_at", remoteUpdated)
             }
@@ -178,24 +186,31 @@ class SyncEngine(private val context: Context, private val repo: NotePadReposito
                 }
             }
             for (pageId in deleteRecognitionFor) SupabaseHttp.json("DELETE", "/rest/v1/recognition?page_id=eq.$pageId&user_id=eq.$uid", token).orThrow()
-            var keepForFolderColumn = false
+            var keepForOptionalColumn = false
             if (payload.length() > 0) {
                 try {
                     SupabaseHttp.json("POST", "/rest/v1/$table?on_conflict=id", token, payload.toString(),
                         mapOf("Prefer" to "resolution=merge-duplicates,return=minimal")).orThrow()
                 } catch (e: HttpException) {
-                    if (table != "notebooks" || !MissingSchemaClassifier.isMissingNotebookFolderColumn(e.code, e.message.orEmpty())) throw e
-                    val legacyPayload = JSONArray()
-                    for (i in 0 until payload.length()) legacyPayload.put(JSONObject(payload.getJSONObject(i).toString()).also { it.remove("folder_id") })
-                    SupabaseHttp.json("POST", "/rest/v1/$table?on_conflict=id", token, legacyPayload.toString(),
+                    val missingColumns = OPTIONAL_COLUMNS_BY_TABLE[table].orEmpty().filter { column ->
+                        MissingSchemaClassifier.isMissingOptionalColumn(e.code, e.message.orEmpty(), table, column)
+                    }
+                    if (missingColumns.isEmpty()) throw e
+                    val compatiblePayload = JSONArray()
+                    for (i in 0 until payload.length()) {
+                        compatiblePayload.put(JSONObject(payload.getJSONObject(i).toString()).also { row ->
+                            missingColumns.forEach { row.remove(it) }
+                        })
+                    }
+                    SupabaseHttp.json("POST", "/rest/v1/$table?on_conflict=id", token, compatiblePayload.toString(),
                         mapOf("Prefer" to "resolution=merge-duplicates,return=minimal")).orThrow()
-                    keepForFolderColumn = true
-                    Log.w(TAG, "server lacks notebooks.folder_id; pushed notebook rows without it and kept them queued")
+                    keepForOptionalColumn = true
+                    Log.w(TAG, "server lacks optional columns on $table (${missingColumns.joinToString()}); pushed compatible rows and kept them queued")
                 }
             }
             db.beginTransaction()
             try {
-                if (!keepForFolderColumn) for (rowId in chunk) clearOutbox(table, rowId)
+                if (!keepForOptionalColumn) for (rowId in chunk) clearOutbox(table, rowId)
                 db.setTransactionSuccessful()
             } finally { db.endTransaction() }
             pushed += payload.length()
@@ -307,6 +322,10 @@ class SyncEngine(private val context: Context, private val repo: NotePadReposito
         private const val TAG = "SyncEngine"
         private const val PAGE = 500
         private val SCHEMA_OPTIONAL_TABLES = setOf("folders", "tags", "notebook_tags", "page_images")
+        private val OPTIONAL_COLUMNS_BY_TABLE = mapOf(
+            "notebooks" to listOf("folder_id"),
+            "pages" to listOf("bookmarked"),
+        )
         /** Parent tables first so foreign keys resolve on pull. */
         val TABLES = listOf(
             "assets", "folders", "tags", "notebooks", "pages", "notebook_tags",
