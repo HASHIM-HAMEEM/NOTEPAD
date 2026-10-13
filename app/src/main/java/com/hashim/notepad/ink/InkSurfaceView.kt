@@ -54,6 +54,8 @@ private const val HIGHLIGHTER_STRAIGHTEN_DELAY_MS = 450L
 private const val SHAPE_STRAIGHTEN_DELAY_MS = 450L
 private const val SHAPE_HOLD_RADIUS_DP = 6f
 private const val SHAPE_SAMPLE_SPACING_PT = 2f
+private const val POLYGON_CORNER_REPEATS = 6
+private const val POLYGON_CORNER_INTERVAL_MS = 16L
 private const val LASER_FADE_DURATION_MS = 1000L
 private const val POINT_STROKE_UNIT_LENGTH_CM = 2.54f / 72f
 private const val STYLUS_BUTTON_PRIMARY_KEYCODE = 308
@@ -601,12 +603,15 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         }
         val firstInput = inputs[0]
         val batch = MutableStrokeInputBatch()
-        generatedPoints.forEachIndexed { index, point ->
+        var elapsedTimeMillis = firstInput.elapsedTimeMillis
+        var previousPoint: Shape.Point? = null
+        generatedPoints.forEach { point ->
+            elapsedTimeMillis += if (point == previousPoint) POLYGON_CORNER_INTERVAL_MS else 1L
             batch.add(
                 StrokeInput.create(
                     point.x,
                     point.y,
-                    firstInput.elapsedTimeMillis + index,
+                    elapsedTimeMillis,
                     firstInput.toolType,
                     firstInput.strokeUnitLengthCm,
                     pressure,
@@ -614,6 +619,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
                     firstInput.orientationRadians,
                 ),
             )
+            previousPoint = point
         }
         return Stroke(stroke.brush, batch)
     }
@@ -629,10 +635,14 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
             } else {
                 buildList {
                     shape.points.indices.forEach { index ->
-                        val segment = sampleSegment(shape.points[index], shape.points[(index + 1) % shape.points.size])
-                        addAll(segment.dropLast(1))
+                        val start = shape.points[index]
+                        val end = shape.points[(index + 1) % shape.points.size]
+                        add(start)
+                        repeat(POLYGON_CORNER_REPEATS) { add(start) }
+                        addAll(sampleSegment(start, end).drop(1).dropLast(1))
                     }
                     add(shape.points.first())
+                    repeat(POLYGON_CORNER_REPEATS) { add(shape.points.first()) }
                 }
             }
         }
