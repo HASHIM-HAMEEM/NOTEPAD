@@ -1,9 +1,9 @@
 package com.hashim.notepad.data
 
 enum class PageKind(val db: String) {
-    BLANK("blank"), LINED("lined"), GRID("grid"), PDF("pdf");
+    BLANK("blank"), LINED("lined"), GRID("grid"), DOTS("dots"), CORNELL("cornell"), MUSIC("music"), PDF("pdf");
 
-    companion object { fun from(db: String) = entries.first { it.db == db } }
+    companion object { fun from(db: String) = entries.firstOrNull { it.db == db } ?: BLANK }
 }
 
 data class Notebook(

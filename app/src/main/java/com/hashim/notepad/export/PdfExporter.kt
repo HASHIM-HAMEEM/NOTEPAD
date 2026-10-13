@@ -13,6 +13,7 @@ import com.hashim.notepad.data.NotePadRepository
 import com.hashim.notepad.data.Page
 import com.hashim.notepad.data.PageKind
 import com.hashim.notepad.ink.InkTextures
+import com.hashim.notepad.ink.PageTemplateRenderer
 import com.hashim.notepad.ink.StrokeStore
 import com.hashim.notepad.ink.TextBlockPainter
 import com.hashim.notepad.ink.drawStrokes
@@ -38,7 +39,7 @@ class PdfExporter(private val context: Context, private val repo: NotePadReposit
                 val pdfPage = doc.startPage(info)
                 val canvas = pdfPage.canvas
                 canvas.drawColor(paperArgb)
-                drawBackground(canvas, page, sources)
+                drawBackground(canvas, page, sources, paperArgb)
                 repo.loadStrokes(page.id)?.let { bytes ->
                     val strokes = runCatching { StrokeStore.decode(bytes) }.getOrDefault(emptyList())
                     drawStrokes(canvas, strokes, renderer, Matrix(), paperArgb)
@@ -57,7 +58,7 @@ class PdfExporter(private val context: Context, private val repo: NotePadReposit
         }
     }
 
-    private suspend fun drawBackground(canvas: Canvas, page: Page, sources: HashMap<String, PdfPageSource>) {
+    private suspend fun drawBackground(canvas: Canvas, page: Page, sources: HashMap<String, PdfPageSource>, paperArgb: Int) {
         when (page.kind) {
             PageKind.PDF -> {
                 val asset = page.assetId?.let { repo.asset(it) } ?: return
@@ -67,16 +68,14 @@ class PdfExporter(private val context: Context, private val repo: NotePadReposit
                 canvas.drawBitmap(bmp, m, Paint(Paint.FILTER_BITMAP_FLAG))
                 bmp.recycle()
             }
-            PageKind.LINED, PageKind.GRID -> {
-                val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFC9CDD6.toInt(); strokeWidth = 0.5f }
-                val gap = 24f
-                if (page.kind == PageKind.LINED) { var y = gap * 3; while (y < page.heightPt - gap) { canvas.drawLine(gap * 2, y, page.widthPt - gap * 2, y, paint); y += gap } }
-                else {
-                    var y = gap; while (y < page.heightPt) { canvas.drawLine(0f, y, page.widthPt, y, paint); y += gap }
-                    var x = gap; while (x < page.widthPt) { canvas.drawLine(x, 0f, x, page.heightPt, paint); x += gap }
+            else -> {
+                val darkPaper = Color.luminance(paperArgb)
+                val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = if (darkPaper < 0.5f) 0xFF3A3A40.toInt() else 0xFFC9CDD6.toInt()
+                    strokeWidth = 0.5f
                 }
+                PageTemplateRenderer.draw(canvas, paint, page.widthPt, page.heightPt, page.kind)
             }
-            PageKind.BLANK -> Unit
         }
     }
 

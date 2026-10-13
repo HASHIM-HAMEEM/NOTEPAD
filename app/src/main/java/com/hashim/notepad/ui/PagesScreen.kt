@@ -62,6 +62,9 @@ private val PAGE_TEMPLATES = listOf(
     PageKind.BLANK to "Blank",
     PageKind.LINED to "Lined",
     PageKind.GRID to "Grid",
+    PageKind.DOTS to "Dots",
+    PageKind.CORNELL to "Cornell",
+    PageKind.MUSIC to "Music",
 )
 
 private data class PageTemplateRequest(val page: Page, val insertAfter: Boolean)

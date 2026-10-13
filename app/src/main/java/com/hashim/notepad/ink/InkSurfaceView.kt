@@ -501,15 +501,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     }
 
     private fun drawTemplate(canvas: Canvas) {
-        val gap = 24f
-        when (pageKind) {
-            PageKind.LINED -> { var y = gap * 3; while (y < pageHeightPt - gap) { canvas.drawLine(gap * 2, y, pageWidthPt - gap * 2, y, templatePaint); y += gap } }
-            PageKind.GRID -> {
-                var y = gap; while (y < pageHeightPt) { canvas.drawLine(0f, y, pageWidthPt, y, templatePaint); y += gap }
-                var x = gap; while (x < pageWidthPt) { canvas.drawLine(x, 0f, x, pageHeightPt, templatePaint); x += gap }
-            }
-            else -> Unit
-        }
+        PageTemplateRenderer.draw(canvas, templatePaint, pageWidthPt, pageHeightPt, pageKind)
     }
 
     fun setPageGeometry(widthPt: Float, heightPt: Float, kind: PageKind) {

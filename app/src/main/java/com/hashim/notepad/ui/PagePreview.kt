@@ -26,6 +26,7 @@ import com.hashim.notepad.data.Page
 import com.hashim.notepad.data.PageKind
 import com.hashim.notepad.ink.InkTextures
 import com.hashim.notepad.ink.PaperTexture
+import com.hashim.notepad.ink.PageTemplateRenderer
 import com.hashim.notepad.ink.StrokeStore
 import com.hashim.notepad.ink.drawStrokes
 import com.hashim.notepad.pdf.PdfInvert
@@ -86,15 +87,7 @@ fun PagePreview(repo: NotePadRepository, page: Page?, paperColor: Color, modifie
             n.save()
             n.scale(scale, scale)
             val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = ruling.toArgbInt(); strokeWidth = 0.8f }
-            val gap = 24f
-            when (p.kind) {
-                PageKind.LINED -> { var y = gap * 3; while (y < p.heightPt - gap) { n.drawLine(gap * 2, y, p.widthPt - gap * 2, y, paint); y += gap } }
-                PageKind.GRID -> {
-                    var y = gap; while (y < p.heightPt) { n.drawLine(0f, y, p.widthPt, y, paint); y += gap }
-                    var x = gap; while (x < p.widthPt) { n.drawLine(x, 0f, x, p.heightPt, paint); x += gap }
-                }
-                else -> Unit
-            }
+            PageTemplateRenderer.draw(n, paint, p.widthPt, p.heightPt, p.kind)
             bitmap?.let { b ->
                 val m = Matrix().apply { preScale(p.widthPt / b.width, p.heightPt / b.height) }
                 val bitmapPaint = Paint(Paint.FILTER_BITMAP_FLAG).apply {
