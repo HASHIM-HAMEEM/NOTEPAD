@@ -9,22 +9,29 @@ import android.text.TextDirectionHeuristics
 import android.text.TextPaint
 import com.hashim.notepad.data.TextBlock
 
-/** Draws typed text blocks in page-point space. Direction is per paragraph (first-strong), so Arabic/Urdu stay RTL inside an English UI. */
+/** Draws typed text blocks in page-point space. */
 object TextBlockPainter {
     private val paint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK }
     private val selection = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x331E5EFF; style = Paint.Style.FILL }
 
-    fun layout(block: TextBlock): StaticLayout {
+    fun layout(block: TextBlock, paperArgb: Int = Color.WHITE): StaticLayout {
+        paint.color = block.colorArgb ?: TextColorPolicy.paperAwareDefault(paperArgb)
         paint.textSize = block.fontSizePt
         return StaticLayout.Builder.obtain(block.content, 0, block.content.length, paint, block.wPt.toInt().coerceAtLeast(40))
-            .setTextDirection(TextDirectionHeuristics.FIRSTSTRONG_LTR)
+            .setTextDirection(
+                when (block.direction) {
+                    "rtl" -> TextDirectionHeuristics.RTL
+                    "ltr" -> TextDirectionHeuristics.LTR
+                    else -> TextDirectionHeuristics.FIRSTSTRONG_LTR
+                },
+            )
             .setAlignment(Layout.Alignment.ALIGN_NORMAL)
             .setLineSpacing(0f, 1.35f)
             .build()
     }
 
-    fun draw(canvas: Canvas, block: TextBlock, selected: Boolean) {
-        val l = layout(block)
+    fun draw(canvas: Canvas, block: TextBlock, selected: Boolean, paperArgb: Int = Color.WHITE) {
+        val l = layout(block, paperArgb)
         canvas.save(); canvas.translate(block.xPt, block.yPt)
         if (selected) canvas.drawRect(-4f, -4f, block.wPt + 4f, l.height + 4f, selection)
         l.draw(canvas); canvas.restore()

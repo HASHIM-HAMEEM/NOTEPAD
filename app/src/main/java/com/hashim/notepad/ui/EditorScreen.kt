@@ -117,8 +117,14 @@ import com.hashim.notepad.ink.StylusDetector
 import com.hashim.notepad.pdf.PdfPageSource
 import com.hashim.notepad.pdf.PageImageImporter
 import com.hashim.notepad.recognition.InkRecognizer
+import com.hashim.notepad.recognition.InkPoint
+import com.hashim.notepad.recognition.InkRecognitionCandidate
+import com.hashim.notepad.recognition.RecognitionCandidatePolicy
 import com.hashim.notepad.recognition.TextBlockGeometry
+import com.hashim.notepad.recognition.TextBlockPlacement
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -138,6 +144,15 @@ private val PALETTE = listOf(
 private data class ToolBrushSettings(val color: Int, val size: Float, val opacity: Float)
 private data class FavoritePenPreset(val tool: InkTool, val pen: PenType, val color: Int, val size: Float, val opacity: Float)
 private data class DrawingToolSelection(val tool: InkTool, val pen: PenType)
+private data class TextConversionDraft(
+    val token: Int,
+    val page: Page,
+    val geometry: TextBlockPlacement,
+    val colorArgb: Int,
+    val loading: Boolean,
+    val text: String = "",
+    val alternatives: List<String> = emptyList(),
+)
 private enum class EditorToolbarEdge { TOP, BOTTOM, START, END }
 private val TAPE_COLORS = listOf(0xFFF2D37B.toInt(), 0xFFB7D7C5.toInt(), 0xFFA9CBE0.toInt(), 0xFFDDB4C0.toInt(), 0xFFB9BBC0.toInt(), 0xFFC7A884.toInt())
 
@@ -355,6 +370,89 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
     var editingBlock by remember { mutableStateOf<TextBlock?>(null) }
     var newBlockAt by remember { mutableStateOf<Pair<Float, Float>?>(null) }
     val scope = rememberCoroutineScope()
+    var textConversion by remember { mutableStateOf<TextConversionDraft?>(null) }
+    var textConversionJob by remember { mutableStateOf<Job?>(null) }
+    var textConversionToken by remember { mutableIntStateOf(0) }
+    fun dismissTextConversion() {
+        textConversionToken++
+        textConversionJob?.cancel()
+        textConversionJob = null
+        textConversion = null
+    }
+    fun beginTextConversion(target: InkSurfaceView, currentPage: Page, selected: List<Stroke>) {
+        val selection = selected.toList()
+        val points = selection.flatMap { stroke ->
+            val inputs = stroke.inputs
+            (0 until inputs.size).map { inputs[it] }
+        }
+        if (points.isEmpty()) {
+            Toast.makeText(context, "No handwriting recognized", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val geometry = TextBlockGeometry.fromBounds(
+            points.minOf { it.x }, points.minOf { it.y }, points.maxOf { it.x }, points.maxOf { it.y },
+        )
+        textConversionJob?.cancel()
+        val token = ++textConversionToken
+        textConversion = TextConversionDraft(
+            token = token,
+            page = currentPage,
+            geometry = geometry,
+            colorArgb = target.selectedTextColorForPaper(target.paperColorArgb()),
+            loading = true,
+        )
+        textConversionJob = scope.launch {
+            val languages = if (language.equals("en", ignoreCase = true)) listOf("en", "ar") else listOf(language, "en")
+            val groups = mutableListOf<List<InkRecognitionCandidate>>()
+            val failures = mutableListOf<Exception>()
+            for (recognitionLanguage in languages.distinct()) {
+                try {
+                    if (!recognizer.ensureModel(recognitionLanguage)) {
+                        throw IllegalStateException("model unavailable")
+                    }
+                    groups.add(recognizer.recognizeCandidates(
+                        selection, recognitionLanguage, currentPage.widthPt, currentPage.heightPt,
+                    ).filter { it.text.isNotBlank() })
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Exception) {
+                    failures += error
+                    Log.w("NotePad", "recognition $recognitionLanguage", error)
+                }
+            }
+            if (token != textConversionToken) return@launch
+            val candidates = groups.flatten()
+            val preferLatin = RecognitionCandidatePolicy.prefersLatin(
+                selection.map { stroke ->
+                    val inputs = stroke.inputs
+                    (0 until inputs.size).map { index -> InkPoint(inputs[index].x, inputs[index].y) }
+                },
+            )
+            val best = RecognitionCandidatePolicy.bestCandidate(candidates, preferLatin)
+            if (best == null) {
+                textConversion = null
+                val message = failures.lastOrNull()?.let {
+                    "Handwriting recognition failed: ${it.message ?: "model unavailable"}"
+                } ?: "No handwriting recognized"
+                Toast.makeText(context, message, if (failures.isEmpty()) Toast.LENGTH_SHORT else Toast.LENGTH_LONG).show()
+                textConversionJob = null
+                return@launch
+            }
+            val alternatives = groups.asSequence()
+                .flatMap { it.take(3).asSequence() }
+                .map { it.text.trim() }
+                .filter { it.isNotBlank() && it != best.text.trim() }
+                .distinct()
+                .take(6)
+                .toList()
+            textConversion = textConversion?.takeIf { it.token == token }?.copy(
+                loading = false,
+                text = best.text.trim(),
+                alternatives = alternatives,
+            )
+            textConversionJob = null
+        }
+    }
     val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null) scope.launch {
             runCatching {
@@ -1339,41 +1437,7 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
                                 val currentPage = page
                                 val selected = target?.selectedStrokes().orEmpty()
                                 if (target != null && currentPage != null && selected.isNotEmpty()) {
-                                    scope.launch {
-                                        runCatching {
-                                            recognizer.ensureModel(language)
-                                            recognizer.recognize(selected, language, currentPage.widthPt, currentPage.heightPt)
-                                        }.onSuccess { recognized ->
-                                            if (recognized.isBlank()) {
-                                                Toast.makeText(context, "No handwriting recognized", Toast.LENGTH_SHORT).show()
-                                            } else {
-                                                val bounds = selected.flatMap { stroke ->
-                                                    val inputs = stroke.inputs
-                                                    (0 until inputs.size).map { inputs[it] }
-                                                }
-                                                val left = bounds.minOf { it.x }
-                                                val top = bounds.minOf { it.y }
-                                                val right = bounds.maxOf { it.x }
-                                                val bottom = bounds.maxOf { it.y }
-                                                val geometry = TextBlockGeometry.fromBounds(left, top, right, bottom)
-                                                target.convertSelectionToText(
-                                                    TextBlock(
-                                                        id = java.util.UUID.randomUUID().toString(),
-                                                        pageId = currentPage.id,
-                                                        xPt = geometry.xPt,
-                                                        yPt = geometry.yPt,
-                                                        wPt = geometry.widthPt,
-                                                        direction = "auto",
-                                                        content = recognized,
-                                                        updatedAt = System.currentTimeMillis(),
-                                                        fontSizePt = geometry.fontSizePt,
-                                                    ),
-                                                )
-                                            }
-                                        }.onFailure {
-                                            Toast.makeText(context, "Handwriting recognition failed: ${it.message ?: "model unavailable"}", Toast.LENGTH_LONG).show()
-                                        }
-                                    }
+                                    beginTextConversion(target, currentPage, selected)
                                 }
                             }
                         }
@@ -1497,6 +1561,86 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
             scope.launch { repo.updateTextBlock(b.id, b.pageId, content = content) }
             editingBlock = null
         }
+    }
+    textConversion?.let { draft ->
+        AlertDialog(
+            onDismissRequest = { dismissTextConversion() },
+            shape = RoundedCornerShape(20.dp),
+            containerColor = MaterialTheme.colorScheme.surfaceContainer,
+            tonalElevation = 0.dp,
+            title = { Text("Convert handwriting") },
+            text = {
+                if (draft.loading) {
+                    Row(
+                        Modifier.fillMaxWidth().padding(vertical = 12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
+                        Text("Recognizing handwriting…", style = MaterialTheme.typography.bodyMedium)
+                    }
+                } else {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        OutlinedTextField(
+                            value = draft.text,
+                            onValueChange = { value ->
+                                textConversion = textConversion?.takeIf { it.token == draft.token }?.copy(text = value)
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            minLines = 2,
+                            maxLines = 4,
+                            textStyle = MaterialTheme.typography.bodyLarge,
+                        )
+                        if (draft.alternatives.isNotEmpty()) {
+                            Text("Alternatives", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Row(
+                                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                draft.alternatives.forEach { alternative ->
+                                    AssistChip(
+                                        onClick = {
+                                            textConversion = textConversion?.takeIf { it.token == draft.token }?.copy(text = alternative)
+                                        },
+                                        label = { Text(alternative, maxLines = 1) },
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = !draft.loading && draft.text.isNotBlank(),
+                    onClick = {
+                        val current = textConversion?.takeIf { it.token == draft.token }
+                        val text = current?.text?.trim().orEmpty()
+                        val target = surface
+                        if (current != null && text.isNotEmpty() && target != null) {
+                            target.convertSelectionToText(
+                                TextBlock(
+                                    id = java.util.UUID.randomUUID().toString(),
+                                    pageId = current.page.id,
+                                    xPt = current.geometry.xPt,
+                                    yPt = current.geometry.yPt,
+                                    wPt = current.geometry.widthPt,
+                                    direction = RecognitionCandidatePolicy.directionFor(text),
+                                    content = text,
+                                    updatedAt = System.currentTimeMillis(),
+                                    fontSizePt = current.geometry.fontSizePt,
+                                    colorArgb = current.colorArgb,
+                                ),
+                            )
+                        }
+                        dismissTextConversion()
+                    },
+                ) { Text("Insert") }
+            },
+            dismissButton = {
+                TextButton(onClick = { dismissTextConversion() }) { Text("Cancel") }
+            },
+        )
     }
 }
 

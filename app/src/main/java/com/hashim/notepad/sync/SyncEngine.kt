@@ -140,6 +140,15 @@ class SyncEngine(private val context: Context, private val repo: NotePadReposito
             "text_blocks" -> {
                 cv.put("id", id); cv.put("page_id", r.getString("page_id")); cv.put("x_pt", r.getDouble("x_pt").toFloat()); cv.put("y_pt", r.getDouble("y_pt").toFloat())
                 cv.put("w_pt", r.getDouble("w_pt").toFloat()); cv.put("direction", str(r, "direction") ?: "auto"); cv.put("content", decText(k, r, "content_enc") ?: "")
+                if (r.has("color_argb")) {
+                    if (r.isNull("color_argb")) cv.putNull("color_argb") else cv.put("color_argb", r.getInt("color_argb"))
+                } else {
+                    db.rawQuery("select color_argb from text_blocks where id = ?", arrayOf(id)).use { c ->
+                        if (c.moveToFirst()) {
+                            if (c.isNull(0)) cv.putNull("color_argb") else cv.put("color_argb", c.getInt(0))
+                        }
+                    }
+                }
                 cv.put("deleted_at", msOrNull(r, "deleted_at")); cv.put("updated_at", remoteUpdated)
             }
             "page_images" -> {
@@ -263,6 +272,7 @@ class SyncEngine(private val context: Context, private val repo: NotePadReposito
             }
             "text_blocks" -> {
                 o.put("page_id", m["page_id"]); o.put("x_pt", m["x_pt"]); o.put("y_pt", m["y_pt"]); o.put("w_pt", m["w_pt"]); o.put("direction", m["direction"])
+                o.put("color_argb", m["color_argb"] ?: JSONObject.NULL)
                 o.put("content_enc", hex(Crypto.encryptText(k, m["content"] as String))); o.put("deleted_at", ts("deleted_at") ?: JSONObject.NULL); o.put("updated_at", ts("updated_at"))
             }
             "page_images" -> {
@@ -329,6 +339,7 @@ class SyncEngine(private val context: Context, private val repo: NotePadReposito
         private val OPTIONAL_COLUMNS_BY_TABLE = mapOf(
             "notebooks" to listOf("folder_id"),
             "pages" to listOf("bookmarked"),
+            "text_blocks" to listOf("color_argb"),
         )
         /** Parent tables first so foreign keys resolve on pull. */
         val TABLES = listOf(

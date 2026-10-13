@@ -72,6 +72,7 @@ data class TextBlock(
     val content: String,
     val updatedAt: Long,
     val fontSizePt: Float = 12f,
+    val colorArgb: Int? = null,
 )
 
 data class PageImage(

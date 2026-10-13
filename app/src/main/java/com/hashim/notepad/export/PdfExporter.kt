@@ -51,7 +51,7 @@ class PdfExporter(private val context: Context, private val repo: NotePadReposit
                     val strokes = runCatching { StrokeStore.decode(bytes) }.getOrDefault(emptyList())
                     drawStrokes(canvas, strokes, renderer, Matrix(), paperArgb)
                 }
-                for (b in repo.textBlocks(page.id).first()) TextBlockPainter.draw(canvas, b, false)
+                for (b in repo.textBlocks(page.id).first()) TextBlockPainter.draw(canvas, b, false, paperArgb)
                 doc.finishPage(pdfPage)
             }
             val dir = File(context.cacheDir, "exports").apply { mkdirs() }

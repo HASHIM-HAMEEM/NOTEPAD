@@ -37,6 +37,7 @@ import com.hashim.notepad.data.TextBlock
 import androidx.ink.brush.Brush
 import androidx.ink.brush.ExperimentalInkCustomBrushApi
 import androidx.ink.brush.InputToolType
+import androidx.ink.brush.StockBrushes
 import androidx.ink.strokes.InProgressStroke
 import android.view.InputDevice
 import android.view.KeyEvent
@@ -250,7 +251,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
             zoomRevealedTapes,
             canvasHasPageTransform = true,
         )
-        for (b in textBlocks) TextBlockPainter.draw(canvas, b, false)
+        for (b in textBlocks) TextBlockPainter.draw(canvas, b, false, paperPaint.color)
         canvas.restore()
         canvas.restore()
         canvas.drawLine(0f, stripTop, width.toFloat(), stripTop, stripBorderPaint)
@@ -450,7 +451,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
             }
             if (textBlocks.isNotEmpty()) {
                 canvas.save(); canvas.concat(pageToView)
-                for (b in textBlocks) TextBlockPainter.draw(canvas, b, b.id == selectedTextBlockId)
+                for (b in textBlocks) TextBlockPainter.draw(canvas, b, b.id == selectedTextBlockId, paperPaint.color)
                 canvas.restore()
             }
             canvas.restore()
@@ -754,6 +755,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     }
 
     fun setPage(bitmap: Bitmap?) { pageBitmap = bitmap; strokeLayer.invalidate() }
+    fun paperColorArgb(): Int = paperPaint.color
 
     fun setPageImages(pageId: String, images: List<PageImage>) {
         if (imagePageId != pageId) {
@@ -840,6 +842,16 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     fun hasSelection() = selected.isNotEmpty() || selectedPageImageId != null
     fun hasImageSelection() = selectedPageImageId != null
     fun selectedStrokes(): List<Stroke> = selected.toList()
+    fun selectedTextColorForPaper(paperArgb: Int): Int {
+        val highlighter = StockBrushes.highlighter()
+        return TextColorPolicy.textColor(
+            selected.map { stroke ->
+                val countsAsInk = stroke.brush.family != highlighter && stroke.brush.family != InkBrushFamilies.tape
+                StrokeColorSample(stroke.brush.colorIntArgb, countsAsInk)
+            },
+            paperArgb,
+        )
+    }
 
     fun convertSelectionToText(block: TextBlock) {
         if (selected.isEmpty()) return
