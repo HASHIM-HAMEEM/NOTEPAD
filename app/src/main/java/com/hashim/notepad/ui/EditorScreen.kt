@@ -82,6 +82,7 @@ import com.hashim.notepad.ink.PointerSample
 import com.hashim.notepad.ink.StylusButtonAction
 import com.hashim.notepad.ink.StylusInputDiagnostics
 import com.hashim.notepad.ink.StrokeStore
+import com.hashim.notepad.ink.StylusDetector
 import com.hashim.notepad.pdf.PdfPageSource
 import com.hashim.notepad.recognition.InkRecognizer
 import kotlinx.coroutines.Dispatchers
@@ -174,7 +175,7 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
     }
     var alwaysStraight by remember(preferences) { mutableStateOf(preferences.getBoolean("highlighter.alwaysStraight", false)) }
     var recentColors by remember { mutableStateOf(emptyList<Int>()) }
-    var fingerDraws by remember { mutableStateOf(false) }
+    var fingerDraws by remember { mutableStateOf(!StylusDetector.hasStylus(context)) }
     var zoomBox by remember { mutableStateOf(false) }
     var showLab by remember { mutableStateOf(false) }
     var sample by remember { mutableStateOf(PointerSample()) }
