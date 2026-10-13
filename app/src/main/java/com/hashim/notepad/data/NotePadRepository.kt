@@ -253,12 +253,17 @@ class NotePadRepository(context: Context) {
             mark("stroke_batches", pageId)
             db.delete("recognition", "page_id = ?", arrayOf(pageId))
             mark("recognition", pageId)
+            val imageIds = db.rawQuery(
+                "select id from page_images where page_id = ? and deleted_at is null",
+                arrayOf(pageId),
+            ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
             db.update(
                 "page_images",
                 ContentValues().apply { put("deleted_at", now); put("updated_at", now) },
                 "page_id = ? and deleted_at is null",
                 arrayOf(pageId),
             )
+            imageIds.forEach { mark("page_images", it) }
 
             touchNotebook(parentId, now)
             db.setTransactionSuccessful()
@@ -335,11 +340,13 @@ class NotePadRepository(context: Context) {
                 }
             }
             images.forEach { image ->
+                val imageId = UUID.randomUUID().toString()
                 db.insertOrThrow("page_images", null, ContentValues().apply {
-                    put("id", UUID.randomUUID().toString()); put("page_id", newId); put("asset_id", image[0] as String)
+                    put("id", imageId); put("page_id", newId); put("asset_id", image[0] as String)
                     put("x_pt", image[1] as Float); put("y_pt", image[2] as Float)
                     put("w_pt", image[3] as Float); put("h_pt", image[4] as Float); put("updated_at", now)
                 })
+                mark("page_images", imageId)
             }
 
             db.rawQuery(
@@ -492,6 +499,7 @@ class NotePadRepository(context: Context) {
                     put("id", imageId); put("page_id", pageId); put("asset_id", asset.id)
                     put("x_pt", xPt); put("y_pt", yPt); put("w_pt", wPt); put("h_pt", hPt); put("updated_at", now)
                 })
+                mark("page_images", imageId)
                 db.update("pages", ContentValues().apply { put("updated_at", now) }, "id = ?", arrayOf(pageId))
                 touchNotebook(notebookId, now)
                 db.setTransactionSuccessful()
@@ -517,6 +525,7 @@ class NotePadRepository(context: Context) {
                 val removed = buildList { while (c.moveToNext()) if (c.getString(0) !in savedIds) add(c.getString(0)) }
                 removed.forEach { id ->
                     db.update("page_images", ContentValues().apply { put("deleted_at", now); put("updated_at", now) }, "id = ?", arrayOf(id))
+                    mark("page_images", id)
                 }
             }
             saved.forEach { image ->
@@ -525,6 +534,7 @@ class NotePadRepository(context: Context) {
                     put("x_pt", image.xPt); put("y_pt", image.yPt); put("w_pt", image.wPt); put("h_pt", image.hPt)
                     put("updated_at", now); putNull("deleted_at")
                 }, SQLiteDatabase.CONFLICT_REPLACE)
+                mark("page_images", image.id)
             }
             db.update("pages", ContentValues().apply { put("updated_at", now) }, "id = ?", arrayOf(pageId))
             touchNotebook(notebookId, now)

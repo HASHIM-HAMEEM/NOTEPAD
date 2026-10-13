@@ -34,9 +34,29 @@ class SyncEngine(private val context: Context, private val repo: NotePadReposito
         val k = key() ?: throw IllegalStateException("Encryption passphrase not set")
         val token = auth.token()
         var pulled = 0
-        for (t in TABLES) pulled += pull(t, token, session.userId, k)
+        for (t in TABLES) {
+            try {
+                pulled += pull(t, token, session.userId, k)
+            } catch (e: HttpException) {
+                if (t in SCHEMA_OPTIONAL_TABLES && MissingSchemaClassifier.isMissingSchema(e.code, e.message.orEmpty())) {
+                    Log.w(TAG, "server schema lacks $t; skipping pull until migration is applied", e)
+                } else {
+                    throw e
+                }
+            }
+        }
         var pushed = 0
-        for (t in TABLES) pushed += push(t, token, session.userId, k)
+        for (t in TABLES) {
+            try {
+                pushed += push(t, token, session.userId, k)
+            } catch (e: HttpException) {
+                if (t in SCHEMA_OPTIONAL_TABLES && MissingSchemaClassifier.isMissingSchema(e.code, e.message.orEmpty())) {
+                    Log.w(TAG, "server schema lacks $t; keeping queued changes for a later retry", e)
+                } else {
+                    throw e
+                }
+            }
+        }
         repo.changed()
         return Result(pushed, pulled)
     }
@@ -77,8 +97,22 @@ class SyncEngine(private val context: Context, private val repo: NotePadReposito
         when (table) {
             "notebooks" -> {
                 cv.put("id", id); cv.put("title", decText(k, r, "title_enc") ?: "Untitled"); cv.put("cover_color", str(r, "cover_color"))
+                cv.put("folder_id", str(r, "folder_id"))
                 cv.put("language", str(r, "language") ?: "ar"); cv.put("sort_order", r.optInt("sort_order")); cv.put("deleted_at", msOrNull(r, "deleted_at"))
                 cv.put("created_at", ms(r.getString("created_at"))); cv.put("updated_at", remoteUpdated)
+            }
+            "folders" -> {
+                cv.put("id", id); cv.put("name", decText(k, r, "name_enc") ?: ""); cv.put("color", str(r, "color"))
+                cv.put("sort_order", r.optInt("sort_order")); cv.put("deleted_at", msOrNull(r, "deleted_at"))
+                cv.put("created_at", ms(r.getString("created_at"))); cv.put("updated_at", remoteUpdated)
+            }
+            "tags" -> {
+                cv.put("id", id); cv.put("name", decText(k, r, "name_enc") ?: ""); cv.put("color", str(r, "color"))
+                cv.put("deleted_at", msOrNull(r, "deleted_at")); cv.put("created_at", ms(r.getString("created_at"))); cv.put("updated_at", remoteUpdated)
+            }
+            "notebook_tags" -> {
+                cv.put("id", id); cv.put("notebook_id", r.getString("notebook_id")); cv.put("tag_id", r.getString("tag_id"))
+                cv.put("deleted_at", msOrNull(r, "deleted_at")); cv.put("updated_at", remoteUpdated)
             }
             "pages" -> {
                 cv.put("id", id); cv.put("notebook_id", r.getString("notebook_id")); cv.put("sort_key", r.getDouble("sort_key")); cv.put("kind", r.getString("kind"))
@@ -97,12 +131,20 @@ class SyncEngine(private val context: Context, private val repo: NotePadReposito
                 cv.put("w_pt", r.getDouble("w_pt").toFloat()); cv.put("direction", str(r, "direction") ?: "auto"); cv.put("content", decText(k, r, "content_enc") ?: "")
                 cv.put("deleted_at", msOrNull(r, "deleted_at")); cv.put("updated_at", remoteUpdated)
             }
+            "page_images" -> {
+                cv.put("id", id); cv.put("page_id", r.getString("page_id")); cv.put("asset_id", r.getString("asset_id"))
+                cv.put("x_pt", r.getDouble("x_pt")); cv.put("y_pt", r.getDouble("y_pt")); cv.put("w_pt", r.getDouble("w_pt")); cv.put("h_pt", r.getDouble("h_pt"))
+                cv.put("deleted_at", msOrNull(r, "deleted_at")); cv.put("updated_at", remoteUpdated)
+            }
             "assets" -> {
                 val storageKey = str(r, "storage_key") ?: return false
-                val local = File(assetsDir, "$id.${if (r.optString("kind") == "image") "img" else "pdf"}")
+                var local = File(assetsDir, "$id.${if (r.optString("kind") == "image") "jpg" else "pdf"}")
                 if (!local.exists()) {
                     val blob = SupabaseHttp.request("GET", "/storage/v1/object/assets/$storageKey", token).orThrow().body
-                    local.writeBytes(Crypto.decrypt(k, blob))
+                    val contents = Crypto.decrypt(k, blob)
+                    val extension = if (r.optString("kind") == "image") imageExtension(contents) else "pdf"
+                    local = File(assetsDir, "$id.$extension")
+                    local.writeBytes(contents)
                 }
                 cv.put("id", id); cv.put("kind", r.getString("kind")); cv.put("local_path", local.absolutePath); cv.put("storage_key", storageKey)
                 cv.put("byte_size", r.optLong("byte_size")); cv.put("sha256", r.optString("sha256")); if (r.isNull("page_count")) cv.putNull("page_count") else cv.put("page_count", r.getInt("page_count"))
@@ -136,13 +178,24 @@ class SyncEngine(private val context: Context, private val repo: NotePadReposito
                 }
             }
             for (pageId in deleteRecognitionFor) SupabaseHttp.json("DELETE", "/rest/v1/recognition?page_id=eq.$pageId&user_id=eq.$uid", token).orThrow()
+            var keepForFolderColumn = false
             if (payload.length() > 0) {
-                SupabaseHttp.json("POST", "/rest/v1/$table?on_conflict=id", token, payload.toString(),
-                    mapOf("Prefer" to "resolution=merge-duplicates,return=minimal")).orThrow()
+                try {
+                    SupabaseHttp.json("POST", "/rest/v1/$table?on_conflict=id", token, payload.toString(),
+                        mapOf("Prefer" to "resolution=merge-duplicates,return=minimal")).orThrow()
+                } catch (e: HttpException) {
+                    if (table != "notebooks" || !MissingSchemaClassifier.isMissingNotebookFolderColumn(e.code, e.message.orEmpty())) throw e
+                    val legacyPayload = JSONArray()
+                    for (i in 0 until payload.length()) legacyPayload.put(JSONObject(payload.getJSONObject(i).toString()).also { it.remove("folder_id") })
+                    SupabaseHttp.json("POST", "/rest/v1/$table?on_conflict=id", token, legacyPayload.toString(),
+                        mapOf("Prefer" to "resolution=merge-duplicates,return=minimal")).orThrow()
+                    keepForFolderColumn = true
+                    Log.w(TAG, "server lacks notebooks.folder_id; pushed notebook rows without it and kept them queued")
+                }
             }
             db.beginTransaction()
             try {
-                for (rowId in chunk) clearOutbox(table, rowId)
+                if (!keepForFolderColumn) for (rowId in chunk) clearOutbox(table, rowId)
                 db.setTransactionSuccessful()
             } finally { db.endTransaction() }
             pushed += payload.length()
@@ -162,8 +215,22 @@ class SyncEngine(private val context: Context, private val repo: NotePadReposito
         when (table) {
             "notebooks" -> {
                 o.put("title_enc", hex(Crypto.encryptText(k, m["title"] as String))); o.put("cover_color", m["cover_color"] ?: JSONObject.NULL)
+                o.put("folder_id", m["folder_id"] ?: JSONObject.NULL)
                 o.put("language", m["language"]); o.put("sort_order", m["sort_order"]); o.put("deleted_at", ts("deleted_at") ?: JSONObject.NULL)
                 o.put("created_at", ts("created_at")); o.put("updated_at", ts("updated_at"))
+            }
+            "folders" -> {
+                o.put("name_enc", hex(Crypto.encryptText(k, m["name"] as String))); o.put("color", m["color"] ?: JSONObject.NULL)
+                o.put("sort_order", m["sort_order"]); o.put("deleted_at", ts("deleted_at") ?: JSONObject.NULL)
+                o.put("created_at", ts("created_at")); o.put("updated_at", ts("updated_at"))
+            }
+            "tags" -> {
+                o.put("name_enc", hex(Crypto.encryptText(k, m["name"] as String))); o.put("color", m["color"] ?: JSONObject.NULL)
+                o.put("deleted_at", ts("deleted_at") ?: JSONObject.NULL); o.put("created_at", ts("created_at")); o.put("updated_at", ts("updated_at"))
+            }
+            "notebook_tags" -> {
+                o.put("notebook_id", m["notebook_id"]); o.put("tag_id", m["tag_id"])
+                o.put("deleted_at", ts("deleted_at") ?: JSONObject.NULL); o.put("updated_at", ts("updated_at"))
             }
             "pages" -> {
                 o.put("notebook_id", m["notebook_id"]); o.put("sort_key", m["sort_key"]); o.put("kind", m["kind"]); o.put("asset_id", m["asset_id"] ?: JSONObject.NULL)
@@ -178,6 +245,11 @@ class SyncEngine(private val context: Context, private val repo: NotePadReposito
             "text_blocks" -> {
                 o.put("page_id", m["page_id"]); o.put("x_pt", m["x_pt"]); o.put("y_pt", m["y_pt"]); o.put("w_pt", m["w_pt"]); o.put("direction", m["direction"])
                 o.put("content_enc", hex(Crypto.encryptText(k, m["content"] as String))); o.put("deleted_at", ts("deleted_at") ?: JSONObject.NULL); o.put("updated_at", ts("updated_at"))
+            }
+            "page_images" -> {
+                o.put("page_id", m["page_id"]); o.put("asset_id", m["asset_id"]); o.put("x_pt", m["x_pt"]); o.put("y_pt", m["y_pt"])
+                o.put("w_pt", m["w_pt"]); o.put("h_pt", m["h_pt"]); o.put("deleted_at", ts("deleted_at") ?: JSONObject.NULL)
+                o.put("updated_at", ts("updated_at"))
             }
             "assets" -> {
                 val file = File(m["local_path"] as String)
@@ -222,11 +294,24 @@ class SyncEngine(private val context: Context, private val repo: NotePadReposito
     private fun decText(k: ByteArray, r: JSONObject, key: String): String? = bytes(r, key)?.let { runCatching { Crypto.decryptText(k, it) }.getOrElse { e -> Log.w(TAG, "decrypt $key failed", e); null } }
     private fun msOrNull(r: JSONObject, key: String): Long? = str(r, key)?.let { ms(it) }
 
+    private fun imageExtension(bytes: ByteArray): String = when {
+        bytes.size >= 8 && bytes[0] == 0x89.toByte() && bytes[1] == 0x50.toByte() &&
+            bytes[2] == 0x4e.toByte() && bytes[3] == 0x47.toByte() -> "png"
+        bytes.size >= 3 && bytes[0] == 0xff.toByte() && bytes[1] == 0xd8.toByte() -> "jpg"
+        bytes.size >= 12 && String(bytes, 0, 4, Charsets.US_ASCII) == "RIFF" &&
+            String(bytes, 8, 4, Charsets.US_ASCII) == "WEBP" -> "webp"
+        else -> "img"
+    }
+
     companion object {
         private const val TAG = "SyncEngine"
         private const val PAGE = 500
+        private val SCHEMA_OPTIONAL_TABLES = setOf("folders", "tags", "notebook_tags", "page_images")
         /** Parent tables first so foreign keys resolve on pull. */
-        val TABLES = listOf("assets", "notebooks", "pages", "stroke_batches", "text_blocks", "recognition")
+        val TABLES = listOf(
+            "assets", "folders", "tags", "notebooks", "pages", "notebook_tags",
+            "stroke_batches", "text_blocks", "page_images", "recognition",
+        )
 
         fun iso(ms: Long): String = Instant.ofEpochMilli(ms).toString()
         fun ms(iso: String): Long = try { Instant.parse(iso).toEpochMilli() } catch (e: DateTimeParseException) {
