@@ -566,8 +566,9 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     }
 
     private fun straightenHeldStroke(stroke: Stroke, context: ShapeStrokeContext): Stroke {
-        val inputs = stroke.inputs
-        if (inputs.size < 2) return stroke
+        val inputBatch = stroke.inputs
+        if (inputBatch.size < 2) return stroke
+        val inputs = List(inputBatch.size) { inputBatch[it] }
         val lastInput = inputs[inputs.lastIndex]
         val anchor = floatArrayOf(lastInput.x, lastInput.y)
         context.pageToInput.mapPoints(anchor)

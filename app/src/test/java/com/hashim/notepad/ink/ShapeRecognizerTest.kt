@@ -68,7 +68,7 @@ class ShapeRecognizerTest {
     @Test
     fun recognizesCircleAndSnapsItToEqualRadii() {
         val shape = recognize(sampleCurve { angle ->
-            80f + 50f * cos(angle) to 80f + 50f * sin(angle)
+            (80f + 50f * cos(angle).toFloat()) to (80f + 50f * sin(angle).toFloat())
         })
 
         assertTrue(shape is Shape.Ellipse)
@@ -79,7 +79,7 @@ class ShapeRecognizerTest {
     @Test
     fun recognizesEllipse() {
         val shape = recognize(sampleCurve { angle ->
-            90f + 80f * cos(angle) to 60f + 45f * sin(angle)
+            (90f + 80f * cos(angle).toFloat()) to (60f + 45f * sin(angle).toFloat())
         })
 
         assertTrue(shape is Shape.Ellipse)
