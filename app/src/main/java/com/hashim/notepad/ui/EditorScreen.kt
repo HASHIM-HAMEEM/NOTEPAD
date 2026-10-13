@@ -41,6 +41,17 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.graphics.drawscope.scale
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.RoundRect
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.graphics.drawscope.Stroke as DrawStroke
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -550,10 +561,10 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
                 }
             }
             IconButton(enabled = canUndo, onClick = { surface?.undo() }, modifier = Modifier.size(44.dp)) {
-                Icon(Icons.AutoMirrored.Filled.Undo, "Undo", modifier = Modifier.size(28.dp), tint = toolbarContentColor.copy(alpha = if (canUndo) 1f else 0.38f))
+                HistoryArrow(redo = false, tint = toolbarContentColor.copy(alpha = if (canUndo) 1f else 0.38f))
             }
             IconButton(enabled = canRedo, onClick = { surface?.redo() }, modifier = Modifier.size(44.dp)) {
-                Icon(Icons.AutoMirrored.Filled.Redo, "Redo", modifier = Modifier.size(28.dp), tint = toolbarContentColor.copy(alpha = if (canRedo) 1f else 0.38f))
+                HistoryArrow(redo = true, tint = toolbarContentColor.copy(alpha = if (canRedo) 1f else 0.38f))
             }
             IconButton(
                 onClick = {
@@ -740,266 +751,325 @@ private fun ShelfCanvasItem(
     opacity: Float = 1f,
     onClick: () -> Unit,
 ) {
-    val rise by animateDpAsState(
-        targetValue = if (selected) (-14).dp else 0.dp,
-        animationSpec = spring(dampingRatio = 0.7f, stiffness = 400f),
-        label = "$label-rise",
+    val lift by animateDpAsState(
+        targetValue = if (selected) 0.dp else 16.dp,
+        animationSpec = spring(dampingRatio = 0.72f, stiffness = 420f),
+        label = "$label-lift",
     )
     val dark = MaterialTheme.colorScheme.isDark
-    val bodyWidthDp = if (style == ShelfDrawing.ERASER || style == ShelfDrawing.RULER) 48.dp else 24.dp
-    val itemWidth = bodyWidthDp + 14.dp
-
+    val wide = style == ShelfDrawing.ERASER || style == ShelfDrawing.RULER
     Box(
-        Modifier.width(itemWidth).fillMaxHeight().clipToBounds().clickable(onClickLabel = label, onClick = onClick),
-        contentAlignment = Alignment.TopCenter,
+        Modifier.width(if (wide) 50.dp else 40.dp).fillMaxHeight().clipToBounds()
+            .clickable(interactionSource = null, indication = null, onClickLabel = label, role = Role.Button, onClick = onClick),
     ) {
-        Canvas(Modifier.requiredSize(itemWidth, 128.dp).offset(y = 23.dp + rise)) {
-            val centerX = size.width / 2f
-            val bodyTop = 26.dp.toPx()
-            val bodyBottom = size.height
-            val bodyWidth = bodyWidthDp.toPx()
-            val bodyLeft = centerX - bodyWidth / 2f
-            val bodyRight = bodyLeft + bodyWidth
-            val ferruleTop = bodyTop - 8.dp.toPx()
-            val ferruleBottom = bodyTop + 2.dp.toPx()
-            val bodyCorner = CornerRadius(minOf(bodyWidth / 2f, 8.dp.toPx()))
-            val inkColor = Color(color).copy(alpha = opacity.coerceIn(0f, 1f))
-            val bodyEdge = if (dark) Color(0xFF1A1A1C) else Color(0xFFDADDE2)
-            val bodyCenter = if (dark) Color(0xFF3A3A3E) else Color.White
-            val bodyBrush = Brush.horizontalGradient(
-                colors = listOf(bodyEdge, bodyCenter, bodyEdge),
-                startX = bodyLeft,
-                endX = bodyRight,
-            )
-            val bodyTopLeft = Offset(bodyLeft, bodyTop)
-            val bodySize = Size(bodyWidth, bodyBottom - bodyTop)
+        Canvas(Modifier.fillMaxSize()) {
+            val ink = Color(color)
+            ShelfPainter(this, dark, ink, ink.copy(alpha = opacity.coerceIn(0.2f, 1f)))
+                .draw(style, top = 7.dp.toPx() + lift.toPx())
+        }
+    }
+}
 
-            if (style == ShelfDrawing.RULER) {
-                val rulerTop = bodyTop
-                val rulerHeight = bodyBottom - rulerTop
-                drawRoundRect(
-                    brush = bodyBrush,
-                    topLeft = bodyTopLeft,
-                    size = Size(bodyWidth, rulerHeight),
-                    cornerRadius = bodyCorner,
-                    alpha = if (dark) 0.94f else 0.74f,
-                )
-                drawRoundRect(
-                    color = if (dark) Color(0xFF55565B) else Color(0xFFBEC2C8),
-                    topLeft = bodyTopLeft,
-                    size = Size(bodyWidth, rulerHeight),
-                    cornerRadius = bodyCorner,
-                    style = DrawStroke(width = 0.8.dp.toPx()),
-                )
-                for (i in 1..7) {
-                    val y = rulerTop + i * 9.dp.toPx()
-                    val markColor = if (dark) Color(0xFFB7B9BE) else Color(0xFF62666D)
-                    drawLine(
-                        markColor.copy(alpha = 0.86f),
-                        Offset(bodyLeft + 3.dp.toPx(), y),
-                        Offset(bodyLeft + if (i % 2 == 0) bodyWidth - 3.dp.toPx() else bodyWidth * 0.58f, y),
-                        1.dp.toPx(),
-                    )
-                }
-                return@Canvas
-            }
+private class ShelfPainter(val scope: DrawScope, val dark: Boolean, val ink: Color, val translucentInk: Color) {
+    private val u = with(scope) { 1.dp.toPx() }
+    private val cx = scope.size.width / 2f
+    private val bottom = scope.size.height + 2f * u
 
-            if (style == ShelfDrawing.ERASER) {
-                val markColor = if (dark) Color(0xFFC7C9CE) else Color(0xFFAAA8A7)
-                val eraserHeight = 92.dp.toPx()
-                drawRoundRect(
-                    brush = bodyBrush,
-                    topLeft = bodyTopLeft,
-                    size = Size(bodyWidth, eraserHeight),
-                    cornerRadius = CornerRadius(10.dp.toPx()),
-                )
-                drawRoundRect(
-                    color = markColor.copy(alpha = if (dark) 0.45f else 0.64f),
-                    topLeft = Offset(bodyLeft + 2.dp.toPx(), bodyTop + 19.dp.toPx()),
-                    size = Size(bodyWidth - 4.dp.toPx(), 7.dp.toPx()),
-                    cornerRadius = CornerRadius(2.dp.toPx()),
-                )
-                drawRoundRect(
-                    color = if (dark) Color(0xFF55565B) else Color(0xFFBEC2C8),
-                    topLeft = bodyTopLeft,
-                    size = Size(bodyWidth, eraserHeight),
-                    cornerRadius = CornerRadius(10.dp.toPx()),
-                    style = DrawStroke(width = 0.8.dp.toPx()),
-                )
-                for (row in 0..1) for (column in 0..2) {
-                    drawRect(
-                        color = if ((row + column) % 2 == 0) markColor else markColor.copy(alpha = 0.52f),
-                        topLeft = Offset(bodyLeft + 11.dp.toPx() + column * 6.dp.toPx(), bodyTop + 37.dp.toPx() + row * 6.dp.toPx()),
-                        size = Size(4.dp.toPx(), 4.dp.toPx()),
-                    )
-                }
-                val wave = Path().apply {
-                    moveTo(bodyLeft + 10.dp.toPx(), bodyTop + 64.dp.toPx())
-                    cubicTo(bodyLeft + 16.dp.toPx(), bodyTop + 58.dp.toPx(), bodyLeft + 21.dp.toPx(), bodyTop + 70.dp.toPx(), bodyLeft + 27.dp.toPx(), bodyTop + 64.dp.toPx())
-                    cubicTo(bodyLeft + 33.dp.toPx(), bodyTop + 58.dp.toPx(), bodyLeft + 38.dp.toPx(), bodyTop + 70.dp.toPx(), bodyLeft + 42.dp.toPx(), bodyTop + 64.dp.toPx())
-                }
-                drawPath(wave, markColor, style = DrawStroke(width = 1.5.dp.toPx()))
-                return@Canvas
-            }
+    private val edge = if (dark) Color(0xFF141416) else Color(0xFFD6D9DE)
+    private val mid = if (dark) Color(0xFF45464B) else Color.White
+    private val shade = if (dark) Color(0xFF2C2D30) else Color(0xFFF2F3F5)
+    private val outline = if (dark) Color.Black.copy(alpha = 0.6f) else Color(0xFFBCC1C7).copy(alpha = 0.75f)
+    private val shadow = Color.Black.copy(alpha = if (dark) 0.35f else 0.07f)
+    private val gloss = Color.White.copy(alpha = if (dark) 0.07f else 0.85f)
+    private val metalLo = if (dark) Color(0xFF6E7177) else Color(0xFF9DA2A9)
+    private val metalHi = if (dark) Color(0xFFDADCE0) else Color(0xFFF8F9FA)
+    private val mark = if (dark) Color(0xFFB4B6BB) else Color(0xFF6C7077)
+    private val gold = Brush.horizontalGradient(listOf(Color(0xFFA9822F), Color(0xFFF2D88C), Color(0xFFA27A2A)), cx - 8f * u, cx + 8f * u)
 
-            if (style == ShelfDrawing.PENCIL) {
-                val hexBody = Path().apply {
-                    moveTo(centerX, bodyTop)
-                    lineTo(bodyRight, bodyTop + 4.dp.toPx())
-                    lineTo(bodyRight, bodyBottom)
-                    lineTo(centerX, bodyBottom + 2.dp.toPx())
-                    lineTo(bodyLeft, bodyBottom)
-                    lineTo(bodyLeft, bodyTop + 4.dp.toPx())
-                    close()
-                }
-                drawPath(hexBody, bodyBrush)
-                drawPath(hexBody, bodyEdge.copy(alpha = 0.8f), style = DrawStroke(width = 0.8.dp.toPx()))
-            } else {
-                drawRoundRect(bodyBrush, bodyTopLeft, bodySize, bodyCorner)
-                drawRoundRect(
-                    color = bodyEdge.copy(alpha = 0.9f),
-                    topLeft = bodyTopLeft,
-                    size = bodySize,
-                    cornerRadius = bodyCorner,
-                    style = DrawStroke(width = 0.8.dp.toPx()),
-                )
-            }
-            val ferruleWidthTop = bodyWidth * 0.56f
-            val ferrule = Path().apply {
-                moveTo(centerX - ferruleWidthTop / 2f, ferruleTop)
-                lineTo(centerX + ferruleWidthTop / 2f, ferruleTop)
-                lineTo(bodyRight, ferruleBottom)
-                lineTo(bodyLeft, ferruleBottom)
-                close()
-            }
-            val silverBrush = Brush.horizontalGradient(
-                listOf(Color(0xFF9298A0), Color(0xFFF1F2F4), Color(0xFFA3A9B1)),
-                startX = bodyLeft,
-                endX = bodyRight,
-            )
-            if (style != ShelfDrawing.PENCIL) {
-                drawPath(ferrule, silverBrush)
-                drawLine(
-                    Color(0xFF777D85),
-                    Offset(bodyLeft + 1.dp.toPx(), ferruleBottom),
-                    Offset(bodyRight - 1.dp.toPx(), ferruleBottom),
-                    0.8.dp.toPx(),
-                )
-            }
+    private fun bodyBrush(halfWidth: Float) = Brush.horizontalGradient(
+        0f to edge, 0.3f to mid, 0.62f to shade, 1f to edge,
+        startX = cx - halfWidth, endX = cx + halfWidth,
+    )
 
-            when (style) {
-                ShelfDrawing.BALLPOINT -> {
-                    val tip = Path().apply {
-                        moveTo(centerX, 4.dp.toPx())
-                        lineTo(centerX - bodyWidth * 0.28f, ferruleTop)
-                        lineTo(centerX + bodyWidth * 0.28f, ferruleTop)
-                        close()
-                    }
-                    drawPath(tip, bodyBrush)
-                    drawPath(tip, bodyEdge.copy(alpha = 0.9f), style = DrawStroke(width = 0.7.dp.toPx()))
-                    drawCircle(Color(color), 1.2.dp.toPx(), Offset(centerX, 4.dp.toPx()))
-                    val clipColor = if (dark) Color(0xFF171719) else Color(0xFF6E7278)
-                    drawLine(
-                        clipColor,
-                        Offset(bodyRight - 2.dp.toPx(), bodyTop + 7.dp.toPx()),
-                        Offset(bodyRight - 2.dp.toPx(), bodyTop + 28.dp.toPx()),
-                        1.dp.toPx(),
-                    )
-                }
-                ShelfDrawing.PENCIL -> {
-                    val wood = Path().apply {
-                        moveTo(centerX, 4.dp.toPx())
-                        lineTo(bodyLeft, bodyTop)
-                        lineTo(bodyRight, bodyTop)
-                        close()
-                    }
-                    drawPath(wood, Color(0xFFE8C9A0))
-                    drawLine(Color(0xFFB48E62), Offset(centerX, 6.dp.toPx()), Offset(centerX, bodyTop - 1.dp.toPx()), 1.dp.toPx())
-                    drawCircle(Color(color), 1.3.dp.toPx(), Offset(centerX, 4.dp.toPx()))
-                }
-                ShelfDrawing.FOUNTAIN -> {
-                    val nib = Path().apply {
-                        moveTo(centerX, 4.dp.toPx())
-                        lineTo(centerX - bodyWidth * 0.42f, ferruleTop - 2.dp.toPx())
-                        lineTo(centerX - bodyWidth * 0.25f, ferruleTop + 1.dp.toPx())
-                        lineTo(centerX + bodyWidth * 0.25f, ferruleTop + 1.dp.toPx())
-                        lineTo(centerX + bodyWidth * 0.42f, ferruleTop - 2.dp.toPx())
-                        close()
-                    }
-                    val nibBrush = Brush.horizontalGradient(
-                        listOf(Color(0xFF8E949C), Color(0xFFF5F6F7), Color(0xFF9DA3AA)),
-                        startX = bodyLeft,
-                        endX = bodyRight,
-                    )
-                    drawPath(nib, nibBrush)
-                    drawPath(nib, Color(0xFF7C8289), style = DrawStroke(width = 0.7.dp.toPx()))
-                    drawLine(Color(0xFF555B62), Offset(centerX, 6.dp.toPx()), Offset(centerX, ferruleTop - 1.dp.toPx()), 0.9.dp.toPx())
-                    drawCircle(Color(0xFFC7A25B), 1.6.dp.toPx(), Offset(centerX, ferruleTop - 4.dp.toPx()))
-                }
-                ShelfDrawing.MARKER -> {
-                    drawRoundRect(
-                        color = inkColor,
-                        topLeft = Offset(bodyLeft, 4.dp.toPx()),
-                        size = Size(bodyWidth, ferruleTop - 4.dp.toPx()),
-                        cornerRadius = CornerRadius(2.dp.toPx()),
-                    )
-                    drawLine(
-                        if (dark) Color.White.copy(alpha = 0.36f) else Color.White.copy(alpha = 0.64f),
-                        Offset(bodyLeft + 2.dp.toPx(), 7.dp.toPx()),
-                        Offset(bodyRight - 2.dp.toPx(), 7.dp.toPx()),
-                        1.dp.toPx(),
-                    )
-                }
-                ShelfDrawing.HIGHLIGHTER -> {
-                    val chisel = Path().apply {
-                        moveTo(bodyLeft, 5.dp.toPx())
-                        lineTo(bodyRight, 10.dp.toPx())
-                        lineTo(bodyRight, ferruleTop)
-                        lineTo(bodyLeft, ferruleTop)
-                        close()
-                    }
-                    drawPath(chisel, inkColor)
-                    drawLine(
-                        Color.White.copy(alpha = if (dark) 0.2f else 0.4f),
-                        Offset(bodyLeft + 2.dp.toPx(), 7.dp.toPx()),
-                        Offset(bodyRight - 3.dp.toPx(), 11.dp.toPx()),
-                        0.8.dp.toPx(),
-                    )
-                }
-                ShelfDrawing.CALLIGRAPHY -> {
-                    val flame = Path().apply {
-                        moveTo(centerX - 5.dp.toPx(), ferruleTop)
-                        cubicTo(centerX - 15.dp.toPx(), ferruleTop - 7.dp.toPx(), centerX - 5.dp.toPx(), 3.dp.toPx(), centerX, 4.dp.toPx())
-                        cubicTo(centerX + 11.dp.toPx(), 6.dp.toPx(), centerX + 9.dp.toPx(), ferruleTop - 7.dp.toPx(), centerX + 5.dp.toPx(), ferruleTop)
-                        close()
-                    }
-                    drawPath(flame, inkColor)
-                    drawLine(
-                        Color.White.copy(alpha = if (dark) 0.4f else 0.58f),
-                        Offset(centerX - 1.dp.toPx(), 8.dp.toPx()),
-                        Offset(centerX + 1.dp.toPx(), ferruleTop - 2.dp.toPx()),
-                        0.8.dp.toPx(),
-                    )
-                }
-                ShelfDrawing.LASSO -> {
-                    val loop = Path().apply {
-                        moveTo(centerX - 8.dp.toPx(), bodyTop - 2.dp.toPx())
-                        cubicTo(centerX - 15.dp.toPx(), 8.dp.toPx(), centerX + 12.dp.toPx(), 4.dp.toPx(), centerX + 8.dp.toPx(), bodyTop - 3.dp.toPx())
-                        cubicTo(centerX + 2.dp.toPx(), bodyTop + 1.dp.toPx(), centerX - 10.dp.toPx(), bodyTop + 1.dp.toPx(), centerX - 8.dp.toPx(), bodyTop - 2.dp.toPx())
-                    }
-                    drawPath(
-                        loop,
-                        if (dark) Color(0xFFDFDFE2) else Color(0xFF56585C),
-                        style = DrawStroke(width = 2.4.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 4.dp.toPx()))),
-                    )
-                }
-                ShelfDrawing.TEXT -> {
-                    val glyph = if (dark) Color(0xFFDFDFE2) else Color(0xFF56585C)
-                    drawLine(glyph, Offset(centerX - 7.dp.toPx(), 7.dp.toPx()), Offset(centerX + 7.dp.toPx(), 7.dp.toPx()), 2.dp.toPx())
-                    drawLine(glyph, Offset(centerX, 7.dp.toPx()), Offset(centerX, bodyTop - 2.dp.toPx()), 2.dp.toPx())
-                }
-                ShelfDrawing.ERASER, ShelfDrawing.RULER -> Unit
+    private fun metalBrush(halfWidth: Float) = Brush.horizontalGradient(
+        0f to metalLo, 0.38f to metalHi, 1f to metalLo,
+        startX = cx - halfWidth, endX = cx + halfWidth,
+    )
+
+    private fun part(path: Path, brush: Brush, edgeColor: Color = outline, withShadow: Boolean = true) = with(scope) {
+        if (withShadow) translate(left = 1.2f * u, top = 0.6f * u) { drawPath(path, shadow) }
+        drawPath(path, brush)
+        drawPath(path, edgeColor, style = DrawStroke(width = 0.8f * u))
+    }
+
+    private fun part(path: Path, color: Color, edgeColor: Color = outline) = part(path, SolidColor(color), edgeColor, withShadow = false)
+
+    private fun barrel(halfWidth: Float, top: Float) = Path().apply { addRect(Rect(cx - halfWidth, top, cx + halfWidth, bottom)) }
+
+    private fun taper(tipHalf: Float, tipY: Float, halfWidth: Float, shoulderY: Float, belly: Float = 0.55f) = Path().apply {
+        val curveY = tipY + (shoulderY - tipY) * 0.45f
+        moveTo(cx - tipHalf, tipY)
+        quadraticTo(cx - halfWidth * belly, curveY, cx - halfWidth, shoulderY)
+        lineTo(cx - halfWidth, bottom)
+        lineTo(cx + halfWidth, bottom)
+        lineTo(cx + halfWidth, shoulderY)
+        quadraticTo(cx + halfWidth * belly, curveY, cx + tipHalf, tipY)
+        close()
+    }
+
+    private fun glossLine(halfWidth: Float, fromY: Float) = scope.drawLine(
+        gloss, Offset(cx - halfWidth * 0.42f, fromY), Offset(cx - halfWidth * 0.42f, bottom), 1.6f * u,
+    )
+
+    private fun metalTip(top: Float, height: Float, halfWidth: Float) {
+        val tip = Path().apply {
+            moveTo(cx, top)
+            lineTo(cx + halfWidth, top + height)
+            lineTo(cx - halfWidth, top + height)
+            close()
+        }
+        part(tip, metalBrush(halfWidth), metalLo, withShadow = false)
+    }
+
+    fun draw(style: ShelfDrawing, top: Float) = when (style) {
+        ShelfDrawing.BALLPOINT -> ballpoint(top)
+        ShelfDrawing.PENCIL -> pencil(top)
+        ShelfDrawing.FOUNTAIN -> fountain(top)
+        ShelfDrawing.MARKER -> marker(top)
+        ShelfDrawing.HIGHLIGHTER -> highlighter(top)
+        ShelfDrawing.CALLIGRAPHY -> brushPen(top)
+        ShelfDrawing.ERASER -> eraser(top)
+        ShelfDrawing.LASSO -> lasso(top)
+        ShelfDrawing.TEXT -> textTool(top)
+        ShelfDrawing.RULER -> ruler(top)
+    }
+
+    private fun ballpoint(t: Float) {
+        val hw = 8.5f * u
+        part(taper(1.4f * u, t + 5f * u, hw, t + 36f * u), bodyBrush(hw))
+        glossLine(hw, t + 38f * u)
+        metalTip(t, 5.5f * u, 1.5f * u)
+        scope.drawCircle(ink, 1.1f * u, Offset(cx, t + 0.9f * u))
+        scope.drawLine(translucentInk, Offset(cx, t + 46f * u), Offset(cx, t + 60f * u), 2.6f * u, StrokeCap.Round)
+    }
+
+    private fun pencil(t: Float) {
+        val hw = 8.5f * u
+        val woodTop = t + 9f * u
+        val bodyTop = t + 28f * u
+        part(barrel(hw, bodyTop), bodyBrush(hw))
+        val facet = edge.copy(alpha = 0.55f)
+        scope.drawLine(facet, Offset(cx - hw / 3f, bodyTop + 2f * u), Offset(cx - hw / 3f, bottom), 0.7f * u)
+        scope.drawLine(facet, Offset(cx + hw / 3f, bodyTop + 2f * u), Offset(cx + hw / 3f, bottom), 0.7f * u)
+        val wood = Path().apply {
+            moveTo(cx - 2.3f * u, woodTop)
+            lineTo(cx - hw, bodyTop)
+            quadraticTo(cx - hw * 0.66f, bodyTop + 3.5f * u, cx - hw / 3f, bodyTop)
+            quadraticTo(cx, bodyTop + 3.5f * u, cx + hw / 3f, bodyTop)
+            quadraticTo(cx + hw * 0.66f, bodyTop + 3.5f * u, cx + hw, bodyTop)
+            lineTo(cx + 2.3f * u, woodTop)
+            close()
+        }
+        part(wood, Brush.horizontalGradient(listOf(Color(0xFFD4A877), Color(0xFFF3DDBA), Color(0xFFCB9C69)), cx - hw, cx + hw), Color(0xFFB98D5C).copy(alpha = 0.6f))
+        val lead = Path().apply {
+            moveTo(cx, t)
+            lineTo(cx + 2.3f * u, woodTop + 0.5f * u)
+            lineTo(cx - 2.3f * u, woodTop + 0.5f * u)
+            close()
+        }
+        part(lead, ink, ink)
+        scope.drawLine(Color.White.copy(alpha = 0.35f), Offset(cx - 0.4f * u, t + 2.5f * u), Offset(cx - 1.2f * u, woodTop), 0.7f * u)
+    }
+
+    private fun fountain(t: Float) {
+        val hw = 8f * u
+        val sectionTop = t + 26f * u
+        val bodyTop = t + 40f * u
+        part(barrel(hw, bodyTop), bodyBrush(hw))
+        glossLine(hw, bodyTop + 2f * u)
+        val section = Path().apply {
+            moveTo(cx - hw * 0.72f, sectionTop)
+            lineTo(cx + hw * 0.72f, sectionTop)
+            lineTo(cx + hw * 0.9f, bodyTop)
+            lineTo(cx - hw * 0.9f, bodyTop)
+            close()
+        }
+        part(section, bodyBrush(hw * 0.9f))
+        scope.drawRect(gold, Offset(cx - hw, bodyTop - 1f * u), Size(2f * hw, 2.4f * u))
+        val nib = Path().apply {
+            moveTo(cx, t)
+            cubicTo(cx + 1.6f * u, t + 6f * u, cx + hw * 0.86f, t + 15f * u, cx + hw * 0.66f, sectionTop + 1f * u)
+            lineTo(cx - hw * 0.66f, sectionTop + 1f * u)
+            cubicTo(cx - hw * 0.86f, t + 15f * u, cx - 1.6f * u, t + 6f * u, cx, t)
+            close()
+        }
+        part(nib, metalBrush(hw * 0.8f), metalLo, withShadow = false)
+        val nibInlay = Path().apply {
+            moveTo(cx, t + 9f * u)
+            lineTo(cx + 2.6f * u, t + 21f * u)
+            lineTo(cx - 2.6f * u, t + 21f * u)
+            close()
+        }
+        scope.drawPath(nibInlay, gold, alpha = 0.85f)
+        val slit = if (dark) Color(0xFF2A2C30) else Color(0xFF50555C)
+        scope.drawLine(slit, Offset(cx, t + 2.5f * u), Offset(cx, t + 16f * u), 0.8f * u)
+        scope.drawCircle(slit, 1.2f * u, Offset(cx, t + 16.5f * u))
+        scope.drawCircle(ink, 1f * u, Offset(cx, t + 0.9f * u))
+    }
+
+    private fun marker(t: Float) {
+        val hw = 10.5f * u
+        val collarTop = t + 12f * u
+        val bodyTop = t + 21f * u
+        part(taper(hw * 0.78f, bodyTop - 1f * u, hw, bodyTop + 5f * u, belly = 0.95f), bodyBrush(hw))
+        glossLine(hw, bodyTop + 6f * u)
+        scope.drawRect(translucentInk, Offset(cx - hw, t + 44f * u), Size(2f * hw, 3f * u))
+        val collar = Path().apply {
+            moveTo(cx - 5f * u, collarTop)
+            lineTo(cx + 5f * u, collarTop)
+            lineTo(cx + hw * 0.78f, bodyTop)
+            lineTo(cx - hw * 0.78f, bodyTop)
+            close()
+        }
+        part(collar, metalBrush(hw * 0.78f), metalLo)
+        val tip = Path().apply {
+            moveTo(cx - 3.8f * u, collarTop + 0.5f * u)
+            lineTo(cx - 3.8f * u, t + 4.5f * u)
+            quadraticTo(cx - 3.8f * u, t, cx, t)
+            quadraticTo(cx + 3.8f * u, t, cx + 3.8f * u, t + 4.5f * u)
+            lineTo(cx + 3.8f * u, collarTop + 0.5f * u)
+            close()
+        }
+        part(tip, translucentInk, translucentInk)
+        scope.drawLine(Color.White.copy(alpha = 0.35f), Offset(cx - 1.6f * u, t + 3f * u), Offset(cx - 1.6f * u, collarTop - 1f * u), 1f * u, StrokeCap.Round)
+    }
+
+    private fun highlighter(t: Float) {
+        val hw = 11.5f * u
+        val collarTop = t + 16f * u
+        val bodyTop = t + 24f * u
+        part(barrel(hw, bodyTop), bodyBrush(hw))
+        glossLine(hw, bodyTop + 2f * u)
+        scope.drawRect(SolidColor(mark), Offset(cx - hw, t + 44f * u), Size(2f * hw, 2.4f * u), alpha = 0.35f)
+        val collar = Path().apply {
+            moveTo(cx - 6.5f * u, collarTop)
+            lineTo(cx + 6.5f * u, collarTop)
+            lineTo(cx + hw, bodyTop)
+            lineTo(cx - hw, bodyTop)
+            close()
+        }
+        part(collar, bodyBrush(hw))
+        val chisel = Path().apply {
+            moveTo(cx - 5.5f * u, collarTop + 0.5f * u)
+            lineTo(cx - 5.5f * u, t + 6f * u)
+            lineTo(cx + 5.5f * u, t)
+            lineTo(cx + 5.5f * u, collarTop + 0.5f * u)
+            close()
+        }
+        part(chisel, translucentInk, translucentInk)
+        scope.drawLine(Color.White.copy(alpha = 0.4f), Offset(cx - 4f * u, t + 6.5f * u), Offset(cx + 4f * u, t + 2f * u), 1f * u, StrokeCap.Round)
+    }
+
+    private fun brushPen(t: Float) {
+        val hw = 7.5f * u
+        val ferruleTop = t + 26f * u
+        val bodyTop = t + 37f * u
+        part(barrel(hw, bodyTop), bodyBrush(hw))
+        glossLine(hw, bodyTop + 2f * u)
+        val ferrule = Path().apply {
+            moveTo(cx - 5f * u, ferruleTop)
+            lineTo(cx + 5f * u, ferruleTop)
+            lineTo(cx + hw, bodyTop)
+            lineTo(cx - hw, bodyTop)
+            close()
+        }
+        part(ferrule, metalBrush(hw), metalLo)
+        scope.drawLine(metalLo, Offset(cx - 5.6f * u, ferruleTop + 3f * u), Offset(cx + 5.6f * u, ferruleTop + 3f * u), 0.7f * u)
+        val bristles = Path().apply {
+            moveTo(cx, t)
+            cubicTo(cx + 2f * u, t + 8f * u, cx + 6.5f * u, t + 15f * u, cx + 5.2f * u, ferruleTop + 0.5f * u)
+            lineTo(cx - 5.2f * u, ferruleTop + 0.5f * u)
+            cubicTo(cx - 6.5f * u, t + 15f * u, cx - 2f * u, t + 8f * u, cx, t)
+            close()
+        }
+        part(bristles, translucentInk, translucentInk)
+        scope.drawPath(bristles, Brush.horizontalGradient(listOf(Color.White.copy(alpha = 0.35f), Color.Transparent, Color.Black.copy(alpha = 0.18f)), cx - 6f * u, cx + 6f * u))
+    }
+
+    private fun lasso(t: Float) {
+        val hw = 8f * u
+        part(taper(1.4f * u, t + 5f * u, hw, t + 32f * u, belly = 0.45f), bodyBrush(hw))
+        glossLine(hw, t + 34f * u)
+        metalTip(t, 5.5f * u, 1.5f * u)
+        scope.drawOval(
+            mark,
+            topLeft = Offset(cx - 5f * u, t + 40f * u),
+            size = Size(10f * u, 7f * u),
+            style = DrawStroke(width = 1.3f * u, pathEffect = PathEffect.dashPathEffect(floatArrayOf(2.2f * u, 1.8f * u))),
+        )
+        for (i in 0..4) {
+            val y = t + 52f * u + i * 3.2f * u
+            scope.drawLine(mark.copy(alpha = 0.45f), Offset(cx - hw + 1.5f * u, y + 2f * u), Offset(cx + hw - 1.5f * u, y - 2f * u), 0.8f * u)
+        }
+    }
+
+    private fun textTool(t: Float) {
+        val hw = 8.5f * u
+        val bodyTop = t + 14f * u
+        val body = Path().apply {
+            addRoundRect(RoundRect(Rect(cx - hw, bodyTop, cx + hw, bottom), topLeft = CornerRadius(hw), topRight = CornerRadius(hw)))
+        }
+        part(body, bodyBrush(hw))
+        glossLine(hw, bodyTop + 8f * u)
+        val glyphTop = bodyTop + 12f * u
+        scope.drawLine(mark, Offset(cx - 4.5f * u, glyphTop), Offset(cx + 4.5f * u, glyphTop), 1.8f * u, StrokeCap.Round)
+        scope.drawLine(mark, Offset(cx, glyphTop), Offset(cx, glyphTop + 12f * u), 1.8f * u, StrokeCap.Round)
+    }
+
+    private fun eraser(t: Float) {
+        val hw = 16f * u
+        val bodyTop = t + 14f * u
+        val body = Path().apply {
+            addRoundRect(RoundRect(Rect(cx - hw, bodyTop, cx + hw, bottom), topLeft = CornerRadius(9f * u), topRight = CornerRadius(9f * u)))
+        }
+        part(body, bodyBrush(hw))
+        for (row in 0..1) for (column in 0..2) {
+            if ((row + column) % 2 == 0) {
+                scope.drawRect(mark, Offset(cx - 4.5f * u + column * 3f * u, bodyTop + 18f * u + row * 3f * u), Size(3f * u, 3f * u), alpha = 0.8f)
             }
+        }
+        scope.drawLine(mark.copy(alpha = 0.35f), Offset(cx - 7f * u, bodyTop + 28f * u), Offset(cx + 7f * u, bodyTop + 28f * u), 0.8f * u)
+        val wave = Path().apply {
+            moveTo(cx - 6f * u, bodyTop + 36f * u)
+            cubicTo(cx - 3f * u, bodyTop + 32f * u, cx, bodyTop + 40f * u, cx + 3f * u, bodyTop + 36f * u)
+            quadraticTo(cx + 4.5f * u, bodyTop + 34f * u, cx + 6f * u, bodyTop + 35f * u)
+        }
+        scope.drawPath(wave, mark, style = DrawStroke(width = 1.2f * u, cap = StrokeCap.Round))
+    }
+
+    private fun ruler(t: Float) {
+        val hw = 15f * u
+        val bodyTop = t + 12f * u
+        val body = Path().apply {
+            addRoundRect(RoundRect(Rect(cx - hw, bodyTop, cx + hw, bottom), topLeft = CornerRadius(3f * u), topRight = CornerRadius(3f * u)))
+        }
+        with(scope) {
+            translate(left = 1.2f * u, top = 0.6f * u) { drawPath(body, shadow) }
+            drawPath(body, bodyBrush(hw), alpha = if (dark) 0.92f else 0.7f)
+            drawPath(body, outline, style = DrawStroke(width = 0.8f * u))
+            drawLine(gloss, Offset(cx + hw - 6f * u, bodyTop + 2f * u), Offset(cx + hw - 6f * u, bottom), 3f * u)
+        }
+        var i = 0
+        var y = bodyTop + 6f * u
+        while (y < bottom) {
+            val len = when {
+                i % 4 == 0 -> 9f * u
+                i % 2 == 0 -> 6f * u
+                else -> 4f * u
+            }
+            scope.drawLine(mark.copy(alpha = 0.75f), Offset(cx - hw + 1.5f * u, y), Offset(cx - hw + 1.5f * u + len, y), 0.8f * u)
+            y += 4f * u
+            i++
         }
     }
 }
@@ -1047,17 +1117,22 @@ private fun BrushSettingsPopover(
 
 @Composable
 private fun ColorWheelButton(color: Int) {
-    Canvas(Modifier.size(44.dp)) {
+    val gap = if (MaterialTheme.colorScheme.isDark) Color(0xFF111111) else Color.White
+    Canvas(Modifier.size(40.dp)) {
         val radius = size.minDimension / 2f
-        val ringWidth = 3.dp.toPx()
-        drawCircle(Color(color), radius = radius - ringWidth)
+        val ringWidth = 4.5.dp.toPx()
         drawCircle(
             brush = Brush.sweepGradient(
-                listOf(Color.Red, Color.Yellow, Color.Green, Color.Cyan, Color.Blue, Color.Magenta, Color.Red),
+                listOf(
+                    Color(0xFFFF9E9E), Color(0xFFFFD27A), Color(0xFFF4F27C), Color(0xFF9BEBA0),
+                    Color(0xFF8FE3F0), Color(0xFF9DB4FF), Color(0xFFD7A2F5), Color(0xFFFF9E9E),
+                ),
             ),
             radius = radius - ringWidth / 2f,
             style = DrawStroke(width = ringWidth),
         )
+        drawCircle(gap, radius = radius - ringWidth)
+        drawCircle(Color(color), radius = radius - ringWidth - 2.5.dp.toPx())
     }
 }
 
@@ -1073,14 +1148,33 @@ private fun ToggleItem(title: String, subtitle: String, checked: Boolean, onChan
 @Composable
 private fun ColorDot(argb: Int, selected: Boolean, dotSize: Dp = 32.dp, onClick: () -> Unit) {
     val ring by animateFloatAsState(if (selected) 1f else 0f, label = "ring")
-    val hairline = !selected && android.graphics.Color.luminance(argb) > 0.78f
-    Box(
-        Modifier.size(dotSize).clip(CircleShape).clickable(onClick = onClick)
-            .border(
-                if (selected) (2 * ring).dp else if (hairline) 0.75.dp else 0.dp,
-                if (selected) MaterialTheme.colorScheme.onSurface.copy(alpha = ring) else MaterialTheme.colorScheme.outlineVariant,
-                CircleShape,
-            )
-            .padding(dotSize * 0.14f).background(Color(argb), CircleShape)
-    )
+    val hairline = android.graphics.Color.luminance(argb) > 0.78f
+    val ringColor = MaterialTheme.colorScheme.onSurface
+    val hairlineColor = MaterialTheme.colorScheme.outlineVariant
+    Canvas(Modifier.size(dotSize).clip(CircleShape).clickable(onClick = onClick)) {
+        val radius = size.minDimension / 2f
+        val dotRadius = radius * 0.72f
+        if (ring > 0f) drawCircle(ringColor.copy(alpha = ring), radius - 1.dp.toPx(), style = DrawStroke(width = 2.dp.toPx()))
+        drawCircle(Color(argb), dotRadius)
+        if (hairline) drawCircle(hairlineColor, dotRadius, style = DrawStroke(width = 0.8.dp.toPx()))
+    }
+}
+
+@Composable
+private fun HistoryArrow(redo: Boolean, tint: Color) {
+    Canvas(Modifier.size(28.dp).semantics { contentDescription = if (redo) "Redo" else "Undo" }) {
+        val g = size.minDimension / 24f
+        val arrow = Path().apply {
+            moveTo(5f * g, 9f * g)
+            lineTo(14.5f * g, 9f * g)
+            cubicTo(17.8f * g, 9f * g, 19.5f * g, 11f * g, 19.5f * g, 14f * g)
+            lineTo(19.5f * g, 19.5f * g)
+            moveTo(9f * g, 5f * g)
+            lineTo(5f * g, 9f * g)
+            lineTo(9f * g, 13f * g)
+        }
+        scale(scaleX = if (redo) -1f else 1f, scaleY = 1f) {
+            drawPath(arrow, tint, style = DrawStroke(width = 1.8.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
+        }
+    }
 }
