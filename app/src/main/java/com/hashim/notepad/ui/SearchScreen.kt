@@ -13,6 +13,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.SearchOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -61,7 +62,22 @@ fun SearchScreen(repo: NotePadRepository, onBack: () -> Unit, onOpenPage: (noteb
             }
             when {
                 query.isBlank() -> Hint("Type a word in Arabic, Urdu or English.\nHandwriting is searched once a notebook has been recognised.")
-                hits.isEmpty() -> Hint("No matches for “$query”.")
+                hits.isEmpty() -> Column(
+                    Modifier.weight(1f).fillMaxWidth().padding(top = 96.dp, start = 24.dp, end = 24.dp),
+                    verticalArrangement = Arrangement.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Icon(Icons.Outlined.SearchOff, null, Modifier.size(48.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.height(16.dp))
+                    Text("No matches for “$query”", style = MaterialTheme.typography.titleMedium, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "Handwriting is searchable after Recognise handwriting in a notebook’s menu",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    )
+                }
                 else -> LazyColumn(contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     items(hits, key = { it.pageId + it.source }) { h ->
                         Surface(

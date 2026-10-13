@@ -408,7 +408,8 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         rulerOutlinePaint.strokeWidth = 1f / scale
         rulerTickPaint.strokeWidth = 1f / scale
         rulerHandleOutlinePaint.strokeWidth = 1f / scale
-        rulerFillPaint.setShadowLayer(8f / scale, 0f, 3f / scale, 0x44000000)
+        rulerOutlinePaint.isAntiAlias = false
+        rulerTickPaint.isAntiAlias = false
 
         canvas.save()
         canvas.concat(pageToView)
@@ -435,14 +436,19 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         var mark = 0
         var x = rulerCx - halfLength
         while (x <= rulerCx + halfLength + 0.1f) {
-            val fullCentimeter = mark % 2 == 0
-            val tickHeight = if (fullCentimeter) RULER_FULL_TICK_PT else RULER_HALF_TICK_PT
+            val fullCentimeter = mark % 10 == 0
+            val halfCentimeter = mark % 5 == 0
+            val tickHeight = when {
+                fullCentimeter -> RULER_FULL_TICK_PT
+                halfCentimeter -> RULER_HALF_TICK_PT
+                else -> RULER_MILLIMETER_TICK_PT
+            }
             canvas.drawLine(x, top, x, top + tickHeight, rulerTickPaint)
             if (fullCentimeter) {
                 rulerTextPaint.textSize = RULER_LABEL_TEXT_PT
-                canvas.drawText(((mark / 2)).toString(), x, top + tickHeight + RULER_LABEL_BASELINE_PT, rulerTextPaint)
+                canvas.drawText((mark / 10).toString(), x, top + tickHeight + RULER_LABEL_BASELINE_PT, rulerTextPaint)
             }
-            x += RULER_HALF_CENTIMETER_PT
+            x += RULER_MILLIMETER_PT
             mark++
         }
 
@@ -460,6 +466,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         val angleCenter = rulerPagePoint(rulerCx, rulerCy + 16f)
         val pill = RectF(angleCenter[0] - 24f, angleCenter[1] - 12f, angleCenter[0] + 24f, angleCenter[1] + 12f)
         canvas.drawRoundRect(pill, 12f, 12f, rulerAnglePillPaint)
+        canvas.drawRoundRect(pill, 12f, 12f, rulerOutlinePaint)
         canvas.drawText("${degrees.roundToInt()}°", angleCenter[0], angleCenter[1] + 4f, rulerTextPaint)
         canvas.restore()
     }
@@ -652,13 +659,13 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     }
 
     private fun updateRulerPaints() {
-        rulerFillPaint.color = if (rulerDarkTheme) 0x1FFFFFFF else 0x8CFFFFFF.toInt()
-        rulerOutlinePaint.color = 0xBFFFFFFF.toInt()
-        rulerTickPaint.color = 0xFF5A5248.toInt()
-        rulerTextPaint.color = if (rulerDarkTheme) 0xFFEDE6DA.toInt() else 0xFF4A4036.toInt()
-        rulerHandlePaint.color = if (rulerDarkTheme) 0x335A5248 else 0x99FFFFFF.toInt()
-        rulerHandleOutlinePaint.color = 0xBFFFFFFF.toInt()
-        rulerAnglePillPaint.color = if (rulerDarkTheme) 0xCC2B2823.toInt() else 0xCCFFFFFF.toInt()
+        rulerFillPaint.color = if (rulerDarkTheme) 0xEB2A2A2D.toInt() else 0xE0FFFFFF.toInt()
+        rulerOutlinePaint.color = if (rulerDarkTheme) 0x99000000.toInt() else 0xFFBCC1C7.toInt()
+        rulerTickPaint.color = if (rulerDarkTheme) 0xFFE0E0E0.toInt() else 0xFF333333.toInt()
+        rulerTextPaint.color = if (rulerDarkTheme) 0xFFE0E0E0.toInt() else 0xFF333333.toInt()
+        rulerHandlePaint.color = rulerFillPaint.color
+        rulerHandleOutlinePaint.color = rulerOutlinePaint.color
+        rulerAnglePillPaint.color = rulerFillPaint.color
     }
 
     private fun clampPan() {
@@ -1422,10 +1429,11 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         const val RULER_THICKNESS_PT = 56f
         const val RULER_CORNER_RADIUS_PT = 6f
         const val RULER_HANDLE_RADIUS_PT = 14f
-        const val RULER_HALF_CENTIMETER_PT = 14.175f
+        const val RULER_MILLIMETER_PT = 2.835f
         const val RULER_FULL_TICK_PT = 12f
         const val RULER_HALF_TICK_PT = 7f
-        const val RULER_LABEL_TEXT_PT = 9f
+        const val RULER_MILLIMETER_TICK_PT = 3f
+        const val RULER_LABEL_TEXT_PT = 12f
         const val RULER_LABEL_BASELINE_PT = 17f
         const val RULER_ANGLE_TEXT_PT = 12f
         const val RULER_ANGLE_BASELINE_PT = 4f

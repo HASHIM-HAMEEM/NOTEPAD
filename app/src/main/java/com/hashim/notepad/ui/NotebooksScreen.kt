@@ -11,7 +11,6 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -38,10 +37,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
-import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -54,7 +51,6 @@ import com.hashim.notepad.data.NotePadRepository
 import com.hashim.notepad.data.PageKind
 import com.hashim.notepad.export.BundleCodec
 import com.hashim.notepad.export.PdfExporter
-import com.hashim.notepad.ink.PaperTexture
 import com.hashim.notepad.pdf.PdfImporter
 import com.hashim.notepad.recognition.InkRecognizer
 import kotlinx.coroutines.launch
@@ -311,9 +307,9 @@ private fun NotebookCard(repo: NotePadRepository, notebook: Notebook, selected: 
     Column(modifier.graphicsLayer { scaleX = scale; scaleY = scale }) {
         Box(
             Modifier.fillMaxWidth().aspectRatio(0.72f)
-                .shadow(if (selected) 12.dp else 7.dp, radius, spotColor = Color.Black.copy(alpha = 0.36f))
+                .shadow(if (selected) 8.dp else 4.dp, radius, spotColor = Color.Black.copy(alpha = 0.36f))
                 .clip(radius)
-                .border(if (selected) 2.dp else 1.dp, if (selected) MaterialTheme.colorScheme.primary else cover.copy(alpha = 0.65f), radius)
+                .then(if (selected) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, radius) else Modifier)
                 .combinedClickable(interactionSource = interaction, indication = null, onClick = onOpen, onLongClick = onMore),
         ) {
             BookCover(notebook.title, cover, pages.any { it.kind == PageKind.PDF }, Modifier.fillMaxSize())
@@ -332,90 +328,26 @@ private fun NotebookCard(repo: NotePadRepository, notebook: Notebook, selected: 
 @Composable
 private fun BookCover(title: String, color: Color, isPdf: Boolean, modifier: Modifier = Modifier) {
     val spine = Color(color.red * 0.62f, color.green * 0.62f, color.blue * 0.62f)
-    val edge = Color(color.red * 0.91f, color.green * 0.91f, color.blue * 0.91f)
-    Box(modifier.background(Brush.horizontalGradient(listOf(spine, color, edge)))) {
-        Canvas(Modifier.fillMaxSize()) {
-            drawIntoCanvas { canvas ->
-                val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-                    shader = PaperTexture.shader()
-                    alpha = 110
-                    colorFilter = android.graphics.PorterDuffColorFilter(
-                        android.graphics.Color.rgb((color.red * 255).toInt(), (color.green * 255).toInt(), (color.blue * 255).toInt()),
-                        android.graphics.PorterDuff.Mode.MULTIPLY,
-                    )
-                }
-                canvas.nativeCanvas.drawRect(0f, 0f, size.width, size.height, paint)
-            }
-            val brightness = (color.red + color.green + color.blue) / 3f
-            val threadColor = if (brightness < 0.5f) Color.White.copy(alpha = 0.06f) else Color.Black.copy(alpha = 0.06f)
-            val threadSpacing = 6.dp.toPx()
-            var threadX = -size.height
-            while (threadX < size.width) {
-                drawLine(threadColor, Offset(threadX, 0f), Offset(threadX + size.height, size.height), 0.75f.dp.toPx())
-                drawLine(threadColor, Offset(threadX, 0f), Offset(threadX - size.height, size.height), 0.75f.dp.toPx())
-                threadX += threadSpacing
-            }
-            drawRect(
-                brush = Brush.linearGradient(
-                    colors = listOf(Color.White.copy(alpha = 0.08f), Color.Transparent, Color.Black.copy(alpha = 0.035f)),
-                    start = Offset(0f, 0f),
-                    end = Offset(size.width, size.height),
-                ),
-            )
+    val titleColor = if (android.graphics.Color.luminance(color.toArgb()) < 0.55f) {
+        Color.White.copy(alpha = 0.95f)
+    } else {
+        Color(0xFF2B2620)
+    }
+    Box(modifier.background(color)) {
+        androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) {
             val spineWidth = 10.dp.toPx()
             drawRect(spine, size = androidx.compose.ui.geometry.Size(spineWidth, size.height))
-            var y = 10.dp.toPx()
-            while (y < size.height - 10.dp.toPx()) {
-                drawLine(Color(0xFFF3E7D4).copy(alpha = 0.7f), Offset(spineWidth / 2f, y), Offset(spineWidth / 2f, y + 4.dp.toPx()), 1.dp.toPx())
-                y += 10.dp.toPx()
-            }
-            drawLine(Color.White.copy(alpha = 0.18f), Offset(spineWidth + 2.dp.toPx(), 0f), Offset(spineWidth + 2.dp.toPx(), size.height), 1.dp.toPx())
+            val highlightX = spineWidth + 0.5.dp.toPx()
+            drawLine(Color.White.copy(alpha = 0.12f), Offset(highlightX, 0f), Offset(highlightX, size.height), 1.dp.toPx())
         }
-        Box(
-            Modifier.align(Alignment.CenterEnd).padding(end = 18.dp).width(6.dp).fillMaxHeight(0.92f)
-                .background(spine.copy(alpha = 0.88f), RoundedCornerShape(3.dp)),
-        ) {
-            Canvas(Modifier.fillMaxSize()) {
-                drawLine(Color.White.copy(alpha = 0.48f), Offset(1f, 0f), Offset(1f, size.height), 1f)
-            }
-        }
-        Surface(
-            Modifier.fillMaxWidth(if (isPdf) 0.68f else 1f).padding(start = 18.dp, end = 18.dp, top = 18.dp),
-            shape = RoundedCornerShape(6.dp),
-            color = Color(0xFFF4EBDD).copy(alpha = 0.94f),
-        ) {
-            Box {
-                Text(
-                    title,
-                    Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-                    color = Color(0xFF382D22),
-                    style = MaterialTheme.typography.titleMedium.copy(fontFamily = titleFontFamily(title), fontWeight = FontWeight.SemiBold),
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Canvas(Modifier.matchParentSize()) {
-                    val edge = 5.dp.toPx()
-                    drawRect(
-                        brush = Brush.verticalGradient(
-                            colors = listOf(Color.Black.copy(alpha = 0.08f), Color.Transparent),
-                            startY = 0f,
-                            endY = edge,
-                        ),
-                        topLeft = Offset.Zero,
-                        size = androidx.compose.ui.geometry.Size(size.width, edge),
-                    )
-                    drawRect(
-                        brush = Brush.verticalGradient(
-                            colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.07f)),
-                            startY = size.height - edge,
-                            endY = size.height,
-                        ),
-                        topLeft = Offset(0f, size.height - edge),
-                        size = androidx.compose.ui.geometry.Size(size.width, edge),
-                    )
-                }
-            }
-        }
+        Text(
+            title,
+            Modifier.fillMaxWidth().padding(start = 22.dp, top = 20.dp, end = 16.dp),
+            color = titleColor,
+            style = MaterialTheme.typography.titleMedium.copy(fontFamily = titleFontFamily(title), fontWeight = FontWeight.SemiBold),
+            maxLines = 3,
+            overflow = TextOverflow.Ellipsis,
+        )
         if (isPdf) {
             Surface(
                 Modifier.align(Alignment.TopEnd).padding(8.dp),

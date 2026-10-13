@@ -21,9 +21,15 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.outlined.IosShare
+import androidx.compose.material.icons.outlined.AutoFixNormal
+import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.Speed
+import androidx.compose.material.icons.outlined.TouchApp
+import androidx.compose.material.icons.outlined.ZoomIn
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -49,6 +55,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.contentDescription
@@ -83,10 +90,11 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
-private val PALETTE = listOf(0xFF1A1A1A, 0xFF1E5EFF, 0xFFD62839, 0xFF1B8A5A, 0xFFF5B301).map { it.toInt() }
-private val EXTRA_PALETTE = listOf(
-    0xFF3449B5, 0xFF008D9D, 0xFF2E7D32, 0xFFFFB300,
-    0xFFEF6C00, 0xFFD32F2F, 0xFF7E57C2, 0xFF80868B,
+private val PALETTE = listOf(
+    0xFF000000, 0xFF4A4A4A, 0xFF8E8E93, 0xFFC7C7CC, 0xFFFFFFFF, 0xFF1B2A4E,
+    0xFFD32F2F, 0xFFF57C00, 0xFFFBC02D, 0xFF388E3C, 0xFF00897B, 0xFF1976D2,
+    0xFFEF9A9A, 0xFFFFCC80, 0xFFFFF59D, 0xFFA5D6A7, 0xFF80CBC4, 0xFF90CAF9,
+    0xFF7B1FA2, 0xFFC2185B, 0xFF5D4037, 0xFFCE93D8, 0xFFF48FB1, 0xFFBCAAA4,
 ).map { it.toInt() }
 
 private data class ToolBrushSettings(val color: Int, val size: Float, val opacity: Float)
@@ -545,11 +553,17 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
                         shape = RoundedCornerShape(22.dp),
                         containerColor = MaterialTheme.colorScheme.surfaceContainer,
                     ) {
-                        Column(Modifier.padding(16.dp)) {
-                            (PALETTE + EXTRA_PALETTE).chunked(4).forEach { row ->
+                        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(
+                                "Colour",
+                                Modifier.padding(4.dp),
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                            )
+                            PALETTE.chunked(6).forEach { row ->
                                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                                     row.forEach { swatch ->
-                                        ColorDot(swatch, swatch == color, 32.dp) { chooseColor(swatch) }
+                                        ColorDot(swatch, swatch == color, 36.dp) { chooseColor(swatch) }
                                     }
                                 }
                             }
@@ -595,14 +609,16 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
                             onClick = { surface?.deleteSelection(); morePop = false },
                         )
                     }
-                    ToggleItem("Zoom box", "Magnified line for small writing", zoomBox) { zoomBox = it }
-                    ToggleItem("Finger draws", "Otherwise finger pans and zooms", fingerDraws) { fingerDraws = it }
-                    ToggleItem("Pen diagnostics", "Pressure, tilt and latency", showLab) { showLab = it }
+                    ToggleItem("Zoom box", "Magnified line for small writing", Icons.Outlined.ZoomIn, zoomBox) { zoomBox = it }
+                    ToggleItem("Finger draws", "Otherwise finger pans and zooms", Icons.Outlined.TouchApp, fingerDraws) { fingerDraws = it }
+                    ToggleItem("Pen diagnostics", "Pressure, tilt and latency", Icons.Outlined.Speed, showLab) { showLab = it }
                     DropdownMenuItem(
                         text = { Text("Pen buttons") },
+                        leadingIcon = { Icon(Icons.Outlined.Edit, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+                        trailingIcon = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
                         onClick = { morePop = false; showPenButtonSettings = true },
                     )
-                    ToggleItem("Pixel eraser", "Erase pixels instead of whole strokes", pixelEraser) { pixelEraser = it }
+                    ToggleItem("Pixel eraser", "Erase pixels instead of whole strokes", Icons.Outlined.AutoFixNormal, pixelEraser) { pixelEraser = it }
                 }
             }
         }
@@ -1075,6 +1091,7 @@ private class ShelfPainter(val scope: DrawScope, val dark: Boolean, val ink: Col
 }
 
 @Composable
+@OptIn(ExperimentalMaterial3Api::class)
 private fun BrushSettingsPopover(
     title: String,
     color: Int,
@@ -1087,6 +1104,11 @@ private fun BrushSettingsPopover(
     alwaysStraight: Boolean? = null,
     onAlwaysStraightChange: ((Boolean) -> Unit)? = null,
 ) {
+    val sliderColors = SliderDefaults.colors(
+        activeTrackColor = MaterialTheme.colorScheme.onSurface,
+        inactiveTrackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f),
+        thumbColor = MaterialTheme.colorScheme.onSurface,
+    )
     Surface(shape = RoundedCornerShape(22.dp), color = MaterialTheme.colorScheme.surfaceContainer) {
         Column(Modifier.width(264.dp).padding(16.dp)) {
         Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
@@ -1099,11 +1121,61 @@ private fun BrushSettingsPopover(
                 cap = androidx.compose.ui.graphics.StrokeCap.Round,
             )
         }
-        Text("Stroke width", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Slider(value = brushSize, onValueChange = onSizeChange, valueRange = 1f..10f)
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text("Stroke width", modifier = Modifier.weight(1f), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("%.1f".format(brushSize), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurface)
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            listOf(1.5f, 2.5f, 4f, 6f, 9f).forEach { preset ->
+                val selected = kotlin.math.abs(brushSize - preset) <= 0.25f
+                val dotSize = (4f + ((preset - 1.5f) / 7.5f) * 12f).dp
+                Box(
+                    Modifier.size(32.dp).clip(CircleShape)
+                        .clickable { onSizeChange(preset) }
+                        .then(if (selected) Modifier.border(1.5.dp, MaterialTheme.colorScheme.onSurface, CircleShape) else Modifier),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Box(Modifier.size(dotSize).background(MaterialTheme.colorScheme.onSurface, CircleShape))
+                }
+            }
+        }
+        Slider(
+            value = brushSize,
+            onValueChange = onSizeChange,
+            valueRange = 1f..10f,
+            colors = sliderColors,
+            thumb = { Box(Modifier.size(18.dp).background(MaterialTheme.colorScheme.onSurface, CircleShape)) },
+            track = {
+                SliderDefaults.Track(
+                    sliderState = it,
+                    modifier = Modifier.height(4.dp),
+                    colors = sliderColors,
+                    thumbTrackGapSize = 0.dp,
+                    drawStopIndicator = null,
+                )
+            },
+        )
         if (showOpacity) {
-            Text("Opacity", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Slider(value = opacity, onValueChange = onOpacityChange, valueRange = 0.1f..1f)
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("Opacity", modifier = Modifier.weight(1f), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("%d%%".format((opacity * 100f).toInt()), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurface)
+            }
+            Slider(
+                value = opacity,
+                onValueChange = onOpacityChange,
+                valueRange = 0.1f..1f,
+                colors = sliderColors,
+                thumb = { Box(Modifier.size(18.dp).background(MaterialTheme.colorScheme.onSurface, CircleShape)) },
+                track = {
+                    SliderDefaults.Track(
+                        sliderState = it,
+                        modifier = Modifier.height(4.dp),
+                        colors = sliderColors,
+                        thumbTrackGapSize = 0.dp,
+                        drawStopIndicator = null,
+                    )
+                },
+            )
         }
         onAlwaysStraightChange?.let { onChange ->
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -1137,10 +1209,20 @@ private fun ColorWheelButton(color: Int) {
 }
 
 @Composable
-private fun ToggleItem(title: String, subtitle: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+private fun ToggleItem(title: String, subtitle: String, leadingIcon: ImageVector, checked: Boolean, onChange: (Boolean) -> Unit) {
     DropdownMenuItem(
         text = { Column { Text(title); Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) } },
-        trailingIcon = { Switch(checked = checked, onCheckedChange = onChange) },
+        leadingIcon = { Icon(leadingIcon, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+        trailingIcon = {
+            Switch(
+                checked = checked,
+                onCheckedChange = onChange,
+                colors = SwitchDefaults.colors(
+                    checkedTrackColor = MaterialTheme.colorScheme.primary,
+                    checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
+                ),
+            )
+        },
         onClick = { onChange(!checked) },
     )
 }
