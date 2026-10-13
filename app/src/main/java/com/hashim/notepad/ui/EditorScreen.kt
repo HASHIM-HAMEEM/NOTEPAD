@@ -15,9 +15,11 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
@@ -134,6 +136,7 @@ private val PALETTE = listOf(
 ).map { it.toInt() }
 
 private data class ToolBrushSettings(val color: Int, val size: Float, val opacity: Float)
+private data class FavoritePenPreset(val tool: InkTool, val pen: PenType, val color: Int, val size: Float, val opacity: Float)
 private data class DrawingToolSelection(val tool: InkTool, val pen: PenType)
 private enum class EditorToolbarEdge { TOP, BOTTOM, START, END }
 private val TAPE_COLORS = listOf(0xFFF2D37B.toInt(), 0xFFB7D7C5.toInt(), 0xFFA9CBE0.toInt(), 0xFFDDB4C0.toInt(), 0xFFB9BBC0.toInt(), 0xFFC7A884.toInt())
@@ -168,6 +171,42 @@ private fun writeBrushSettings(
         .putFloat("$key.size", settings.size)
         .putFloat("$key.opacity", settings.opacity)
         .apply()
+}
+
+private fun readFavoritePresets(preferences: android.content.SharedPreferences): List<FavoritePenPreset> =
+    runCatching {
+        val json = org.json.JSONArray(preferences.getString("favorite_pens", "[]") ?: "[]")
+        buildList {
+            for (index in 0 until json.length()) {
+                val item = json.getJSONObject(index)
+                val tool = InkTool.valueOf(item.getString("tool"))
+                if (tool != InkTool.PEN && tool != InkTool.HIGHLIGHTER) continue
+                add(
+                    FavoritePenPreset(
+                        tool,
+                        PenType.valueOf(item.optString("pen", PenType.FOUNTAIN.name)),
+                        item.getInt("color"),
+                        item.getDouble("size").toFloat(),
+                        item.optDouble("opacity", 1.0).toFloat(),
+                    ),
+                )
+            }
+        }.take(8)
+    }.getOrDefault(emptyList())
+
+private fun writeFavoritePresets(preferences: android.content.SharedPreferences, presets: List<FavoritePenPreset>) {
+    val json = org.json.JSONArray()
+    presets.take(8).forEach { preset ->
+        json.put(
+            org.json.JSONObject()
+                .put("tool", preset.tool.name)
+                .put("pen", preset.pen.name)
+                .put("color", preset.color)
+                .put("size", preset.size.toDouble())
+                .put("opacity", preset.opacity.toDouble()),
+        )
+    }
+    preferences.edit().putString("favorite_pens", json.toString()).apply()
 }
 
 @Composable
@@ -232,6 +271,7 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
             ),
         )
     }
+    var favoritePresets by remember(preferences) { mutableStateOf(readFavoritePresets(preferences)) }
     var tapeSettings by remember(preferences) {
         mutableStateOf(readBrushSettings(preferences, "tape", ToolBrushSettings(TAPE_COLORS.first(), 24f, 1f)))
     }
@@ -422,6 +462,16 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
     var highlighterPopover by remember { mutableStateOf(false) }
     var tapePopover by remember { mutableStateOf(false) }
     var morePop by remember { mutableStateOf(false) }
+    fun addFavorite(toolType: InkTool, penType: PenType, settings: ToolBrushSettings) {
+        if (favoritePresets.size >= 8) return
+        val preset = FavoritePenPreset(toolType, penType, settings.color, settings.size, settings.opacity)
+        favoritePresets = (favoritePresets + preset).distinct().take(8)
+        writeFavoritePresets(preferences, favoritePresets)
+    }
+    fun removeFavorite(preset: FavoritePenPreset) {
+        favoritePresets = favoritePresets - preset
+        writeFavoritePresets(preferences, favoritePresets)
+    }
     val toolbarOverlayOpen = penPopover != null || highlighterPopover || tapePopover || colorPop || morePop ||
         showPenButtonSettings || editingBlock != null || newBlockAt != null
     LaunchedEffect(drawingActive, toolbarPinned, toolbarOverlayOpen) {
@@ -525,6 +575,22 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
         penPopover = null
         highlighterPopover = false
         haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+    }
+
+    fun applyFavorite(preset: FavoritePenPreset) {
+        val settings = ToolBrushSettings(preset.color, preset.size, preset.opacity)
+        if (preset.tool == InkTool.HIGHLIGHTER) {
+            selectHighlighter()
+            highlighterSettings = settings
+            writeBrushSettings(preferences, "highlighter", settings)
+        } else {
+            selectPen(preset.pen)
+            penSettings = penSettings + (preset.pen to settings)
+            writeBrushSettings(preferences, "pen.${preset.pen.name.lowercase()}", settings)
+        }
+        penPopover = null
+        highlighterPopover = false
+        tapePopover = false
     }
 
     fun chooseColor(next: Int) {
@@ -701,6 +767,10 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
                     ) {
                         BrushSettingsPopover(
                             title = type.label,
+                            favoritePresets = favoritePresets,
+                            onAddFavorite = { addFavorite(InkTool.PEN, type, settings) },
+                            onSelectFavorite = ::applyFavorite,
+                            onRemoveFavorite = ::removeFavorite,
                             color = settings.color,
                             brushSize = settings.size,
                             previewStrokeSize = settings.size * type.previewScale(),
@@ -731,6 +801,10 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
                 ) {
                     BrushSettingsPopover(
                         title = "Highlighter",
+                        favoritePresets = favoritePresets,
+                        onAddFavorite = { addFavorite(InkTool.HIGHLIGHTER, pen, highlighterSettings) },
+                        onSelectFavorite = ::applyFavorite,
+                        onRemoveFavorite = ::removeFavorite,
                         color = highlighterSettings.color,
                         brushSize = highlighterSettings.size,
                         previewStrokeSize = highlighterSettings.size * 4f,
@@ -788,9 +862,13 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
                     edge = toolbarEdge,
                     onDismissRequest = { penPopover = null },
                 ) {
-                    BrushSettingsPopover(
-                        title = PenType.CALLIGRAPHY.label,
-                        color = calligraphySettings.color,
+                        BrushSettingsPopover(
+                            title = PenType.CALLIGRAPHY.label,
+                            favoritePresets = favoritePresets,
+                            onAddFavorite = { addFavorite(InkTool.PEN, PenType.CALLIGRAPHY, calligraphySettings) },
+                            onSelectFavorite = ::applyFavorite,
+                            onRemoveFavorite = ::removeFavorite,
+                            color = calligraphySettings.color,
                         brushSize = calligraphySettings.size,
                         previewStrokeSize = calligraphySettings.size * PenType.CALLIGRAPHY.previewScale(),
                         onSizeChange = { value -> updateActiveBrushSettings { it.copy(size = value) } },
@@ -2011,6 +2089,10 @@ private class ShelfPainter(
 @OptIn(ExperimentalMaterial3Api::class)
 private fun BrushSettingsPopover(
     title: String,
+    favoritePresets: List<FavoritePenPreset>,
+    onAddFavorite: () -> Unit,
+    onSelectFavorite: (FavoritePenPreset) -> Unit,
+    onRemoveFavorite: (FavoritePenPreset) -> Unit,
     color: Int,
     brushSize: Float,
     previewStrokeSize: Float = brushSize,
@@ -2029,6 +2111,7 @@ private fun BrushSettingsPopover(
     Surface(shape = RoundedCornerShape(22.dp), color = MaterialTheme.colorScheme.surfaceContainer) {
         Column(Modifier.width(264.dp).padding(16.dp)) {
         Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        FavoritePresetsRow(favoritePresets, onAddFavorite, onSelectFavorite, onRemoveFavorite)
         Canvas(Modifier.fillMaxWidth().height(40.dp)) {
             drawLine(
                 Color(color).copy(alpha = if (showOpacity) opacity else 1f),
@@ -2100,6 +2183,50 @@ private fun BrushSettingsPopover(
                 Switch(checked = alwaysStraight == true, onCheckedChange = onChange)
             }
         }
+        }
+    }
+}
+
+@Composable
+@OptIn(ExperimentalFoundationApi::class)
+private fun FavoritePresetsRow(
+    presets: List<FavoritePenPreset>,
+    onAdd: () -> Unit,
+    onSelect: (FavoritePenPreset) -> Unit,
+    onRemove: (FavoritePenPreset) -> Unit,
+) {
+    val outlineColor = MaterialTheme.colorScheme.outlineVariant
+    val presetBackground = MaterialTheme.colorScheme.surface
+    Column(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 4.dp)) {
+        Text("Favourites", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Row(
+            Modifier.fillMaxWidth().padding(top = 4.dp).horizontalScroll(rememberScrollState()),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            presets.forEach { preset ->
+                Canvas(
+                    Modifier.size(34.dp).combinedClickable(
+                        onClick = { onSelect(preset) },
+                        onLongClick = { onRemove(preset) },
+                    ),
+                ) {
+                    val center = Offset(size.width / 2f, size.height / 2f)
+                    drawCircle(outlineColor, size.minDimension * 0.37f, center)
+                    drawCircle(Color(preset.color), size.minDimension * 0.31f, center)
+                    val innerRadius = size.minDimension * (0.07f + preset.size.coerceIn(1f, 36f) / 36f * 0.16f)
+                    drawCircle(presetBackground, innerRadius, center)
+                }
+            }
+            if (presets.size < 8) {
+                Box(
+                    Modifier.size(30.dp).border(1.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape)
+                        .clip(CircleShape).clickable(onClick = onAdd),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("+", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
         }
     }
 }
