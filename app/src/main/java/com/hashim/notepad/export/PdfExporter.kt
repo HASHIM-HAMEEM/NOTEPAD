@@ -3,6 +3,7 @@ package com.hashim.notepad.export
 import android.content.Context
 import android.content.Intent
 import android.graphics.Canvas
+import android.graphics.Color
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.pdf.PdfDocument
@@ -14,6 +15,7 @@ import com.hashim.notepad.data.PageKind
 import com.hashim.notepad.ink.InkTextures
 import com.hashim.notepad.ink.StrokeStore
 import com.hashim.notepad.ink.TextBlockPainter
+import com.hashim.notepad.ink.drawStrokes
 import com.hashim.notepad.pdf.PdfPageSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
@@ -25,6 +27,8 @@ class PdfExporter(private val context: Context, private val repo: NotePadReposit
 
     suspend fun exportNotebook(notebookId: String, title: String): File = withContext(Dispatchers.Default) {
         val pages = repo.pages(notebookId).first()
+        val paperArgb = repo.notebooks().first().firstOrNull { it.id == notebookId }?.coverColor
+            ?.let { runCatching { Color.parseColor(it) }.getOrNull() } ?: Color.WHITE
         val doc = PdfDocument()
         val renderer = CanvasStrokeRenderer.create(InkTextures.textureStore)
         val sources = HashMap<String, PdfPageSource>()
@@ -33,11 +37,11 @@ class PdfExporter(private val context: Context, private val repo: NotePadReposit
                 val info = PdfDocument.PageInfo.Builder(page.widthPt.toInt(), page.heightPt.toInt(), i + 1).create()
                 val pdfPage = doc.startPage(info)
                 val canvas = pdfPage.canvas
+                canvas.drawColor(paperArgb)
                 drawBackground(canvas, page, sources)
                 repo.loadStrokes(page.id)?.let { bytes ->
                     val strokes = runCatching { StrokeStore.decode(bytes) }.getOrDefault(emptyList())
-                    val identity = Matrix()
-                    for (s in strokes) renderer.draw(canvas, s, identity)
+                    drawStrokes(canvas, strokes, renderer, Matrix(), paperArgb)
                 }
                 for (b in repo.textBlocks(page.id).first()) TextBlockPainter.draw(canvas, b, false)
                 doc.finishPage(pdfPage)

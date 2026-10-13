@@ -27,6 +27,7 @@ import com.hashim.notepad.data.PageKind
 import com.hashim.notepad.ink.InkTextures
 import com.hashim.notepad.ink.PaperTexture
 import com.hashim.notepad.ink.StrokeStore
+import com.hashim.notepad.ink.drawStrokes
 import com.hashim.notepad.pdf.PdfPageSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -98,7 +99,7 @@ fun PagePreview(repo: NotePadRepository, page: Page?, paperColor: Color, modifie
                 n.drawBitmap(b, m, Paint(Paint.FILTER_BITMAP_FLAG))
             }
             val toScreen = Matrix().apply { setScale(scale, scale) }
-            for (s in strokes) PreviewCache.renderer.draw(n, s, toScreen)
+            drawStrokes(n, strokes, PreviewCache.renderer, toScreen, paperColor.toArgbInt())
             n.restore()
         }
     }
