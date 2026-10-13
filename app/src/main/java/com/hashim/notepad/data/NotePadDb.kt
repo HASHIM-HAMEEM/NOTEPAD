@@ -58,10 +58,19 @@ class NotePadDb(context: Context) : SQLiteOpenHelper(context, "notepad.db", null
         if (oldVersion < 7) {
             db.execSQL("alter table text_blocks add column color_argb integer")
         }
+        if (oldVersion < 8) {
+            db.execSQL("alter table notebooks add column document_kind text not null default 'notes'")
+            db.execSQL("alter table notebooks add column last_page_index integer not null default 0")
+            db.execSQL("alter table notebooks add column last_opened_at integer")
+            db.execSQL("alter table notebooks add column file_asset_id text")
+            db.execSQL("alter table notebooks add column file_mime_type text")
+            db.execSQL("alter table notebooks add column original_filename text")
+            db.execSQL("update notebooks set document_kind = 'pdf' where exists (select 1 from pages where pages.notebook_id = notebooks.id and pages.kind = 'pdf' and pages.deleted_at is null)")
+        }
     }
 
     companion object {
-        const val VERSION = 7
+        const val VERSION = 8
 
         /** Rows changed locally and not yet pushed. row_id is the page id for stroke_batches and recognition. */
         const val OUTBOX = "create table if not exists outbox (table_name text not null, row_id text not null, primary key (table_name, row_id))"
@@ -108,6 +117,12 @@ class NotePadDb(context: Context) : SQLiteOpenHelper(context, "notepad.db", null
               id text primary key,
               title text not null,
               folder_id text,
+              document_kind text not null default 'notes',
+              last_page_index integer not null default 0,
+              last_opened_at integer,
+              file_asset_id text,
+              file_mime_type text,
+              original_filename text,
               cover_color text,
               language text not null default 'ar',
               sort_order integer not null default 0,

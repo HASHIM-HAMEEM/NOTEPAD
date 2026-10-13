@@ -17,8 +17,8 @@ android {
         applicationId = "com.hashim.notepad"
         minSdk = 29
         targetSdk = 36
-        versionCode = 3
-        versionName = "0.7.0"
+        versionCode = 4
+        versionName = "0.8.0"
         ndk { abiFilters += listOf("arm64-v8a") }
     }
 
@@ -61,6 +61,7 @@ dependencies {
     implementation(libs.ink.nativeloader)
     implementation(libs.input.motionprediction)
     implementation(libs.pdfium.android)
+    implementation(libs.play.services.mlkit.document.scanner)
     implementation(libs.mlkit.digital.ink)
     implementation(libs.kotlinx.coroutines.play.services)
     implementation(libs.androidx.documentfile)

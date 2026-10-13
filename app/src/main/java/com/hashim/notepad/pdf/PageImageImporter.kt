@@ -32,16 +32,20 @@ class PageImageImporter(private val context: Context) {
         val alpha = bitmap.hasAlpha()
         val id = UUID.randomUUID().toString()
         val extension = if (alpha) "png" else "jpg"
-        val target = File(File(context.filesDir, "assets").apply { mkdirs() }, "$id.$extension")
+        val dir = File(context.filesDir, "assets").apply { mkdirs() }
+        val temporary = File(dir, "$id.$extension.part")
+        val target = File(dir, "$id.$extension")
         val digest = MessageDigest.getInstance("SHA-256")
         try {
-            target.outputStream().use { raw ->
+            temporary.outputStream().use { raw ->
                 DigestOutputStream(raw, digest).use { output ->
                     val format = if (alpha) Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG
                     check(bitmap.compress(format, if (alpha) 100 else 90, output)) { "Could not encode image" }
                 }
             }
+            check(temporary.renameTo(target)) { "Could not finalize image import" }
         } catch (error: Throwable) {
+            temporary.delete()
             target.delete()
             throw error
         } finally {
@@ -58,7 +62,15 @@ class PageImageImporter(private val context: Context) {
         )
     }
 
-    private companion object {
-        const val MAX_SIDE = 2048
+    companion object {
+        private const val MAX_SIDE = 2048
+
+        fun fitToA4(widthPx: Int, heightPx: Int): FloatArray {
+            val scale = minOf(595f / widthPx.coerceAtLeast(1), 842f / heightPx.coerceAtLeast(1))
+            val width = widthPx * scale
+            val height = heightPx * scale
+            return floatArrayOf((595f - width) / 2f, (842f - height) / 2f, width, height)
+        }
     }
+
 }

@@ -69,7 +69,9 @@ class PdfExporter(private val context: Context, private val repo: NotePadReposit
         when (page.kind) {
             PageKind.PDF -> {
                 val asset = page.assetId?.let { repo.asset(it) } ?: return
-                val src = sources.getOrPut(asset.id) { PdfPageSource(context, File(asset.localPath)) }
+                val src = sources.getOrPut(asset.id) {
+                    PdfPageSource(context, File(asset.localPath), com.hashim.notepad.pdf.PdfPasswordVault(context).read(asset.id))
+                }
                 val bmp = src.render(page.pdfPageIndex ?: 0, (page.widthPt * 2).toInt())
                 val m = Matrix().apply { setScale(page.widthPt / bmp.width, page.heightPt / bmp.height) }
                 canvas.drawBitmap(bmp, m, Paint(Paint.FILTER_BITMAP_FLAG))

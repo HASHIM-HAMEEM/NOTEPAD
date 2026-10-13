@@ -105,6 +105,14 @@ class BundleCodec(private val context: Context, private val repo: NotePadReposit
             val nb = json.getJSONObject("notebook")
             nb.put("deleted_at", JSONObject.NULL)
             nb.put("folder_id", JSONObject.NULL)
+            if (!nb.has("document_kind")) {
+                val hasPdf = json.optJSONArray("pages")?.let { pages ->
+                    (0 until pages.length()).any { pages.optJSONObject(it)?.optString("kind") == "pdf" }
+                } == true
+                nb.put("document_kind", if (hasPdf) "pdf" else "notes")
+            }
+            if (!nb.has("last_page_index")) nb.put("last_page_index", 0)
+            if (!nb.has("last_opened_at")) nb.put("last_opened_at", JSONObject.NULL)
             db.insertWithOnConflict("notebooks", null, nb.toValues(), SQLiteDatabase.CONFLICT_REPLACE)
             json.getJSONArray("assets").forEachObject { a ->
                 assetFiles[a.getString("id")]?.let { a.put("local_path", it.absolutePath) }

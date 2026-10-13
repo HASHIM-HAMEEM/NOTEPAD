@@ -1,8 +1,14 @@
 package com.hashim.notepad.ui
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import android.widget.Toast
+import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.IntentSenderRequest
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
@@ -55,13 +61,44 @@ import com.hashim.notepad.data.Tag
 import com.hashim.notepad.export.BundleCodec
 import com.hashim.notepad.export.PdfExporter
 import com.hashim.notepad.pdf.PdfImporter
+import com.hashim.notepad.pdf.FileImporter
+import com.hashim.notepad.pdf.ImportProgress
+import com.hashim.notepad.pdf.ImportStorage
+import com.hashim.notepad.pdf.PdfPasswordRequiredException
+import com.hashim.notepad.pdf.PdfPasswordIncorrectException
+import com.hashim.notepad.pdf.PageImageImporter
+import com.hashim.notepad.data.ImportedImageContent
+import com.google.mlkit.vision.documentscanner.GmsDocumentScanning
+import com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions
+import com.google.mlkit.vision.documentscanner.GmsDocumentScanningResult
 import com.hashim.notepad.recognition.InkRecognizer
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
+import java.io.File
 import java.text.DateFormat
 import java.util.Date
 
 private const val ALL_FOLDERS = "all"
+
+private fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
+}
+
+private fun showScannerFallback(host: SnackbarHostState, scope: kotlinx.coroutines.CoroutineScope, choosePhotos: () -> Unit) {
+    scope.launch {
+        if (host.showSnackbar(
+                message = "Scanner isn't available on this device",
+                actionLabel = "Choose photos",
+                withDismissAction = true,
+                duration = SnackbarDuration.Indefinite,
+            ) == SnackbarResult.ActionPerformed
+        ) choosePhotos()
+    }
+}
 
 private data class FolderSnapshot(val value: List<Folder>?)
 
@@ -76,6 +113,7 @@ fun NotebooksScreen(
     importing: Boolean,
     onImportingChanged: (Boolean) -> Unit,
     onOpen: (String) -> Unit,
+    onContinueAtPosition: (String, Int) -> Unit = { id, _ -> onOpen(id) },
     onSearch: () -> Unit,
     onAccount: () -> Unit = {},
     themeMode: ThemeMode,
@@ -85,8 +123,11 @@ fun NotebooksScreen(
     selectedId: String? = null,
     compact: Boolean = false,
     showAccountButton: Boolean = true,
+    sharedItems: List<Uri> = emptyList(),
+    sharedMimeType: String? = null,
 ) {
     val context = LocalContext.current
+    val tabletLayout = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp >= 840 && !compact
     val scope = rememberCoroutineScope()
     val haptics = LocalHapticFeedback.current
     val notebooks by repo.notebooks().collectAsState(initial = emptyList())
@@ -96,6 +137,9 @@ fun NotebooksScreen(
     val tags by repo.tags().collectAsState(initial = emptyList())
     val libraryPrefs = remember(context) { context.getSharedPreferences("notepad", 0) }
     var selectedFolderId by remember { mutableStateOf(libraryPrefs.getString("library_folder", ALL_FOLDERS) ?: ALL_FOLDERS) }
+    var librarySort by remember {
+        mutableStateOf(runCatching { LibrarySort.valueOf(libraryPrefs.getString("library_sort", "RECENT") ?: "RECENT") }.getOrDefault(LibrarySort.RECENT))
+    }
     var selectedTagId by remember { mutableStateOf<String?>(null) }
     var showAppearance by remember { mutableStateOf(false) }
     var showNew by remember { mutableStateOf(false) }
@@ -112,7 +156,49 @@ fun NotebooksScreen(
     var tagsForNotebook by remember { mutableStateOf<Notebook?>(null) }
     var selectedTagIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var newTagName by remember { mutableStateOf("") }
+    var importProgress by remember { mutableStateOf<ImportProgress?>(null) }
+    var importJob by remember { mutableStateOf<Job?>(null) }
+    var showSaveShared by remember { mutableStateOf(false) }
+    var sharedTitle by remember { mutableStateOf("") }
+    var sharedFolderId by remember { mutableStateOf<String?>(null) }
+    var passwordUri by remember { mutableStateOf<Uri?>(null) }
+    var passwordEntry by remember { mutableStateOf("") }
+    var passwordFolderId by remember { mutableStateOf<String?>(null) }
+    var passwordTitle by remember { mutableStateOf<String?>(null) }
+    var passwordFolderPending by remember { mutableStateOf(false) }
+    val snackbarHostState = remember { SnackbarHostState() }
+    val pageImageImporter = remember(context) { PageImageImporter(context) }
+    val fileImporter = remember(context, repo) { FileImporter(context, repo) }
+    fun openStoredFile(notebook: Notebook) {
+        scope.launch {
+            val asset = notebook.fileAssetId?.let { repo.asset(it) }
+            if (asset == null) {
+                snackbarHostState.showSnackbar("This file is no longer available")
+                return@launch
+            }
+            val contentUri = androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.files", File(asset.localPath))
+            val viewIntent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+                setDataAndType(contentUri, notebook.fileMimeType ?: "*/*")
+                addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            if (context.packageManager.resolveActivity(viewIntent, 0) == null) {
+                snackbarHostState.showSnackbar("No app can open this file")
+            } else {
+                runCatching { context.startActivity(android.content.Intent.createChooser(viewIntent, "Open file")) }
+                    .onFailure { snackbarHostState.showSnackbar("No app can open this file") }
+            }
+        }
+    }
     LaunchedEffect(selectedFolderId) { libraryPrefs.edit().putString("library_folder", selectedFolderId).apply() }
+    LaunchedEffect(sharedItems) {
+        if (sharedItems.isNotEmpty()) {
+            val filename = runCatching { ImportStorage(context).displayName(sharedItems.first()) }.getOrDefault("Imported file")
+            sharedTitle = filename.substringBeforeLast('.', filename)
+            sharedFolderId = selectedFolderId.takeUnless { it == ALL_FOLDERS }
+            showSaveShared = true
+        }
+    }
+    LaunchedEffect(librarySort) { libraryPrefs.edit().putString("library_sort", librarySort.name).apply() }
     LaunchedEffect(folderSnapshot, selectedFolderId) {
         val loadedFolders = folderSnapshot.value ?: return@LaunchedEffect
         if (selectedFolderId != ALL_FOLDERS && loadedFolders.none { it.id == selectedFolderId }) selectedFolderId = ALL_FOLDERS
@@ -126,16 +212,145 @@ fun NotebooksScreen(
                 (selectedTagId == null || selectedTagId in notebook.tagIds)
         }
     }
+    val sortedNotebooks = remember(visibleNotebooks, librarySort) { sortNotebooks(visibleNotebooks, librarySort) }
 
-    val pickPdf = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        uri ?: return@rememberLauncherForActivityResult
-        scope.launch {
+    val pickPdf = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (uris.isEmpty()) return@rememberLauncherForActivityResult
+        importJob = scope.launch {
             onImportingChanged(true)
-            runCatching { importer.importAsNotebook(uri) }
-                .onSuccess { onOpen(it) }
-                .onFailure { Toast.makeText(context, "Could not import PDF: ${it.message}", Toast.LENGTH_LONG).show() }
-            onImportingChanged(false)
+            try {
+                var firstImportedId: String? = null
+                for (uri in uris) {
+                    try {
+                        val id = importer.importAsNotebook(uri, selectedFolderId.takeUnless { it == ALL_FOLDERS }) { importProgress = it }
+                        if (firstImportedId == null) firstImportedId = id
+                    } catch (error: Throwable) {
+                        if (error is kotlinx.coroutines.CancellationException) throw error
+                        if (error is PdfPasswordRequiredException) {
+                            passwordUri = uri
+                            passwordEntry = ""
+                            passwordFolderId = selectedFolderId.takeUnless { it == ALL_FOLDERS }
+                            passwordTitle = null
+                            passwordFolderPending = true
+                            break
+                        }
+                        Toast.makeText(context, error.message ?: "Could not import PDF", Toast.LENGTH_LONG).show()
+                    }
+                }
+                if (passwordUri == null) firstImportedId?.let { onContinueAtPosition(it, 0) }
+            } finally {
+                importProgress = null
+                onImportingChanged(false)
+            }
         }
+    }
+    val pickImages = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(20)) { uris ->
+        if (uris.isEmpty()) return@rememberLauncherForActivityResult
+        importJob = scope.launch {
+            onImportingChanged(true)
+            val imports = mutableListOf<ImportedImageContent>()
+            var committed = false
+            try {
+                uris.forEachIndexed { index, uri ->
+                    importProgress = ImportProgress("image ${index + 1} of ${uris.size}", (index * 100 / uris.size).coerceIn(0, 99))
+                    val image = pageImageImporter.import(uri)
+                    val fit = PageImageImporter.fitToA4(image.widthPx, image.heightPx)
+                    imports += ImportedImageContent(image.asset, fit[0], fit[1], fit[2], fit[3])
+                }
+                val id = kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                    repo.createImageNotebook(imports.firstOrNull()?.asset?.name?.substringBeforeLast('.') ?: "Image notes", imports, selectedFolderId.takeUnless { it == ALL_FOLDERS })
+                        .also { committed = true }
+                }
+                importProgress = null
+                onContinueAtPosition(id, 0)
+            } catch (error: Throwable) {
+                if (!committed) imports.forEach { File(it.asset.localPath).delete() }
+                if (error is kotlinx.coroutines.CancellationException) throw error
+                Toast.makeText(context, error.message ?: "Could not import images", Toast.LENGTH_LONG).show()
+            } finally {
+                importProgress = null
+                onImportingChanged(false)
+            }
+        }
+    }
+    val pickAnyFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (uris.isEmpty()) return@rememberLauncherForActivityResult
+        importJob = scope.launch {
+            onImportingChanged(true)
+            try {
+                for (uri in uris) {
+                    runCatching {
+                        fileImporter.import(uri, selectedFolderId.takeUnless { it == ALL_FOLDERS }) { importProgress = it }
+                    }.onFailure {
+                        if (it is CancellationException) throw it
+                        Toast.makeText(context, it.message ?: "Could not import file", Toast.LENGTH_LONG).show()
+                    }
+                }
+            } finally {
+                importProgress = null
+                onImportingChanged(false)
+            }
+        }
+    }
+    val scannerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val scan = GmsDocumentScanningResult.fromActivityResultIntent(result.data)
+            val pdfUri = scan?.pdf?.uri
+            val imageUris = scan?.pages.orEmpty().map { it.imageUri }
+            if (pdfUri != null || imageUris.isNotEmpty()) importJob = scope.launch {
+                onImportingChanged(true)
+                try {
+                    val id = if (pdfUri != null) {
+                        importer.importAsNotebook(pdfUri, selectedFolderId.takeUnless { it == ALL_FOLDERS }) { importProgress = it }
+                    } else {
+                        val images = mutableListOf<ImportedImageContent>()
+                        var committed = false
+                        try {
+                            imageUris.forEachIndexed { index, uri ->
+                                importProgress = ImportProgress("scan ${index + 1} of ${imageUris.size}", (index * 100 / imageUris.size).coerceIn(0, 99))
+                                val image = pageImageImporter.import(uri)
+                                val fit = PageImageImporter.fitToA4(image.widthPx, image.heightPx)
+                                images += ImportedImageContent(image.asset, fit[0], fit[1], fit[2], fit[3])
+                            }
+                            kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                                repo.createImageNotebook("Scanned notes", images, selectedFolderId.takeUnless { it == ALL_FOLDERS })
+                                    .also { committed = true }
+                            }
+                        } catch (error: Throwable) {
+                            if (!committed) images.forEach { File(it.asset.localPath).delete() }
+                            throw error
+                        }
+                    }
+                    onContinueAtPosition(id, 0)
+                } catch (error: Throwable) {
+                    if (error is kotlinx.coroutines.CancellationException) throw error
+                    Toast.makeText(context, error.message ?: "Scan import failed", Toast.LENGTH_LONG).show()
+                } finally {
+                    importProgress = null
+                    onImportingChanged(false)
+                }
+            } else showScannerFallback(snackbarHostState, scope) { pickImages.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
+        } else {
+            showScannerFallback(snackbarHostState, scope) { pickImages.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
+        }
+    }
+    fun startScanner() {
+        val activity = context.findActivity()
+        if (activity == null) {
+            showScannerFallback(snackbarHostState, scope) { pickImages.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
+            return
+        }
+        val options = GmsDocumentScannerOptions.Builder()
+            .setScannerMode(GmsDocumentScannerOptions.SCANNER_MODE_FULL)
+            .setResultFormats(GmsDocumentScannerOptions.RESULT_FORMAT_PDF, GmsDocumentScannerOptions.RESULT_FORMAT_JPEG)
+            .setPageLimit(100)
+            .setGalleryImportAllowed(true)
+            .build()
+        GmsDocumentScanning.getClient(options).getStartScanIntent(activity)
+            .addOnSuccessListener { scannerLauncher.launch(IntentSenderRequest.Builder(it).build()) }
+            .addOnFailureListener {
+                showScannerFallback(snackbarHostState, scope) { pickImages.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
+            }
     }
     val pickBundle = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri ?: return@rememberLauncherForActivityResult
@@ -149,28 +364,41 @@ fun NotebooksScreen(
     }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         containerColor = MaterialTheme.colorScheme.background,
         floatingActionButton = {
             if (!compact) ExtendedFloatingActionButton(
                 onClick = { showNew = true },
                 icon = { Icon(Icons.Default.Add, null) },
-                text = { Text("New") },
+                text = { Text("Import") },
                 containerColor = MaterialTheme.colorScheme.primary,
                 contentColor = MaterialTheme.colorScheme.onPrimary,
                 shape = MaterialTheme.shapes.large,
             )
         },
     ) { padding ->
+        Box(Modifier.fillMaxSize().padding(padding)) {
+        if (tabletLayout) SubjectSpineColumn(
+            folders = folders,
+            selectedFolderId = selectedFolderId,
+            onSelect = { selectedFolderId = it },
+            onAdd = { showCreateFolder = true },
+            onLongPress = { folderActionsFor = it },
+            modifier = Modifier.align(Alignment.TopStart).width(82.dp).fillMaxHeight(),
+        )
         LazyVerticalGrid(
             columns = GridCells.Adaptive(200.dp),
-            modifier = Modifier.fillMaxSize().padding(padding),
+            modifier = Modifier.fillMaxSize().padding(start = if (tabletLayout) 82.dp else 0.dp),
             contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 112.dp),
             horizontalArrangement = Arrangement.spacedBy(16.dp),
             verticalArrangement = Arrangement.spacedBy(20.dp),
         ) {
             item(span = { GridItemSpan(maxLineSpan) }) {
                 LibraryHeader(
-                    count = visibleNotebooks.size, compact = compact, importing = importing, showAccountButton = showAccountButton,
+                    count = visibleNotebooks.size, compact = compact, importing = importing, progress = importProgress,
+                    onCancelImport = { importJob?.cancel() }, showAccountButton = showAccountButton,
+                    librarySort = librarySort, onSortChange = { librarySort = it },
+                    tabletLayout = tabletLayout,
                     onSearch = onSearch, onAccount = onAccount, onAppearance = { showAppearance = true },
                     onNew = { showNew = true },
                     folders = folders, tags = tags, selectedFolderId = selectedFolderId, selectedTagId = selectedTagId,
@@ -178,11 +406,11 @@ fun NotebooksScreen(
                     onAddFolder = { showCreateFolder = true }, onFolderLongPress = { folderActionsFor = it },
                 )
             }
-            if (visibleNotebooks.size >= 4) {
-                val recent = visibleNotebooks.sortedByDescending { it.updatedAt }.take(3)
+            val recent = notebooks.filter { it.lastOpenedAt != null }.sortedByDescending { it.lastOpenedAt }.take(3)
+            if (recent.isNotEmpty()) {
                 item(span = { GridItemSpan(maxLineSpan) }) {
                     Column {
-                        Text("Recent", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                        Text("Continue reading", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                         Spacer(Modifier.height(12.dp))
                         Row(
                             Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
@@ -190,8 +418,8 @@ fun NotebooksScreen(
                         ) {
                             recent.forEach { nb ->
                                 NotebookCard(
-                                    repo, nb, tags, nb.id == selectedId, compact, Modifier.width(208.dp),
-                                    onOpen = { onOpen(nb.id) },
+                                repo, nb, tags, nb.id == selectedId, compact, Modifier.width(164.dp),
+                                    onOpen = { onContinueAtPosition(nb.id, nb.lastPageIndex) },
                                     onMore = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); actionsFor = nb },
                                 )
                             }
@@ -199,7 +427,7 @@ fun NotebooksScreen(
                     }
                 }
                 item(span = { GridItemSpan(maxLineSpan) }) {
-                    Text("All notebooks", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                    Text("Your library", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                 }
             }
             if (notebooks.isEmpty() && !importing) item(span = { GridItemSpan(maxLineSpan) }) {
@@ -208,24 +436,30 @@ fun NotebooksScreen(
             if (notebooks.isNotEmpty() && visibleNotebooks.isEmpty()) item(span = { GridItemSpan(maxLineSpan) }) {
                 Text("No notebooks match these filters.", modifier = Modifier.padding(vertical = 24.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            items(visibleNotebooks, key = { it.id }) { nb ->
+            items(sortedNotebooks, key = { it.id }) { nb ->
                 NotebookCard(
                     repo = repo, notebook = nb, tags = tags, selected = nb.id == selectedId, compact = compact,
                     modifier = Modifier.animateItem(),
-                    onOpen = { onOpen(nb.id) },
+                    onOpen = { if (nb.documentKind == "file") openStoredFile(nb) else onContinueAtPosition(nb.id, nb.lastPageIndex) },
                     onMore = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); actionsFor = nb },
                 )
             }
+        }
         }
     }
 
     // ---- sheets & dialogs
     if (showNew) ModalBottomSheet(onDismissRequest = { showNew = false }, shape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp), containerColor = MaterialTheme.colorScheme.surfaceContainer) {
-        SheetTitle("New notebook")
-        SheetRow(Icons.Outlined.Description, "Blank notebook", "Plain, lined or grid pages") { showNew = false; showCreate = true }
-        SheetRow(Icons.Outlined.PictureAsPdf, "From a PDF", "Write directly on a textbook") { showNew = false; pickPdf.launch(arrayOf("application/pdf")) }
-        SheetRow(Icons.Outlined.Unarchive, "Import .notepad.zip", "A notebook exported from NotePad") { showNew = false; pickBundle.launch(arrayOf("application/zip", "application/octet-stream")) }
-        Spacer(Modifier.height(24.dp))
+        Column(Modifier.fillMaxWidth().navigationBarsPadding().verticalScroll(rememberScrollState())) {
+            SheetTitle("Import")
+            SheetRow(Icons.Outlined.PictureAsPdf, "PDF", "Add one or more lecture notes and books") { showNew = false; pickPdf.launch(arrayOf("application/pdf")) }
+            SheetRow(Icons.Outlined.Image, "Images", "Turn photos into notebook pages") { showNew = false; pickImages.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
+            SheetRow(Icons.Outlined.DocumentScanner, "Scan", "Capture a multipage document") { showNew = false; startScanner() }
+            SheetRow(Icons.Outlined.AttachFile, "Any file", "Keep a copy and open it in another app") { showNew = false; pickAnyFile.launch(arrayOf("*/*")) }
+            SheetRow(Icons.Outlined.Description, "Blank notebook", "Plain, lined or grid pages") { showNew = false; showCreate = true }
+            SheetRow(Icons.Outlined.Unarchive, "Import .notepad.zip", "A notebook exported from NotePad") { showNew = false; pickBundle.launch(arrayOf("application/zip", "application/octet-stream")) }
+            Spacer(Modifier.height(24.dp))
+        }
     }
 
     actionsFor?.let { nb ->
@@ -241,7 +475,11 @@ fun NotebooksScreen(
                 Column { Text(nb.title, style = MaterialTheme.typography.titleLarge.copy(fontFamily = titleFontFamily(nb.title)), maxLines = 1, overflow = TextOverflow.Ellipsis); Text(meta(nb), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
             }
             HorizontalDivider(Modifier.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.outlineVariant)
-            SheetRow(Icons.Outlined.FolderOpen, "Move to folder", "Choose a folder or create one") {
+            SheetRow(Icons.Outlined.GridView, "Browse pages", "Open the notebook page grid") {
+                actionsFor = null
+                onOpen(nb.id)
+            }
+            SheetRow(Icons.Outlined.FolderOpen, "Move to subject", "Choose a subject or create one") {
                 actionsFor = null
                 moveNotebookFor = nb
             }
@@ -278,17 +516,149 @@ fun NotebooksScreen(
         }
     }
 
-    if (showCreate) NameDialog(title = "New notebook", initial = "", confirm = "Create", onDismiss = { showCreate = false }) { name ->
-        scope.launch { val id = repo.createNotebook(name, null); repo.addPage(id, PageKind.BLANK); showCreate = false; onOpen(id) }
+    if (passwordUri != null) AlertDialog(
+        onDismissRequest = { passwordUri = null; passwordFolderId = null; passwordTitle = null; passwordFolderPending = false },
+        title = { Text("Password-protected PDF") },
+        text = {
+            OutlinedTextField(
+                value = passwordEntry,
+                onValueChange = { passwordEntry = it },
+                label = { Text("PDF password") },
+                singleLine = true,
+                visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+            )
+        },
+        confirmButton = {
+            TextButton(enabled = passwordEntry.isNotEmpty(), onClick = {
+                val uri = passwordUri ?: return@TextButton
+                importJob = scope.launch {
+                    onImportingChanged(true)
+                    try {
+                        val id = importer.importAsNotebook(
+                            uri,
+                            if (passwordFolderPending) passwordFolderId else selectedFolderId.takeUnless { it == ALL_FOLDERS },
+                            passwordTitle,
+                            passwordEntry,
+                        ) { importProgress = it }
+                        passwordUri = null
+                        passwordFolderId = null
+                        passwordTitle = null
+                        passwordFolderPending = false
+                        onContinueAtPosition(id, 0)
+                    } catch (error: Throwable) {
+                        if (error is kotlinx.coroutines.CancellationException) throw error
+                        if (error is PdfPasswordIncorrectException) Toast.makeText(context, "Incorrect PDF password", Toast.LENGTH_LONG).show()
+                        else Toast.makeText(context, error.message ?: "Could not open PDF", Toast.LENGTH_LONG).show()
+                    } finally {
+                        importProgress = null
+                        onImportingChanged(false)
+                    }
+                }
+            }) { Text("Open") }
+        },
+        dismissButton = { TextButton(onClick = { passwordUri = null; passwordFolderId = null; passwordTitle = null; passwordFolderPending = false }) { Text("Cancel") } },
+    )
+
+    if (showSaveShared) ModalBottomSheet(onDismissRequest = { showSaveShared = false }) {
+        SheetTitle("Save to NotePad")
+        OutlinedTextField(
+            value = sharedTitle,
+            onValueChange = { sharedTitle = it },
+            label = { Text("Title") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+        )
+        Spacer(Modifier.height(12.dp))
+        Text("Subject", Modifier.padding(horizontal = 20.dp), style = MaterialTheme.typography.labelLarge)
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(selected = sharedFolderId == null, onClick = { sharedFolderId = null }, label = { Text("All") })
+            folders.forEach { folder ->
+                FilterChip(selected = sharedFolderId == folder.id, onClick = { sharedFolderId = folder.id }, label = { Text(folder.name) })
+            }
+        }
+        Button(
+            onClick = {
+                val folder = sharedFolderId
+                showSaveShared = false
+                importJob = scope.launch {
+                    onImportingChanged(true)
+                    try {
+                        var firstOpenedId: String? = null
+                        val imageUris = sharedItems.filter { uri ->
+                            val name = ImportStorage(context).displayName(uri)
+                            context.contentResolver.getType(uri)?.startsWith("image/") == true ||
+                                name.substringAfterLast('.', "").lowercase() in setOf("png", "jpg", "jpeg", "webp")
+                        }
+                        if (imageUris.isNotEmpty()) {
+                            val images = mutableListOf<ImportedImageContent>()
+                            var committed = false
+                            try {
+                                imageUris.forEachIndexed { index, uri ->
+                                    importProgress = ImportProgress("image ${index + 1} of ${imageUris.size}", (index * 100 / imageUris.size).coerceIn(0, 99))
+                                    val image = pageImageImporter.import(uri)
+                                    val fit = PageImageImporter.fitToA4(image.widthPx, image.heightPx)
+                                    images += ImportedImageContent(image.asset, fit[0], fit[1], fit[2], fit[3])
+                                }
+                                val id = kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                                    repo.createImageNotebook(sharedTitle.ifBlank { "Image notes" }, images, folder).also { committed = true }
+                                }
+                                if (firstOpenedId == null) firstOpenedId = id
+                            } catch (error: Throwable) {
+                                if (!committed) images.forEach { File(it.asset.localPath).delete() }
+                                throw error
+                            }
+                        }
+                        sharedItems.filterNot { it in imageUris }.forEachIndexed { index, uri ->
+                            if (passwordUri != null) return@forEachIndexed
+                            val name = ImportStorage(context).displayName(uri).ifBlank { "Shared file" }
+                            val mime = context.contentResolver.getType(uri).orEmpty()
+                            val title = sharedTitle.takeIf { index == 0 && it.isNotBlank() }
+                            val id = try {
+                                when {
+                                    mime == "application/pdf" || name.endsWith(".pdf", true) ->
+                                        importer.importAsNotebook(uri, folder, title) { importProgress = it }
+                                    else -> fileImporter.import(uri, folder, title) { importProgress = it }
+                                }
+                            } catch (error: PdfPasswordRequiredException) {
+                                passwordUri = uri
+                                passwordEntry = ""
+                                passwordFolderId = folder
+                                passwordTitle = title
+                                passwordFolderPending = true
+                                return@forEachIndexed
+                            }
+                            if (firstOpenedId == null && (mime == "application/pdf" || name.endsWith(".pdf", true))) firstOpenedId = id
+                        }
+                        if (passwordUri == null) firstOpenedId?.let { onContinueAtPosition(it, 0) }
+                    } catch (error: Throwable) {
+                        if (error is kotlinx.coroutines.CancellationException) throw error
+                        Toast.makeText(context, error.message ?: "Could not save shared items", Toast.LENGTH_LONG).show()
+                    } finally {
+                        importProgress = null
+                        onImportingChanged(false)
+                    }
+                }
+            },
+            enabled = sharedTitle.isNotBlank(),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp),
+        ) { Text("Save ${sharedItems.size} item${if (sharedItems.size == 1) "" else "s"}") }
+        Spacer(Modifier.height(24.dp))
     }
-    if (showCreateFolder) NameDialog(
-        title = "New folder",
-        initial = "",
-        confirm = "Create",
-        onDismiss = { showCreateFolder = false; newFolderForNotebook = null },
-    ) { name ->
+
+    if (showCreate) NameDialog(title = "New notebook", initial = "", confirm = "Create", onDismiss = { showCreate = false }) { name ->
         scope.launch {
-            val id = repo.createFolder(name)
+            val id = repo.createNotebook(name, null, selectedFolderId.takeUnless { it == ALL_FOLDERS })
+            repo.addPage(id, PageKind.BLANK)
+            showCreate = false
+            onOpen(id)
+        }
+    }
+    if (showCreateFolder) SubjectDialog(
+        title = "New subject", initial = "", initialColor = null,
+        onDismiss = { showCreateFolder = false; newFolderForNotebook = null },
+    ) { name, color ->
+        scope.launch {
+            val id = repo.createFolder(name, color)
             val notebook = newFolderForNotebook
             if (notebook == null) {
                 selectedFolderId = id
@@ -303,7 +673,7 @@ fun NotebooksScreen(
         AlertDialog(
             onDismissRequest = { folderActionsFor = null },
             title = { Text(folder.name) },
-            text = { Text("Folder actions") },
+            text = { Text("Subject actions") },
             confirmButton = {
                 TextButton(onClick = { renameFolderFor = folder; folderActionsFor = null }) { Text("Rename") }
             },
@@ -316,8 +686,8 @@ fun NotebooksScreen(
         )
     }
     renameFolderFor?.let { folder ->
-        NameDialog(title = "Rename folder", initial = folder.name, confirm = "Save", onDismiss = { renameFolderFor = null }) { name ->
-            scope.launch { repo.renameFolder(folder.id, name) }
+        SubjectDialog(title = "Rename subject", initial = folder.name, initialColor = folder.color, onDismiss = { renameFolderFor = null }) { name, color ->
+            scope.launch { repo.renameFolder(folder.id, name, color) }
             renameFolderFor = null
         }
     }
@@ -325,7 +695,7 @@ fun NotebooksScreen(
         AlertDialog(
             onDismissRequest = { deleteFolderFor = null },
             title = { Text("Delete “${folder.name}”?") },
-            text = { Text("The notebooks in this folder will be kept and moved to All.") },
+            text = { Text("The notebooks in this subject will be kept and moved to All.") },
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -342,7 +712,7 @@ fun NotebooksScreen(
     moveNotebookFor?.let { notebook ->
         AlertDialog(
             onDismissRequest = { moveNotebookFor = null },
-            title = { Text("Move to folder") },
+            title = { Text("Move to subject") },
             text = {
                 Column(Modifier.fillMaxWidth().heightIn(max = 400.dp).verticalScroll(rememberScrollState())) {
                     TextButton(
@@ -351,7 +721,7 @@ fun NotebooksScreen(
                             moveNotebookFor = null
                         },
                         modifier = Modifier.fillMaxWidth(),
-                    ) { Text("No folder", Modifier.fillMaxWidth()) }
+                    ) { Text("No subject", Modifier.fillMaxWidth()) }
                     folders.forEach { folder ->
                         TextButton(
                             onClick = {
@@ -368,7 +738,7 @@ fun NotebooksScreen(
                             showCreateFolder = true
                         },
                         modifier = Modifier.fillMaxWidth(),
-                    ) { Text("New folder…", Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.primary) }
+                    ) { Text("New subject…", Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.primary) }
                 }
             },
             confirmButton = { TextButton(onClick = { moveNotebookFor = null }) { Text("Cancel") } },
@@ -474,6 +844,11 @@ private fun LibraryHeader(
     count: Int,
     compact: Boolean,
     importing: Boolean,
+    progress: ImportProgress?,
+    onCancelImport: () -> Unit,
+    librarySort: LibrarySort,
+    onSortChange: (LibrarySort) -> Unit,
+    tabletLayout: Boolean,
     showAccountButton: Boolean,
     onSearch: () -> Unit,
     onAccount: () -> Unit,
@@ -488,21 +863,30 @@ private fun LibraryHeader(
     onAddFolder: () -> Unit,
     onFolderLongPress: (Folder) -> Unit,
 ) {
+    var sortExpanded by remember { mutableStateOf(false) }
     Column(Modifier.statusBarsPadding().padding(top = 12.dp, bottom = 4.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text("Library", style = if (compact) MaterialTheme.typography.headlineSmall else MaterialTheme.typography.displaySmall)
                 Text(
-                    if (importing) "Importing…" else if (count == 0) "Nothing here yet" else "$count notebook${if (count == 1) "" else "s"}",
+                    if (importing) "Importing…" else if (count == 0) "Nothing here yet" else "$count item${if (count == 1) "" else "s"}",
                     style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            }
+            Box {
+                IconButton(onClick = { sortExpanded = true }) { Icon(Icons.Outlined.Sort, "Sort") }
+                DropdownMenu(expanded = sortExpanded, onDismissRequest = { sortExpanded = false }) {
+                    listOf(LibrarySort.RECENT to "Recent", LibrarySort.NAME to "Name", LibrarySort.DATE_ADDED to "Date added").forEach { (sort, label) ->
+                        DropdownMenuItem(text = { Text(label) }, onClick = { onSortChange(sort); sortExpanded = false })
+                    }
+                }
             }
             if (compact) IconButton(onClick = onNew) { Icon(Icons.Default.Add, "New") }
             IconButton(onClick = onAppearance) { Icon(Icons.Outlined.Palette, "Appearance") }
             if (showAccountButton) IconButton(onClick = onAccount) { Icon(Icons.Outlined.AccountCircle, "Sync & account") }
         }
         Spacer(Modifier.height(8.dp))
-        Row(
+        if (!tabletLayout) Row(
             Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -517,8 +901,9 @@ private fun LibraryHeader(
                 val selected = selectedFolderId == folder.id
                 Surface(
                     shape = CircleShape,
-                    color = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh,
-                    border = if (selected) BorderStroke(1.dp, MaterialTheme.colorScheme.primary) else null,
+                    color = folder.color?.let { runCatching { Color(android.graphics.Color.parseColor(it)) }.getOrNull() }?.let { if (selected) it else it.copy(alpha = 0.18f) }
+                        ?: if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh,
+                    border = null,
                     modifier = Modifier.combinedClickable(
                         onClick = { onSelectFolder(folder.id) },
                         onLongClick = { onFolderLongPress(folder) },
@@ -528,7 +913,9 @@ private fun LibraryHeader(
                         folder.name,
                         Modifier.padding(horizontal = 16.dp, vertical = 9.dp),
                         style = MaterialTheme.typography.labelLarge,
-                        color = if (selected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurface,
+                        color = folder.color?.let { runCatching { Color(android.graphics.Color.parseColor(it)) }.getOrNull() }
+                            ?.takeIf { selected && android.graphics.Color.luminance(it.toArgb()) < 0.56f }?.let { Color.White }
+                            ?: if (selected && folder.color != null) Color(0xFF292421) else if (selected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
                     )
                 }
@@ -536,7 +923,7 @@ private fun LibraryHeader(
             FilterChip(
                 selected = false,
                 onClick = onAddFolder,
-                label = { Icon(Icons.Default.Add, contentDescription = "New folder", modifier = Modifier.size(18.dp)) },
+                label = { Text("+ New subject") },
                 shape = CircleShape,
             )
         }
@@ -567,8 +954,71 @@ private fun LibraryHeader(
                 Text("Search handwriting, text and PDFs", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
-        AnimatedVisibility(importing, enter = fadeIn(), exit = fadeOut()) { LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 10.dp).clip(CircleShape)) }
+        AnimatedVisibility(importing || progress != null, enter = fadeIn(), exit = fadeOut()) {
+            Column(Modifier.fillMaxWidth().padding(top = 10.dp)) {
+                if (progress != null) Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(importProgressLabel(progress.filename, progress.percent), Modifier.weight(1f), style = MaterialTheme.typography.labelMedium)
+                    IconButton(onClick = onCancelImport, modifier = Modifier.size(32.dp)) { Icon(Icons.Default.Close, "Cancel import") }
+                }
+                LinearProgressIndicator(
+                    progress = { progress?.percent?.div(100f) ?: 0f },
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp).clip(CircleShape),
+                )
+            }
+        }
         Spacer(Modifier.height(8.dp))
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun SubjectSpineColumn(
+    folders: List<Folder>,
+    selectedFolderId: String,
+    onSelect: (String) -> Unit,
+    onAdd: () -> Unit,
+    onLongPress: (Folder) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier.verticalScroll(rememberScrollState()).padding(vertical = 18.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        SubjectSpine("All", selectedFolderId == ALL_FOLDERS, MaterialTheme.colorScheme.primary) { onSelect(ALL_FOLDERS) }
+        folders.forEach { folder ->
+            val color = runCatching { Color(android.graphics.Color.parseColor(folder.color ?: "#75885C")) }.getOrDefault(Color(0xFF75885C))
+            Box(Modifier.combinedClickable(onClick = { onSelect(folder.id) }, onLongClick = { onLongPress(folder) })) {
+                SubjectSpine(folder.name, selectedFolderId == folder.id, color) { onSelect(folder.id) }
+            }
+        }
+        SubjectSpine("+ New subject", false, MaterialTheme.colorScheme.surfaceContainerHigh, onAdd)
+    }
+}
+
+@Composable
+private fun SubjectSpine(label: String, selected: Boolean, color: Color, onClick: () -> Unit) {
+    val base = if (selected) color else color.copy(alpha = 0.24f)
+    val foreground = if (selected && android.graphics.Color.luminance(color.toArgb()) < 0.55f) Color.White else Color(0xFF282622)
+    Box(
+        Modifier
+            .offset(x = if (selected) 4.dp else 0.dp)
+            .width(if (selected) 70.dp else 62.dp)
+            .height(108.dp)
+            .clip(RoundedCornerShape(topEnd = 12.dp, bottomEnd = 12.dp))
+            .background(base)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            label,
+            Modifier.width(96.dp).height(24.dp).graphicsLayer { rotationZ = -90f },
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+            color = foreground,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 
@@ -598,15 +1048,50 @@ private fun NotebookCard(
                 .then(if (selected) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, radius) else Modifier)
                 .combinedClickable(interactionSource = interaction, indication = null, onClick = onOpen, onLongClick = onMore),
         ) {
-            BookCover(notebook.title, cover, pages.any { it.kind == PageKind.PDF }, Modifier.fillMaxSize(), tagNames)
+            when {
+                notebook.documentKind == "file" -> FileCover(notebook, Modifier.fillMaxSize())
+                pages.any { it.kind == PageKind.PDF } -> Box(Modifier.fillMaxSize()) {
+                    Box(Modifier.fillMaxSize().padding(start = 2.dp, top = 4.dp).background(Color(0xFFE7E1D7), radius))
+                    Box(Modifier.fillMaxSize().padding(start = 1.dp, top = 2.dp).background(Color(0xFFF3F0E9), radius))
+                    PagePreview(repo, pages.firstOrNull(), Color(0xFFFFFEFA), Modifier.fillMaxSize().padding(end = 2.dp, bottom = 4.dp))
+                    Box(Modifier.fillMaxHeight().width(9.dp).background(Color.Black.copy(alpha = 0.12f)))
+                    Surface(Modifier.align(Alignment.TopEnd).padding(8.dp), color = Color(0xFFB4532A), shape = RoundedCornerShape(4.dp)) {
+                        Text("PDF", Modifier.padding(horizontal = 7.dp, vertical = 4.dp), color = Color.White, style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+                else -> BookCover(notebook.title, cover, false, Modifier.fillMaxSize(), tagNames)
+            }
         }
         Spacer(Modifier.height(10.dp))
         Row(verticalAlignment = Alignment.Top) {
             Column(Modifier.weight(1f)) {
                 Text(notebook.title, style = MaterialTheme.typography.titleSmall.copy(fontFamily = titleFontFamily(notebook.title)), fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Text(meta(notebook), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                if (notebook.lastOpenedAt != null && notebook.pageCount > 0) {
+                    Text(progressLabel(notebook.lastPageIndex, notebook.pageCount), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    LinearProgressIndicator(
+                        progress = { ((notebook.lastPageIndex + 1f) / notebook.pageCount).coerceIn(0f, 1f) },
+                        modifier = Modifier.fillMaxWidth().padding(top = 5.dp).clip(CircleShape),
+                    )
+                }
             }
             if (!compact) IconButton(onClick = onMore, modifier = Modifier.size(28.dp)) { Icon(Icons.Default.MoreVert, "More", tint = MaterialTheme.colorScheme.onSurfaceVariant) }
+        }
+    }
+}
+
+@Composable
+private fun FileCover(notebook: Notebook, modifier: Modifier = Modifier) {
+    Box(modifier.background(Color(0xFFF6F3EB))) {
+        Text(notebook.originalFilename ?: notebook.title, Modifier.fillMaxWidth().padding(18.dp), style = MaterialTheme.typography.titleSmall, maxLines = 4, overflow = TextOverflow.Ellipsis)
+        Surface(Modifier.align(Alignment.Center).padding(top = 12.dp), color = MaterialTheme.colorScheme.primaryContainer, shape = RoundedCornerShape(18.dp)) {
+            Text(
+                fileTypeBadge(notebook.fileMimeType, notebook.originalFilename),
+                Modifier.padding(horizontal = 18.dp, vertical = 12.dp),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
+            )
         }
     }
 }
@@ -753,6 +1238,46 @@ internal fun NameDialog(title: String, initial: String, confirm: String, onDismi
         confirmButton = { Button(enabled = text.isNotBlank(), onClick = { onConfirm(text.trim()) }, shape = CircleShape) { Text(confirm) } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
         shape = MaterialTheme.shapes.extraLarge,
+    )
+}
+
+private val subjectColors = listOf("#B96C5C", "#C48C50", "#75885C", "#4F8278", "#62809A", "#7E7195", "#A66F82", "#84796B")
+
+@Composable
+private fun SubjectDialog(
+    title: String,
+    initial: String,
+    initialColor: String?,
+    onDismiss: () -> Unit,
+    onConfirm: (String, String) -> Unit,
+) {
+    var name by remember(initial) { mutableStateOf(initial) }
+    var color by remember(initialColor) { mutableStateOf(initialColor ?: subjectColors.first()) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Subject name") }, singleLine = true)
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    subjectColors.forEach { hex ->
+                        val selected = color.equals(hex, ignoreCase = true)
+                        val swatch = Color(android.graphics.Color.parseColor(hex))
+                        Box(
+                            Modifier.size(if (selected) 34.dp else 28.dp)
+                                .clip(CircleShape)
+                                .background(swatch)
+                                .then(if (selected) Modifier.border(2.dp, MaterialTheme.colorScheme.onSurface, CircleShape) else Modifier)
+                                .clickable { color = hex },
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(enabled = name.isNotBlank(), onClick = { onConfirm(name.trim(), color) }) { Text("Save") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
 

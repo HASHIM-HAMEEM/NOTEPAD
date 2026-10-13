@@ -17,6 +17,20 @@ data class Notebook(
     val pageCount: Int = 0,
     val folderId: String? = null,
     val tagIds: Set<String> = emptySet(),
+    val documentKind: String = "notes",
+    val lastPageIndex: Int = 0,
+    val lastOpenedAt: Long? = null,
+    val fileAssetId: String? = null,
+    val fileMimeType: String? = null,
+    val originalFilename: String? = null,
+)
+
+data class ImportedImageContent(
+    val asset: Asset,
+    val xPt: Float,
+    val yPt: Float,
+    val widthPt: Float,
+    val heightPt: Float,
 )
 
 data class Folder(

@@ -125,6 +125,8 @@ import com.hashim.notepad.recognition.TextBlockPlacement
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -237,6 +239,19 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
     val pages = pageList.orEmpty()
     val page = pages.firstOrNull { it.id == pageId }
     val index = pages.indexOfFirst { it.id == pageId }
+    LaunchedEffect(notebookId, pageId, index) {
+        if (index >= 0) {
+            delay(450)
+            repo.setReadingPosition(notebookId, index)
+        }
+    }
+    DisposableEffect(notebookId, pageId, index) {
+        onDispose {
+            if (index >= 0) CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+                repo.setReadingPosition(notebookId, index)
+            }
+        }
+    }
     LaunchedEffect(pageList, pageId) {
         val currentPages = pageList ?: return@LaunchedEffect
         if (currentPages.none { it.id == pageId }) onBack()
@@ -516,7 +531,7 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
         if (p.kind != PageKind.PDF || p.assetId == null || surfaceWidth == 0) { pageBitmap = null; surface?.setPage(null); return@LaunchedEffect }
         val asset = repo.asset(p.assetId) ?: return@LaunchedEffect
         val bmp = withContext(Dispatchers.Default) {
-            runCatching { PdfPageSource(context, File(asset.localPath)).use { it.render(p.pdfPageIndex ?: 0, (surfaceWidth * 1.5f).toInt()) } }
+            runCatching { PdfPageSource(context, File(asset.localPath), com.hashim.notepad.pdf.PdfPasswordVault(context).read(asset.id)).use { it.render(p.pdfPageIndex ?: 0, (surfaceWidth * 1.5f).toInt()) } }
                 .onFailure { Log.e("NotePad", "render failed", it) }.getOrNull()
         }
         pageBitmap = bmp

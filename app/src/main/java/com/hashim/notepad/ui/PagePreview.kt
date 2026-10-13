@@ -85,7 +85,7 @@ fun PagePreview(repo: NotePadRepository, page: Page?, paperColor: Color, modifie
         if (p.kind == PageKind.PDF && p.assetId != null && PreviewCache.bitmaps.get(p.id) == null) {
             val asset = repo.asset(p.assetId) ?: return@LaunchedEffect
             val bmp = withContext(Dispatchers.Default) {
-                runCatching { PdfPageSource(context, File(asset.localPath)).use { it.render(p.pdfPageIndex ?: 0, 420) } }.getOrNull()
+                runCatching { PdfPageSource(context, File(asset.localPath), com.hashim.notepad.pdf.PdfPasswordVault(context).read(asset.id)).use { it.render(p.pdfPageIndex ?: 0, 420) } }.getOrNull()
             } ?: return@LaunchedEffect
             PreviewCache.bitmaps.put(p.id, bmp)
             bitmap = bmp

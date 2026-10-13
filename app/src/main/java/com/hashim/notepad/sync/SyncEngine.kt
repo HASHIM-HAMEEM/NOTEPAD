@@ -97,12 +97,26 @@ class SyncEngine(private val context: Context, private val repo: NotePadReposito
         when (table) {
             "notebooks" -> {
                 cv.put("id", id); cv.put("title", decText(k, r, "title_enc") ?: "Untitled"); cv.put("cover_color", str(r, "cover_color"))
-                if (r.has("folder_id")) {
-                    cv.put("folder_id", str(r, "folder_id"))
-                } else {
-                    db.rawQuery("select folder_id from notebooks where id = ?", arrayOf(id)).use { c ->
-                        if (c.moveToFirst()) {
-                            if (c.isNull(0)) cv.putNull("folder_id") else cv.put("folder_id", c.getString(0))
+                val optionalColumns = OPTIONAL_COLUMNS_BY_TABLE.getValue("notebooks")
+                val local = db.query("notebooks", optionalColumns.toTypedArray(), "id = ?", arrayOf(id), null, null, null).use { c ->
+                    if (c.moveToFirst()) c.toMap() else emptyMap()
+                }
+                for (column in optionalColumns) {
+                    if (r.has(column)) {
+                        if (r.isNull(column)) cv.putNull(column)
+                        else when (column) {
+                            "last_page_index" -> cv.put(column, r.optInt(column, 0))
+                            "last_opened_at" -> cv.put(column, r.optLong(column))
+                            else -> cv.put(column, r.optString(column))
+                        }
+                    } else {
+                        if (column in local) {
+                            when (val value = local[column]) {
+                                null -> cv.putNull(column)
+                                is Long -> cv.put(column, value)
+                                is Int -> cv.put(column, value)
+                                else -> cv.put(column, value.toString())
+                            }
                         }
                     }
                 }
@@ -198,31 +212,35 @@ class SyncEngine(private val context: Context, private val repo: NotePadReposito
                 }
             }
             for (pageId in deleteRecognitionFor) SupabaseHttp.json("DELETE", "/rest/v1/recognition?page_id=eq.$pageId&user_id=eq.$uid", token).orThrow()
-            var keepForOptionalColumn = false
+            val missingColumns = linkedSetOf<String>()
             if (payload.length() > 0) {
-                try {
-                    SupabaseHttp.json("POST", "/rest/v1/$table?on_conflict=id", token, payload.toString(),
-                        mapOf("Prefer" to "resolution=merge-duplicates,return=minimal")).orThrow()
-                } catch (e: HttpException) {
-                    val missingColumns = OPTIONAL_COLUMNS_BY_TABLE[table].orEmpty().filter { column ->
-                        MissingSchemaClassifier.isMissingOptionalColumn(e.code, e.message.orEmpty(), table, column)
+                var compatiblePayload = payload
+                while (true) {
+                    try {
+                        SupabaseHttp.json("POST", "/rest/v1/$table?on_conflict=id", token, compatiblePayload.toString(),
+                            mapOf("Prefer" to "resolution=merge-duplicates,return=minimal")).orThrow()
+                        break
+                    } catch (e: HttpException) {
+                        val newlyMissing = OPTIONAL_COLUMNS_BY_TABLE[table].orEmpty().filterNot { it in missingColumns }.filter { column ->
+                            MissingSchemaClassifier.isMissingOptionalColumn(e.code, e.message.orEmpty(), table, column)
+                        }
+                        if (newlyMissing.isEmpty()) throw e
+                        missingColumns += newlyMissing
+                        compatiblePayload = JSONArray()
+                        for (i in 0 until payload.length()) {
+                            compatiblePayload.put(JSONObject(payload.getJSONObject(i).toString()).also { row ->
+                                missingColumns.forEach { row.remove(it) }
+                            })
+                        }
                     }
-                    if (missingColumns.isEmpty()) throw e
-                    val compatiblePayload = JSONArray()
-                    for (i in 0 until payload.length()) {
-                        compatiblePayload.put(JSONObject(payload.getJSONObject(i).toString()).also { row ->
-                            missingColumns.forEach { row.remove(it) }
-                        })
-                    }
-                    SupabaseHttp.json("POST", "/rest/v1/$table?on_conflict=id", token, compatiblePayload.toString(),
-                        mapOf("Prefer" to "resolution=merge-duplicates,return=minimal")).orThrow()
-                    keepForOptionalColumn = true
+                }
+                if (missingColumns.isNotEmpty()) {
                     Log.w(TAG, "server lacks optional columns on $table (${missingColumns.joinToString()}); pushed compatible rows and kept them queued")
                 }
             }
             db.beginTransaction()
             try {
-                if (!keepForOptionalColumn) for (rowId in chunk) clearOutbox(table, rowId)
+                if (missingColumns.isEmpty()) for (rowId in chunk) clearOutbox(table, rowId)
                 db.setTransactionSuccessful()
             } finally { db.endTransaction() }
             pushed += payload.length()
@@ -243,6 +261,12 @@ class SyncEngine(private val context: Context, private val repo: NotePadReposito
             "notebooks" -> {
                 o.put("title_enc", hex(Crypto.encryptText(k, m["title"] as String))); o.put("cover_color", m["cover_color"] ?: JSONObject.NULL)
                 o.put("folder_id", m["folder_id"] ?: JSONObject.NULL)
+                o.put("document_kind", m["document_kind"] ?: "notes")
+                o.put("last_page_index", m["last_page_index"] ?: 0)
+                o.put("last_opened_at", m["last_opened_at"] ?: JSONObject.NULL)
+                o.put("file_asset_id", m["file_asset_id"] ?: JSONObject.NULL)
+                o.put("file_mime_type", m["file_mime_type"] ?: JSONObject.NULL)
+                o.put("original_filename", m["original_filename"] ?: JSONObject.NULL)
                 o.put("language", m["language"]); o.put("sort_order", m["sort_order"]); o.put("deleted_at", ts("deleted_at") ?: JSONObject.NULL)
                 o.put("created_at", ts("created_at")); o.put("updated_at", ts("updated_at"))
             }
@@ -337,7 +361,7 @@ class SyncEngine(private val context: Context, private val repo: NotePadReposito
         private const val PAGE = 500
         private val SCHEMA_OPTIONAL_TABLES = setOf("folders", "tags", "notebook_tags", "page_images")
         private val OPTIONAL_COLUMNS_BY_TABLE = mapOf(
-            "notebooks" to listOf("folder_id"),
+            "notebooks" to listOf("folder_id", "document_kind", "last_page_index", "last_opened_at", "file_asset_id", "file_mime_type", "original_filename"),
             "pages" to listOf("bookmarked"),
             "text_blocks" to listOf("color_argb"),
         )

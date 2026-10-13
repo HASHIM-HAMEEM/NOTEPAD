@@ -79,7 +79,8 @@ class NotePadRepository(context: Context) {
         """select n.id, n.title, n.cover_color, n.sort_order, n.created_at, n.updated_at, n.language,
                   (select count(*) from pages p where p.notebook_id = n.id and p.deleted_at is null) as page_count,
                   n.folder_id,
-                  (select group_concat(nt.tag_id, ',') from notebook_tags nt where nt.notebook_id = n.id and nt.deleted_at is null) as tag_ids
+                  (select group_concat(nt.tag_id, ',') from notebook_tags nt where nt.notebook_id = n.id and nt.deleted_at is null) as tag_ids,
+                  n.document_kind, n.last_page_index, n.last_opened_at, n.file_asset_id, n.file_mime_type, n.original_filename
            from notebooks n where n.deleted_at is null order by n.updated_at desc""", null
     ).use { c ->
         buildList {
@@ -88,6 +89,8 @@ class NotePadRepository(context: Context) {
                     c.getString(0), c.getString(1), c.getStringOrNull(2), c.getString(6), c.getInt(3),
                     c.getLong(4), c.getLong(5), c.getInt(7), c.getStringOrNull(8),
                     c.getStringOrNull(9)?.split(',')?.filter(String::isNotBlank)?.toSet().orEmpty(),
+                    c.getString(10), c.getInt(11), if (c.isNull(12)) null else c.getLong(12),
+                    c.getStringOrNull(13), c.getStringOrNull(14), c.getStringOrNull(15),
                 )
             )
         }
@@ -155,33 +158,34 @@ class NotePadRepository(context: Context) {
         notifyChanged()
     }
 
-    suspend fun createNotebook(title: String, coverColor: String?): String = withContext(Dispatchers.IO) {
+    suspend fun createNotebook(title: String, coverColor: String?, folderId: String? = null): String = withContext(Dispatchers.IO) {
         val id = UUID.randomUUID().toString()
         val now = System.currentTimeMillis()
         helper.writableDatabase.insertOrThrow("notebooks", null, ContentValues().apply {
-            put("id", id); put("title", title); put("cover_color", coverColor); put("sort_order", 0)
+            put("id", id); put("title", title); put("cover_color", coverColor); put("sort_order", 0); put("folder_id", folderId)
+            put("document_kind", "notes")
             put("created_at", now); put("updated_at", now)
         })
         mark("notebooks", id); notifyChanged(); id
     }
 
-    suspend fun createFolder(name: String): String = withContext(Dispatchers.IO) {
+    suspend fun createFolder(name: String, color: String? = null): String = withContext(Dispatchers.IO) {
         val cleanName = name.trim()
         require(cleanName.isNotEmpty()) { "Folder name cannot be empty" }
         val id = UUID.randomUUID().toString()
         val now = System.currentTimeMillis()
         helper.writableDatabase.insertOrThrow("folders", null, ContentValues().apply {
-            put("id", id); put("name", cleanName); putNull("color"); put("sort_order", 0)
+            put("id", id); put("name", cleanName); put("color", color); put("sort_order", 0)
             put("created_at", now); put("updated_at", now)
         })
         mark("folders", id); notifyChanged(); id
     }
 
-    suspend fun renameFolder(id: String, name: String) = withContext(Dispatchers.IO) {
+    suspend fun renameFolder(id: String, name: String, color: String? = null) = withContext(Dispatchers.IO) {
         val cleanName = name.trim()
         require(cleanName.isNotEmpty()) { "Folder name cannot be empty" }
         val now = System.currentTimeMillis()
-        helper.writableDatabase.update("folders", ContentValues().apply { put("name", cleanName); put("updated_at", now) }, "id = ? and deleted_at is null", arrayOf(id))
+        helper.writableDatabase.update("folders", ContentValues().apply { put("name", cleanName); put("color", color); put("updated_at", now) }, "id = ? and deleted_at is null", arrayOf(id))
         mark("folders", id); notifyChanged()
     }
 
@@ -216,6 +220,118 @@ class NotePadRepository(context: Context) {
             put("updated_at", now)
         }, "id = ?", arrayOf(notebookId))
         mark("notebooks", notebookId); notifyChanged()
+    }
+
+    suspend fun setReadingPosition(notebookId: String, pageIndex: Int) = withContext(Dispatchers.IO) {
+        val db = helper.writableDatabase
+        val now = System.currentTimeMillis()
+        db.update("notebooks", ContentValues().apply {
+            put("last_page_index", pageIndex.coerceAtLeast(0))
+            put("last_opened_at", now)
+        }, "id = ? and deleted_at is null", arrayOf(notebookId))
+        mark("notebooks", notebookId)
+        notifyChanged()
+    }
+
+    suspend fun createPdfNotebook(title: String, asset: Asset, pageSizesPt: List<Pair<Float, Float>>, folderId: String?): String =
+        withContext(Dispatchers.IO) {
+            require(pageSizesPt.isNotEmpty()) { "PDF has no pages" }
+            val db = helper.writableDatabase
+            val id = UUID.randomUUID().toString()
+            val now = System.currentTimeMillis()
+            db.beginTransaction()
+            try {
+                db.insertOrThrow("notebooks", null, ContentValues().apply {
+                    put("id", id); put("title", title); put("folder_id", folderId); put("document_kind", "pdf")
+                    put("cover_color", "#EEE9DF"); put("sort_order", 0); put("created_at", now); put("updated_at", now)
+                })
+                mark("notebooks", id)
+                insertAsset(db, asset, now)
+                var sortKey = 0.0
+                pageSizesPt.forEachIndexed { index, (width, height) ->
+                    sortKey += 1.0
+                    val pageId = UUID.randomUUID().toString()
+                    db.insertOrThrow("pages", null, ContentValues().apply {
+                        put("id", pageId); put("notebook_id", id); put("sort_key", sortKey); put("kind", PageKind.PDF.db)
+                        put("asset_id", asset.id); put("pdf_page_index", index); put("width_pt", width); put("height_pt", height)
+                        put("created_at", now); put("updated_at", now)
+                    })
+                    mark("pages", pageId)
+                }
+                db.setTransactionSuccessful()
+            } finally {
+                db.endTransaction()
+            }
+            notifyChanged()
+            id
+        }
+
+    suspend fun createFileNotebook(title: String, asset: Asset, mimeType: String, originalFilename: String, folderId: String?): String =
+        withContext(Dispatchers.IO) {
+            val db = helper.writableDatabase
+            val id = UUID.randomUUID().toString()
+            val now = System.currentTimeMillis()
+            db.beginTransaction()
+            try {
+                db.insertOrThrow("notebooks", null, ContentValues().apply {
+                    put("id", id); put("title", title); put("folder_id", folderId); put("document_kind", "file")
+                    put("file_asset_id", asset.id); put("file_mime_type", mimeType); put("original_filename", originalFilename)
+                    put("sort_order", 0); put("created_at", now); put("updated_at", now)
+                })
+                mark("notebooks", id)
+                insertAsset(db, asset, now)
+                db.setTransactionSuccessful()
+            } finally {
+                db.endTransaction()
+            }
+            notifyChanged()
+            id
+        }
+
+    suspend fun createImageNotebook(title: String, images: List<ImportedImageContent>, folderId: String?): String =
+        withContext(Dispatchers.IO) {
+            require(images.isNotEmpty()) { "No images selected" }
+            val db = helper.writableDatabase
+            val id = UUID.randomUUID().toString()
+            val now = System.currentTimeMillis()
+            db.beginTransaction()
+            try {
+                db.insertOrThrow("notebooks", null, ContentValues().apply {
+                    put("id", id); put("title", title); put("folder_id", folderId); put("document_kind", "notes")
+                    put("cover_color", "#F1E8D8"); put("sort_order", 0); put("created_at", now); put("updated_at", now)
+                })
+                mark("notebooks", id)
+                images.forEachIndexed { index, image ->
+                    insertAsset(db, image.asset, now)
+                    val pageId = UUID.randomUUID().toString()
+                    db.insertOrThrow("pages", null, ContentValues().apply {
+                        put("id", pageId); put("notebook_id", id); put("sort_key", index + 1.0); put("kind", PageKind.BLANK.db)
+                        put("width_pt", 595f); put("height_pt", 842f); put("created_at", now); put("updated_at", now)
+                    })
+                    mark("pages", pageId)
+                    val imageId = UUID.randomUUID().toString()
+                    db.insertOrThrow("page_images", null, ContentValues().apply {
+                        put("id", imageId); put("page_id", pageId); put("asset_id", image.asset.id)
+                        put("x_pt", image.xPt); put("y_pt", image.yPt); put("w_pt", image.widthPt); put("h_pt", image.heightPt)
+                        put("updated_at", now)
+                    })
+                    mark("page_images", imageId)
+                }
+                db.setTransactionSuccessful()
+            } finally {
+                db.endTransaction()
+            }
+            notifyChanged()
+            id
+        }
+
+    private fun insertAsset(db: SQLiteDatabase, asset: Asset, now: Long) {
+        db.insertOrThrow("assets", null, ContentValues().apply {
+            put("id", asset.id); put("kind", asset.kind); put("local_path", asset.localPath); put("byte_size", asset.byteSize)
+            put("sha256", asset.sha256); if (asset.pageCount == null) putNull("page_count") else put("page_count", asset.pageCount)
+            put("name", asset.name); put("created_at", now)
+        })
+        mark("assets", asset.id)
     }
 
     suspend fun createTag(name: String): String = withContext(Dispatchers.IO) {

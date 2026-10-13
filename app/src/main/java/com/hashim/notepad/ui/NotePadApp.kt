@@ -2,6 +2,7 @@ package com.hashim.notepad.ui
 
 import android.net.Uri
 import android.widget.Toast
+import com.hashim.notepad.InboundShare
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.togetherWith
 import androidx.compose.runtime.*
@@ -28,7 +29,12 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
 import com.hashim.notepad.data.NotePadRepository
 import com.hashim.notepad.pdf.PdfImporter
+import com.hashim.notepad.pdf.ImportStorage
 import com.hashim.notepad.sync.SyncManager
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withContext
 
 sealed interface Screen {
     data object Notebooks : Screen
@@ -46,15 +52,26 @@ fun NotePadApp(
     dynamicColor: Boolean,
     onThemeChange: (ThemeMode) -> Unit,
     onDynamicChange: (Boolean) -> Unit,
+    initialShare: InboundShare? = null,
 ) {
     val context = LocalContext.current
     val repo = remember { NotePadRepository.get(context) }
+    val appScope = rememberCoroutineScope()
     val importer = remember { PdfImporter(context, repo) }
     val exporter = remember { com.hashim.notepad.export.PdfExporter(context, repo) }
     val recognizer = remember { com.hashim.notepad.recognition.InkRecognizer() }
     val bundles = remember { com.hashim.notepad.export.BundleCodec(context, repo) }
     var screen by remember { mutableStateOf<Screen>(Screen.Notebooks) }
     var importing by rememberSaveable { mutableStateOf(false) }
+
+    LaunchedEffect(repo) {
+        withContext(Dispatchers.IO) {
+            val referenced = repo.helper.readableDatabase.rawQuery("select local_path from assets", null).use { cursor ->
+                buildSet { while (cursor.moveToNext()) add(cursor.getString(0)) }
+            }
+            ImportStorage.cleanOrphans(context, referenced)
+        }
+    }
 
     LaunchedEffect(initialPdf) {
         initialPdf ?: return@LaunchedEffect
@@ -63,6 +80,10 @@ fun NotePadApp(
             .onSuccess { screen = Screen.Pages(it) }
             .onFailure { android.util.Log.e("NotePad", "PDF import failed", it); Toast.makeText(context, "Could not import PDF: ${it.message}", Toast.LENGTH_LONG).show() }
         importing = false
+    }
+
+    LaunchedEffect(initialShare) {
+        if (initialShare != null) screen = Screen.Notebooks
     }
 
     LaunchedEffect(initialAuthCallback) {
@@ -102,7 +123,7 @@ fun NotePadApp(
                 targetState = screen,
                 transitionSpec = {
                     val forward = depth(targetState) >= depth(initialState)
-                    val openingNotebook = targetState is Screen.Pages && initialState is Screen.Notebooks
+                    val openingNotebook = (targetState is Screen.Pages || targetState is Screen.Editor) && initialState is Screen.Notebooks
                     val enter = if (openingNotebook) {
                         androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(Motion.medium, delayMillis = 40, easing = Motion.emphasizedDecelerate)) +
                             androidx.compose.animation.scaleIn(
@@ -122,8 +143,15 @@ fun NotePadApp(
                 when (s) {
                     Screen.Notebooks -> NotebooksScreen(
                         repo = repo, importer = importer, bundles = bundles, exporter = exporter, importing = importing,
+                        sharedItems = initialShare?.uris.orEmpty(), sharedMimeType = initialShare?.mimeType,
                         onImportingChanged = { importing = it },
                         onOpen = { screen = Screen.Pages(it) },
+                        onContinueAtPosition = { notebookId, pageIndex ->
+                            appScope.launch {
+                                val targetPage = repo.pages(notebookId).first().getOrNull(pageIndex)
+                                screen = targetPage?.let { Screen.Editor(notebookId, it.id) } ?: Screen.Pages(notebookId)
+                            }
+                        },
                         onSearch = { screen = Screen.Search }, onAccount = { screen = Screen.Account },
                         themeMode = themeMode, dynamicColor = dynamicColor, onThemeChange = onThemeChange, onDynamicChange = onDynamicChange,
                         showAccountButton = !showNavigationRail,
@@ -136,6 +164,7 @@ fun NotePadApp(
                             androidx.compose.foundation.layout.Box(Modifier.width(320.dp)) {
                                 NotebooksScreen(
                                     repo = repo, importer = importer, bundles = bundles, exporter = exporter, importing = importing, onImportingChanged = { importing = it },
+                                    sharedItems = initialShare?.uris.orEmpty(), sharedMimeType = initialShare?.mimeType,
                                     onOpen = { screen = Screen.Pages(it) }, onSearch = { screen = Screen.Search }, onAccount = { screen = Screen.Account }, selectedId = s.notebookId, compact = true,
                                     themeMode = themeMode, dynamicColor = dynamicColor, onThemeChange = onThemeChange, onDynamicChange = onDynamicChange,
                                     showAccountButton = false,

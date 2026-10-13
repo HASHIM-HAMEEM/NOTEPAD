@@ -9,10 +9,15 @@ import java.io.Closeable
 import java.io.File
 
 /** Opens a PDF with PDFium and renders single pages to bitmaps sized to a target width. */
-class PdfPageSource(context: Context, file: File) : Closeable {
+class PdfPageSource(context: Context, file: File, password: String? = null) : Closeable {
     private val core = PdfiumCore(context)
     private val pfd = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
-    private val document: PdfDocument = core.newDocument(pfd)
+    private val document: PdfDocument = try {
+        if (password.isNullOrEmpty()) core.newDocument(pfd) else core.newDocument(pfd, password)
+    } catch (error: Throwable) {
+        pfd.close()
+        throw error
+    }
 
     val pageCount: Int get() = document.getPageCount()
 
