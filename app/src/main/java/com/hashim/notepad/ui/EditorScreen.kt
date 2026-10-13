@@ -427,7 +427,7 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
             }
             Row(
                 Modifier.weight(1f).fillMaxHeight().horizontalScroll(rememberScrollState()).clipToBounds().padding(horizontal = 2.dp),
-                horizontalArrangement = Arrangement.spacedBy(20.dp),
+                horizontalArrangement = Arrangement.spacedBy(0.dp),
                 verticalAlignment = Alignment.Bottom,
             ) {
                 listOf(PenType.BALLPOINT, PenType.PENCIL, PenType.FOUNTAIN, PenType.MARKER).forEach { type ->
@@ -524,10 +524,10 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
                     rulerVisible = !rulerVisible
                     haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                 })
-                Box {
-                    IconButton(onClick = { colorPop = true }, modifier = Modifier.size(44.dp)) {
-                        ColorWheelButton(color)
-                    }
+                    Box(Modifier.padding(start = 7.dp)) {
+                        IconButton(onClick = { colorPop = true }, modifier = Modifier.size(44.dp)) {
+                            ColorWheelButton(color)
+                        }
                     DropdownMenu(
                         expanded = colorPop,
                         onDismissRequest = { colorPop = false },
@@ -741,197 +741,251 @@ private fun ShelfCanvasItem(
     onClick: () -> Unit,
 ) {
     val rise by animateDpAsState(
-        targetValue = if (selected) (-10).dp else 0.dp,
+        targetValue = if (selected) (-14).dp else 0.dp,
         animationSpec = spring(dampingRatio = 0.7f, stiffness = 400f),
         label = "$label-rise",
     )
     val dark = MaterialTheme.colorScheme.isDark
+    val bodyWidthDp = if (style == ShelfDrawing.ERASER || style == ShelfDrawing.RULER) 48.dp else 24.dp
+    val itemWidth = bodyWidthDp + 14.dp
 
     Box(
-        Modifier.width(60.dp).fillMaxHeight().clipToBounds().clickable(onClickLabel = label, onClick = onClick),
+        Modifier.width(itemWidth).fillMaxHeight().clipToBounds().clickable(onClickLabel = label, onClick = onClick),
         contentAlignment = Alignment.TopCenter,
     ) {
-        Canvas(Modifier.requiredSize(60.dp, 128.dp).offset(y = 11.dp + rise)) {
+        Canvas(Modifier.requiredSize(itemWidth, 128.dp).offset(y = 23.dp + rise)) {
             val centerX = size.width / 2f
-            val bodyTop = 18.dp.toPx()
+            val bodyTop = 26.dp.toPx()
             val bodyBottom = size.height
-            val bodyWidth = when (style) {
-                ShelfDrawing.MARKER, ShelfDrawing.HIGHLIGHTER -> 30.dp.toPx()
-                ShelfDrawing.ERASER, ShelfDrawing.RULER -> 50.dp.toPx()
-                else -> 20.dp.toPx()
-            }
+            val bodyWidth = bodyWidthDp.toPx()
             val bodyLeft = centerX - bodyWidth / 2f
-            val bodyCorner = CornerRadius(if (style == ShelfDrawing.PENCIL) 4.dp.toPx() else 8.dp.toPx())
+            val bodyRight = bodyLeft + bodyWidth
+            val ferruleTop = bodyTop - 8.dp.toPx()
+            val ferruleBottom = bodyTop + 2.dp.toPx()
+            val bodyCorner = CornerRadius(minOf(bodyWidth / 2f, 8.dp.toPx()))
             val inkColor = Color(color).copy(alpha = opacity.coerceIn(0f, 1f))
-            val itemColor = inkColor
-            val itemOutline = if (dark) Color(0xFF44454A) else Color(0xFFD8DADD)
-            val bodyBrush = Brush.verticalGradient(
-                colors = if (dark) listOf(Color(0xFF2B2B2E), Color(0xFF1C1C1E)) else listOf(Color.White, Color(0xFFF0F1F3)),
-                startY = bodyTop,
-                endY = bodyBottom,
+            val bodyEdge = if (dark) Color(0xFF1A1A1C) else Color(0xFFDADDE2)
+            val bodyCenter = if (dark) Color(0xFF3A3A3E) else Color.White
+            val bodyBrush = Brush.horizontalGradient(
+                colors = listOf(bodyEdge, bodyCenter, bodyEdge),
+                startX = bodyLeft,
+                endX = bodyRight,
             )
             val bodyTopLeft = Offset(bodyLeft, bodyTop)
             val bodySize = Size(bodyWidth, bodyBottom - bodyTop)
 
             if (style == ShelfDrawing.RULER) {
-                val rulerLeft = 4.dp.toPx()
-                val rulerTop = 18.dp.toPx()
-                val rulerWidth = size.width - 8.dp.toPx()
-                val rulerHeight = 128.dp.toPx()
+                val rulerTop = bodyTop
+                val rulerHeight = bodyBottom - rulerTop
                 drawRoundRect(
-                    color = Color.White.copy(alpha = if (dark) 0.12f else 0.55f),
-                    topLeft = Offset(rulerLeft, rulerTop),
-                    size = Size(rulerWidth, rulerHeight),
-                    cornerRadius = CornerRadius(4.dp.toPx()),
+                    brush = bodyBrush,
+                    topLeft = bodyTopLeft,
+                    size = Size(bodyWidth, rulerHeight),
+                    cornerRadius = bodyCorner,
+                    alpha = if (dark) 0.94f else 0.74f,
                 )
                 drawRoundRect(
-                    color = itemOutline,
-                    topLeft = Offset(rulerLeft, rulerTop),
-                    size = Size(rulerWidth, rulerHeight),
-                    cornerRadius = CornerRadius(4.dp.toPx()),
-                    style = DrawStroke(width = 1.dp.toPx()),
+                    color = if (dark) Color(0xFF55565B) else Color(0xFFBEC2C8),
+                    topLeft = bodyTopLeft,
+                    size = Size(bodyWidth, rulerHeight),
+                    cornerRadius = bodyCorner,
+                    style = DrawStroke(width = 0.8.dp.toPx()),
                 )
                 for (i in 1..7) {
-                    val y = rulerTop + i * 8.dp.toPx()
-                    drawLine(Color(0xFF5A5248).copy(alpha = 0.7f), Offset(rulerLeft + 2.dp.toPx(), y), Offset(rulerLeft + if (i % 2 == 0) rulerWidth * 0.72f else rulerWidth * 0.45f, y), 1.5.dp.toPx())
+                    val y = rulerTop + i * 9.dp.toPx()
+                    val markColor = if (dark) Color(0xFFB7B9BE) else Color(0xFF62666D)
+                    drawLine(
+                        markColor.copy(alpha = 0.86f),
+                        Offset(bodyLeft + 3.dp.toPx(), y),
+                        Offset(bodyLeft + if (i % 2 == 0) bodyWidth - 3.dp.toPx() else bodyWidth * 0.58f, y),
+                        1.dp.toPx(),
+                    )
                 }
                 return@Canvas
             }
 
             if (style == ShelfDrawing.ERASER) {
-                val eraserTop = 20.dp.toPx()
-                val eraserLeft = centerX - 25.dp.toPx()
-                val eraserWidth = 50.dp.toPx()
-                val eraserHeight = 78.dp.toPx()
+                val markColor = if (dark) Color(0xFFC7C9CE) else Color(0xFFAAA8A7)
+                val eraserHeight = 92.dp.toPx()
                 drawRoundRect(
-                    brush = Brush.verticalGradient(listOf(Color(0xFFFFF9F5), Color(0xFFE9DCD7))),
-                    topLeft = Offset(eraserLeft, eraserTop),
-                    size = Size(eraserWidth, eraserHeight),
+                    brush = bodyBrush,
+                    topLeft = bodyTopLeft,
+                    size = Size(bodyWidth, eraserHeight),
                     cornerRadius = CornerRadius(10.dp.toPx()),
                 )
                 drawRoundRect(
-                    color = Color(0xFFB7B3B2),
-                    topLeft = Offset(eraserLeft + 2.dp.toPx(), eraserTop + 26.dp.toPx()),
-                    size = Size(eraserWidth - 4.dp.toPx(), 8.dp.toPx()),
+                    color = markColor.copy(alpha = if (dark) 0.45f else 0.64f),
+                    topLeft = Offset(bodyLeft + 2.dp.toPx(), bodyTop + 19.dp.toPx()),
+                    size = Size(bodyWidth - 4.dp.toPx(), 7.dp.toPx()),
                     cornerRadius = CornerRadius(2.dp.toPx()),
                 )
                 drawRoundRect(
-                    color = itemOutline,
-                    topLeft = Offset(eraserLeft, eraserTop),
-                    size = Size(eraserWidth, eraserHeight),
+                    color = if (dark) Color(0xFF55565B) else Color(0xFFBEC2C8),
+                    topLeft = bodyTopLeft,
+                    size = Size(bodyWidth, eraserHeight),
                     cornerRadius = CornerRadius(10.dp.toPx()),
-                    style = DrawStroke(width = 1.5.dp.toPx()),
+                    style = DrawStroke(width = 0.8.dp.toPx()),
                 )
                 for (row in 0..1) for (column in 0..2) {
                     drawRect(
-                        color = if ((row + column) % 2 == 0) Color(0xFFB5ADA9) else Color(0xFFD8CECA),
-                        topLeft = Offset(eraserLeft + 10.dp.toPx() + column * 6.dp.toPx(), eraserTop + 46.dp.toPx() + row * 6.dp.toPx()),
+                        color = if ((row + column) % 2 == 0) markColor else markColor.copy(alpha = 0.52f),
+                        topLeft = Offset(bodyLeft + 11.dp.toPx() + column * 6.dp.toPx(), bodyTop + 37.dp.toPx() + row * 6.dp.toPx()),
                         size = Size(4.dp.toPx(), 4.dp.toPx()),
                     )
                 }
-                drawLine(Color(0xFFB5ADA9), Offset(eraserLeft + 10.dp.toPx(), eraserTop + 68.dp.toPx()), Offset(eraserLeft + 25.dp.toPx(), eraserTop + 64.dp.toPx()), 2.dp.toPx())
-                drawLine(Color(0xFFB5ADA9), Offset(eraserLeft + 25.dp.toPx(), eraserTop + 64.dp.toPx()), Offset(eraserLeft + 40.dp.toPx(), eraserTop + 68.dp.toPx()), 2.dp.toPx())
+                val wave = Path().apply {
+                    moveTo(bodyLeft + 10.dp.toPx(), bodyTop + 64.dp.toPx())
+                    cubicTo(bodyLeft + 16.dp.toPx(), bodyTop + 58.dp.toPx(), bodyLeft + 21.dp.toPx(), bodyTop + 70.dp.toPx(), bodyLeft + 27.dp.toPx(), bodyTop + 64.dp.toPx())
+                    cubicTo(bodyLeft + 33.dp.toPx(), bodyTop + 58.dp.toPx(), bodyLeft + 38.dp.toPx(), bodyTop + 70.dp.toPx(), bodyLeft + 42.dp.toPx(), bodyTop + 64.dp.toPx())
+                }
+                drawPath(wave, markColor, style = DrawStroke(width = 1.5.dp.toPx()))
                 return@Canvas
             }
 
             if (style == ShelfDrawing.PENCIL) {
                 val hexBody = Path().apply {
                     moveTo(centerX, bodyTop)
-                    lineTo(bodyLeft + bodyWidth, bodyTop + 4.dp.toPx())
-                    lineTo(bodyLeft + bodyWidth, bodyBottom - 2.dp.toPx())
-                    lineTo(centerX, bodyBottom)
-                    lineTo(bodyLeft, bodyBottom - 2.dp.toPx())
+                    lineTo(bodyRight, bodyTop + 4.dp.toPx())
+                    lineTo(bodyRight, bodyBottom)
+                    lineTo(centerX, bodyBottom + 2.dp.toPx())
+                    lineTo(bodyLeft, bodyBottom)
                     lineTo(bodyLeft, bodyTop + 4.dp.toPx())
                     close()
                 }
                 drawPath(hexBody, bodyBrush)
-                drawPath(hexBody, itemOutline, style = DrawStroke(width = 1.dp.toPx()))
+                drawPath(hexBody, bodyEdge.copy(alpha = 0.8f), style = DrawStroke(width = 0.8.dp.toPx()))
             } else {
                 drawRoundRect(bodyBrush, bodyTopLeft, bodySize, bodyCorner)
-                drawRoundRect(itemOutline, bodyTopLeft, bodySize, bodyCorner, style = DrawStroke(width = 1.dp.toPx()))
+                drawRoundRect(
+                    color = bodyEdge.copy(alpha = 0.9f),
+                    topLeft = bodyTopLeft,
+                    size = bodySize,
+                    cornerRadius = bodyCorner,
+                    style = DrawStroke(width = 0.8.dp.toPx()),
+                )
             }
-            val highlightWidth = bodyWidth * 0.3f
-            val shadowWidth = bodyWidth * 0.2f
-            drawRoundRect(
-                color = Color.White.copy(alpha = if (dark) 0.18f else 0.62f),
-                topLeft = Offset(bodyLeft + bodyWidth * 0.28f, bodyTop + 6.dp.toPx()),
-                size = Size(highlightWidth, bodySize.height - 12.dp.toPx()),
-                cornerRadius = CornerRadius(highlightWidth / 2f),
+            val ferruleWidthTop = bodyWidth * 0.56f
+            val ferrule = Path().apply {
+                moveTo(centerX - ferruleWidthTop / 2f, ferruleTop)
+                lineTo(centerX + ferruleWidthTop / 2f, ferruleTop)
+                lineTo(bodyRight, ferruleBottom)
+                lineTo(bodyLeft, ferruleBottom)
+                close()
+            }
+            val silverBrush = Brush.horizontalGradient(
+                listOf(Color(0xFF9298A0), Color(0xFFF1F2F4), Color(0xFFA3A9B1)),
+                startX = bodyLeft,
+                endX = bodyRight,
             )
-            drawRoundRect(
-                color = Color.Black.copy(alpha = if (dark) 0.28f else 0.12f),
-                topLeft = Offset(bodyLeft + bodyWidth - shadowWidth, bodyTop + 6.dp.toPx()),
-                size = Size(shadowWidth, bodySize.height - 12.dp.toPx()),
-                cornerRadius = CornerRadius(shadowWidth / 2f),
-            )
+            if (style != ShelfDrawing.PENCIL) {
+                drawPath(ferrule, silverBrush)
+                drawLine(
+                    Color(0xFF777D85),
+                    Offset(bodyLeft + 1.dp.toPx(), ferruleBottom),
+                    Offset(bodyRight - 1.dp.toPx(), ferruleBottom),
+                    0.8.dp.toPx(),
+                )
+            }
 
             when (style) {
                 ShelfDrawing.BALLPOINT -> {
                     val tip = Path().apply {
-                        moveTo(centerX, 7.dp.toPx())
-                        lineTo(centerX - 8.dp.toPx(), bodyTop + 8.dp.toPx())
-                        lineTo(centerX + 8.dp.toPx(), bodyTop + 8.dp.toPx())
+                        moveTo(centerX, 4.dp.toPx())
+                        lineTo(centerX - bodyWidth * 0.28f, ferruleTop)
+                        lineTo(centerX + bodyWidth * 0.28f, ferruleTop)
                         close()
                     }
-                    drawPath(tip, inkColor)
-                    drawCircle(inkColor, 2.dp.toPx(), Offset(centerX, 7.dp.toPx()))
-                    drawLine(Color(0xFF77797D), Offset(bodyLeft + bodyWidth - 2.dp.toPx(), bodyTop + 34.dp.toPx()), Offset(bodyLeft + bodyWidth - 2.dp.toPx(), bodyTop + 62.dp.toPx()), 2.dp.toPx())
+                    drawPath(tip, bodyBrush)
+                    drawPath(tip, bodyEdge.copy(alpha = 0.9f), style = DrawStroke(width = 0.7.dp.toPx()))
+                    drawCircle(Color(color), 1.2.dp.toPx(), Offset(centerX, 4.dp.toPx()))
+                    val clipColor = if (dark) Color(0xFF171719) else Color(0xFF6E7278)
+                    drawLine(
+                        clipColor,
+                        Offset(bodyRight - 2.dp.toPx(), bodyTop + 7.dp.toPx()),
+                        Offset(bodyRight - 2.dp.toPx(), bodyTop + 28.dp.toPx()),
+                        1.dp.toPx(),
+                    )
                 }
                 ShelfDrawing.PENCIL -> {
                     val wood = Path().apply {
-                        moveTo(centerX, 6.dp.toPx())
-                        lineTo(bodyLeft, bodyTop + 4.dp.toPx())
-                        lineTo(bodyLeft + bodyWidth, bodyTop + 4.dp.toPx())
+                        moveTo(centerX, 4.dp.toPx())
+                        lineTo(bodyLeft, bodyTop)
+                        lineTo(bodyRight, bodyTop)
                         close()
                     }
-                    drawPath(wood, Color(0xFFE9C89A))
-                    drawLine(Color(0xFFB48E62), Offset(centerX, 8.dp.toPx()), Offset(centerX, bodyTop + 4.dp.toPx()), 1.6.dp.toPx())
-                    drawCircle(inkColor, 1.8.dp.toPx(), Offset(centerX, 6.dp.toPx()))
+                    drawPath(wood, Color(0xFFE8C9A0))
+                    drawLine(Color(0xFFB48E62), Offset(centerX, 6.dp.toPx()), Offset(centerX, bodyTop - 1.dp.toPx()), 1.dp.toPx())
+                    drawCircle(Color(color), 1.3.dp.toPx(), Offset(centerX, 4.dp.toPx()))
                 }
                 ShelfDrawing.FOUNTAIN -> {
                     val nib = Path().apply {
-                        moveTo(centerX, 5.dp.toPx())
-                        lineTo(centerX - 10.dp.toPx(), bodyTop + 4.dp.toPx())
-                        lineTo(centerX - 6.dp.toPx(), bodyTop + 14.dp.toPx())
-                        lineTo(centerX + 6.dp.toPx(), bodyTop + 14.dp.toPx())
-                        lineTo(centerX + 10.dp.toPx(), bodyTop + 4.dp.toPx())
+                        moveTo(centerX, 4.dp.toPx())
+                        lineTo(centerX - bodyWidth * 0.42f, ferruleTop - 2.dp.toPx())
+                        lineTo(centerX - bodyWidth * 0.25f, ferruleTop + 1.dp.toPx())
+                        lineTo(centerX + bodyWidth * 0.25f, ferruleTop + 1.dp.toPx())
+                        lineTo(centerX + bodyWidth * 0.42f, ferruleTop - 2.dp.toPx())
                         close()
                     }
-                    drawPath(nib, Brush.verticalGradient(listOf(Color(0xFFE4E7EB), Color(0xFF9BA1AA)), 5.dp.toPx(), bodyTop + 14.dp.toPx()))
-                    drawLine(Color(0xFF666B72), Offset(centerX, 7.dp.toPx()), Offset(centerX, bodyTop + 12.dp.toPx()), 2.dp.toPx())
-                    drawCircle(inkColor, 2.dp.toPx(), Offset(centerX, bodyTop + 4.dp.toPx()))
-                    drawRoundRect(Brush.verticalGradient(listOf(Color(0xFFC9CDD3), Color(0xFF8E949C))), Offset(bodyLeft, bodyTop), Size(bodyWidth, 10.dp.toPx()), CornerRadius(4.dp.toPx()))
+                    val nibBrush = Brush.horizontalGradient(
+                        listOf(Color(0xFF8E949C), Color(0xFFF5F6F7), Color(0xFF9DA3AA)),
+                        startX = bodyLeft,
+                        endX = bodyRight,
+                    )
+                    drawPath(nib, nibBrush)
+                    drawPath(nib, Color(0xFF7C8289), style = DrawStroke(width = 0.7.dp.toPx()))
+                    drawLine(Color(0xFF555B62), Offset(centerX, 6.dp.toPx()), Offset(centerX, ferruleTop - 1.dp.toPx()), 0.9.dp.toPx())
+                    drawCircle(Color(0xFFC7A25B), 1.6.dp.toPx(), Offset(centerX, ferruleTop - 4.dp.toPx()))
                 }
                 ShelfDrawing.MARKER -> {
-                    drawRect(inkColor, Offset(bodyLeft - 2.dp.toPx(), 6.dp.toPx()), Size(bodyWidth + 4.dp.toPx(), 32.dp.toPx()))
-                    drawRect(inkColor, Offset(bodyLeft, bodyTop), Size(bodyWidth, 8.dp.toPx()))
+                    drawRoundRect(
+                        color = inkColor,
+                        topLeft = Offset(bodyLeft, 4.dp.toPx()),
+                        size = Size(bodyWidth, ferruleTop - 4.dp.toPx()),
+                        cornerRadius = CornerRadius(2.dp.toPx()),
+                    )
+                    drawLine(
+                        if (dark) Color.White.copy(alpha = 0.36f) else Color.White.copy(alpha = 0.64f),
+                        Offset(bodyLeft + 2.dp.toPx(), 7.dp.toPx()),
+                        Offset(bodyRight - 2.dp.toPx(), 7.dp.toPx()),
+                        1.dp.toPx(),
+                    )
                 }
                 ShelfDrawing.HIGHLIGHTER -> {
                     val chisel = Path().apply {
-                        moveTo(bodyLeft - 2.dp.toPx(), 7.dp.toPx())
-                        lineTo(bodyLeft + bodyWidth + 2.dp.toPx(), 13.dp.toPx())
-                        lineTo(bodyLeft + bodyWidth + 2.dp.toPx(), bodyTop + 4.dp.toPx())
-                        lineTo(bodyLeft - 2.dp.toPx(), bodyTop + 4.dp.toPx())
+                        moveTo(bodyLeft, 5.dp.toPx())
+                        lineTo(bodyRight, 10.dp.toPx())
+                        lineTo(bodyRight, ferruleTop)
+                        lineTo(bodyLeft, ferruleTop)
                         close()
                     }
-                    drawPath(chisel, itemColor)
-                    drawRect(itemColor, Offset(bodyLeft, bodyTop), Size(bodyWidth, 8.dp.toPx()))
+                    drawPath(chisel, inkColor)
+                    drawLine(
+                        Color.White.copy(alpha = if (dark) 0.2f else 0.4f),
+                        Offset(bodyLeft + 2.dp.toPx(), 7.dp.toPx()),
+                        Offset(bodyRight - 3.dp.toPx(), 11.dp.toPx()),
+                        0.8.dp.toPx(),
+                    )
                 }
                 ShelfDrawing.CALLIGRAPHY -> {
-                    val nib = Path().apply {
-                        moveTo(centerX - 10.dp.toPx(), bodyTop + 6.dp.toPx())
-                        cubicTo(centerX - 16.dp.toPx(), 20.dp.toPx(), centerX - 4.dp.toPx(), 4.dp.toPx(), centerX + 8.dp.toPx(), 8.dp.toPx())
-                        cubicTo(centerX + 18.dp.toPx(), 12.dp.toPx(), centerX + 6.dp.toPx(), 34.dp.toPx(), centerX + 4.dp.toPx(), bodyTop + 6.dp.toPx())
+                    val flame = Path().apply {
+                        moveTo(centerX - 5.dp.toPx(), ferruleTop)
+                        cubicTo(centerX - 15.dp.toPx(), ferruleTop - 7.dp.toPx(), centerX - 5.dp.toPx(), 3.dp.toPx(), centerX, 4.dp.toPx())
+                        cubicTo(centerX + 11.dp.toPx(), 6.dp.toPx(), centerX + 9.dp.toPx(), ferruleTop - 7.dp.toPx(), centerX + 5.dp.toPx(), ferruleTop)
                         close()
                     }
-                    drawPath(nib, inkColor)
-                    drawLine(Color.White.copy(alpha = 0.45f), Offset(centerX - 2.dp.toPx(), 12.dp.toPx()), Offset(centerX + 2.dp.toPx(), bodyTop), 2.dp.toPx())
+                    drawPath(flame, inkColor)
+                    drawLine(
+                        Color.White.copy(alpha = if (dark) 0.4f else 0.58f),
+                        Offset(centerX - 1.dp.toPx(), 8.dp.toPx()),
+                        Offset(centerX + 1.dp.toPx(), ferruleTop - 2.dp.toPx()),
+                        0.8.dp.toPx(),
+                    )
                 }
                 ShelfDrawing.LASSO -> {
                     val loop = Path().apply {
-                        moveTo(centerX - 8.dp.toPx(), bodyTop + 14.dp.toPx())
-                        cubicTo(centerX - 16.dp.toPx(), 18.dp.toPx(), centerX + 12.dp.toPx(), 10.dp.toPx(), centerX + 8.dp.toPx(), bodyTop + 16.dp.toPx())
-                        cubicTo(centerX + 2.dp.toPx(), bodyTop + 24.dp.toPx(), centerX - 10.dp.toPx(), bodyTop + 20.dp.toPx(), centerX - 8.dp.toPx(), bodyTop + 14.dp.toPx())
+                        moveTo(centerX - 8.dp.toPx(), bodyTop - 2.dp.toPx())
+                        cubicTo(centerX - 15.dp.toPx(), 8.dp.toPx(), centerX + 12.dp.toPx(), 4.dp.toPx(), centerX + 8.dp.toPx(), bodyTop - 3.dp.toPx())
+                        cubicTo(centerX + 2.dp.toPx(), bodyTop + 1.dp.toPx(), centerX - 10.dp.toPx(), bodyTop + 1.dp.toPx(), centerX - 8.dp.toPx(), bodyTop - 2.dp.toPx())
                     }
                     drawPath(
                         loop,
@@ -941,8 +995,8 @@ private fun ShelfCanvasItem(
                 }
                 ShelfDrawing.TEXT -> {
                     val glyph = if (dark) Color(0xFFDFDFE2) else Color(0xFF56585C)
-                    drawLine(glyph, Offset(centerX - 8.dp.toPx(), bodyTop + 8.dp.toPx()), Offset(centerX + 8.dp.toPx(), bodyTop + 8.dp.toPx()), 3.dp.toPx())
-                    drawLine(glyph, Offset(centerX, bodyTop + 8.dp.toPx()), Offset(centerX, bodyTop + 24.dp.toPx()), 3.dp.toPx())
+                    drawLine(glyph, Offset(centerX - 7.dp.toPx(), 7.dp.toPx()), Offset(centerX + 7.dp.toPx(), 7.dp.toPx()), 2.dp.toPx())
+                    drawLine(glyph, Offset(centerX, 7.dp.toPx()), Offset(centerX, bodyTop - 2.dp.toPx()), 2.dp.toPx())
                 }
                 ShelfDrawing.ERASER, ShelfDrawing.RULER -> Unit
             }
