@@ -135,6 +135,9 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     private var rulerSnapEndY = 0f
 
     private val strokes = ArrayList<Stroke>()
+    private var revealPageId = ""
+    private val revealedTapeIndicesByPage = HashMap<String, MutableSet<Int>>()
+    private var tapeRevealGesture = false
     private data class Snapshot(val strokes: List<Stroke>, val images: List<PageImage>, val textBlocks: List<TextBlock>)
     private val history = ArrayList<Snapshot>()
     private val future = ArrayList<Snapshot>()
@@ -243,6 +246,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
             zoomToView,
             paperPaint.color,
             highlighterWet.takeIf { highlighterStartedInStrip },
+            revealedTapeIndicesByPage[revealPageId].orEmpty(),
         )
         for (b in textBlocks) TextBlockPainter.draw(canvas, b, false)
         canvas.restore()
@@ -415,6 +419,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
                 pageToView,
                 paperPaint.color,
                 highlighterWet.takeUnless { highlighterStartedInStrip },
+                revealedTapeIndicesByPage[revealPageId].orEmpty(),
             )
             canvas.restore()
             selectionBounds?.let { b ->
@@ -457,7 +462,8 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
             override fun onStrokesFinished(strokes: Map<InProgressStrokeId, Stroke>) {
                 val finishedStrokes = strokes.map { (id, stroke) ->
                     val shapeContext = shapeStrokeContexts.remove(id)
-                    if (shapeContext?.enabled == true) straightenHeldStroke(stroke, shapeContext) else stroke
+                    val shaped = if (shapeContext?.enabled == true) straightenHeldStroke(stroke, shapeContext) else stroke
+                    if (brushSpec.tool == InkTool.TAPE) straightenTapeStroke(shaped) else shaped
                 }
                 snapshot()
                 this@InkSurfaceView.strokes.addAll(finishedStrokes)
@@ -640,6 +646,31 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         return Stroke(stroke.brush, batch)
     }
 
+    private fun straightenTapeStroke(stroke: Stroke): Stroke {
+        if (stroke.inputs.size < 2) return stroke
+        val first = stroke.inputs[0]
+        val last = stroke.inputs[stroke.inputs.size - 1]
+        val dx = last.x - first.x
+        val dy = last.y - first.y
+        val angle = abs(Math.toDegrees(atan2(dy.toDouble(), dx.toDouble())))
+        val endY = if (angle <= 8.0 || abs(angle - 180.0) <= 8.0) first.y else last.y
+        val batch = MutableStrokeInputBatch()
+        batch.add(first)
+        batch.add(
+            StrokeInput.create(
+                last.x,
+                endY,
+                max(first.elapsedTimeMillis + 1L, last.elapsedTimeMillis),
+                last.toolType,
+                last.strokeUnitLengthCm,
+                last.pressure,
+                last.tiltRadians,
+                last.orientationRadians,
+            ),
+        )
+        return Stroke(stroke.brush, batch)
+    }
+
     private fun shapePoints(shape: Shape): List<Shape.Point> = when (shape) {
         is Shape.Line -> sampleSegment(
             Shape.Point(shape.x1, shape.y1),
@@ -770,6 +801,10 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     fun setStrokes(list: List<Stroke>) {
         strokes.clear(); strokes.addAll(list); history.clear(); future.clear()
         strokeLayer.invalidate(); notifyUndoRedoChanged(); notifyChanged()
+    }
+    fun setRevealPage(pageId: String) {
+        revealPageId = pageId
+        strokeLayer.invalidate()
     }
     fun strokes(): List<Stroke> = strokes.toList()
     fun canUndo() = history.isNotEmpty()
@@ -1486,6 +1521,10 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         val toolType = event.getToolType(idx)
         val isStylus = toolType == MotionEvent.TOOL_TYPE_STYLUS || toolType == MotionEvent.TOOL_TYPE_ERASER
         if (activeLaserTrail != null && brushSpec.tool != InkTool.LASER) finishActiveLaserTrail()
+        if (tapeRevealGesture) {
+            if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) tapeRevealGesture = false
+            return true
+        }
         if (zoomEnabled && event.actionMasked == MotionEvent.ACTION_DOWN) {
             inStrip = event.y >= stripTop
         }
@@ -1504,6 +1543,15 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> draggingWindow = false
             }
             return true
+        }
+        if (event.actionMasked == MotionEvent.ACTION_DOWN && brushSpec.tool != InkTool.TAPE) {
+            tapeStrokeAt(event.x, event.y)?.let { tapeIndex ->
+                val revealed = revealedTapeIndicesByPage.getOrPut(revealPageId) { mutableSetOf() }
+                if (!revealed.add(tapeIndex)) revealed.remove(tapeIndex)
+                tapeRevealGesture = true
+                strokeLayer.invalidate()
+                return true
+            }
         }
         if (!isStylus && !fingerDraws) return handleFingerNavigation(event)
         if (!isStylus && event.pointerCount > 1) { cancelCurrent(event); return handleFingerNavigation(event) }
@@ -1618,6 +1666,24 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
             MotionEvent.ACTION_CANCEL -> { cancelCurrent(event); rulerSnapActive = false; return true }
         }
         return false
+    }
+
+    private fun tapeStrokeAt(viewX: Float, viewY: Float): Int? {
+        val point = floatArrayOf(viewX, viewY)
+        viewToPage.mapPoints(point)
+        return strokes.indices.reversed().firstOrNull { index ->
+            val stroke = strokes[index]
+            if (stroke.brush.family != InkBrushFamilies.tape || stroke.inputs.size < 2) return@firstOrNull false
+            val first = stroke.inputs[0]
+            val last = stroke.inputs[stroke.inputs.size - 1]
+            val dx = last.x - first.x
+            val dy = last.y - first.y
+            val lengthSquared = dx * dx + dy * dy
+            val t = if (lengthSquared == 0f) 0f else (
+                ((point[0] - first.x) * dx + (point[1] - first.y) * dy) / lengthSquared
+            ).coerceIn(0f, 1f)
+            hypot(point[0] - first.x - t * dx, point[1] - first.y - t * dy) <= stroke.brush.size / 2f + 8f
+        }
     }
 
     private fun startHighlighterStroke(event: MotionEvent, index: Int) {

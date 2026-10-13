@@ -62,6 +62,7 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.drawscope.scale
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.RoundRect
@@ -135,6 +136,7 @@ private val PALETTE = listOf(
 private data class ToolBrushSettings(val color: Int, val size: Float, val opacity: Float)
 private data class DrawingToolSelection(val tool: InkTool, val pen: PenType)
 private enum class EditorToolbarEdge { TOP, BOTTOM, START, END }
+private val TAPE_COLORS = listOf(0xFFF2D37B.toInt(), 0xFFB7D7C5.toInt(), 0xFFA9CBE0.toInt(), 0xFFDDB4C0.toInt(), 0xFFB9BBC0.toInt(), 0xFFC7A884.toInt())
 
 private fun PenType.defaultOpacity() = if (this == PenType.MARKER) 230f / 255f else 1f
 
@@ -169,6 +171,7 @@ private fun writeBrushSettings(
 }
 
 @Composable
+@OptIn(ExperimentalMaterial3Api::class)
 fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, recognizer: InkRecognizer, onBack: () -> Unit, onNavigateToPage: (String) -> Unit) {
     val context = LocalContext.current
     val notebooks by repo.notebooks().collectAsState(initial = emptyList())
@@ -229,6 +232,9 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
             ),
         )
     }
+    var tapeSettings by remember(preferences) {
+        mutableStateOf(readBrushSettings(preferences, "tape", ToolBrushSettings(TAPE_COLORS.first(), 24f, 1f)))
+    }
     var alwaysStraight by remember(preferences) { mutableStateOf(preferences.getBoolean("highlighter.alwaysStraight", false)) }
     var shapeStraightening by remember(preferences) { mutableStateOf(preferences.getBoolean("shape.straightening", true)) }
     var recentColors by remember { mutableStateOf(emptyList<Int>()) }
@@ -274,7 +280,11 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
         else -> Color(0xFFEDEDED)
     }
     val deskColor = toolbarColor
-    val activeBrushSettings = if (tool == InkTool.HIGHLIGHTER) highlighterSettings else penSettings[pen] ?: ToolBrushSettings(0xFF000000.toInt(), 2.5f, pen.defaultOpacity())
+    val activeBrushSettings = when (tool) {
+        InkTool.HIGHLIGHTER -> highlighterSettings
+        InkTool.TAPE -> tapeSettings
+        else -> penSettings[pen] ?: ToolBrushSettings(0xFF000000.toInt(), 2.5f, pen.defaultOpacity())
+    }
     val color = activeBrushSettings.color
     val size = activeBrushSettings.size
     val exporter = remember(context, repo) { PdfExporter(context, repo) }
@@ -283,6 +293,9 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
         if (tool == InkTool.HIGHLIGHTER) {
             highlighterSettings = updated
             writeBrushSettings(preferences, "highlighter", updated)
+        } else if (tool == InkTool.TAPE) {
+            tapeSettings = updated
+            writeBrushSettings(preferences, "tape", updated)
         } else {
             penSettings = penSettings + (pen to updated)
             writeBrushSettings(preferences, "pen.${pen.name.lowercase()}", updated)
@@ -346,6 +359,7 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
         val p = page ?: return@LaunchedEffect
         val s = surface ?: return@LaunchedEffect
         if (loadedFor == p.id) return@LaunchedEffect
+        s.setRevealPage(p.id)
         s.setPageGeometry(p.widthPt, p.heightPt, p.kind)
         val bytes = repo.loadStrokes(p.id)
         val strokes = bytes?.let { b -> withContext(Dispatchers.Default) { runCatching { StrokeStore.decode(b) }.getOrElse { Log.e("NotePad", "decode", it); emptyList() } } } ?: emptyList()
@@ -406,8 +420,9 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
     var colorPop by remember { mutableStateOf(false) }
     var penPopover by remember { mutableStateOf<PenType?>(null) }
     var highlighterPopover by remember { mutableStateOf(false) }
+    var tapePopover by remember { mutableStateOf(false) }
     var morePop by remember { mutableStateOf(false) }
-    val toolbarOverlayOpen = penPopover != null || highlighterPopover || colorPop || morePop ||
+    val toolbarOverlayOpen = penPopover != null || highlighterPopover || tapePopover || colorPop || morePop ||
         showPenButtonSettings || editingBlock != null || newBlockAt != null
     LaunchedEffect(drawingActive, toolbarPinned, toolbarOverlayOpen) {
         if (toolbarPinned || toolbarOverlayOpen) {
@@ -423,7 +438,7 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
 
     fun currentDrawingSelection() = DrawingToolSelection(tool, pen)
     fun isDrawingSelection(selection: DrawingToolSelection) =
-        selection.tool == InkTool.PEN || selection.tool == InkTool.HIGHLIGHTER
+        selection.tool == InkTool.PEN || selection.tool == InkTool.HIGHLIGHTER || selection.tool == InkTool.TAPE
 
     fun switchToEraser() {
         if (tool == InkTool.ERASER) {
@@ -513,12 +528,20 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
     }
 
     fun chooseColor(next: Int) {
-        if (next != color) {
-            recentColors = (listOf(color) + recentColors.filterNot { it == color || it == next })
+        val chosen = if (tool == InkTool.TAPE) {
+            TAPE_COLORS.minBy { candidate ->
+                val dr = android.graphics.Color.red(candidate) - android.graphics.Color.red(next)
+                val dg = android.graphics.Color.green(candidate) - android.graphics.Color.green(next)
+                val db = android.graphics.Color.blue(candidate) - android.graphics.Color.blue(next)
+                dr * dr + dg * dg + db * db
+            }
+        } else next
+        if (chosen != color) {
+            recentColors = (listOf(color) + recentColors.filterNot { it == color || it == chosen })
                 .distinct().take(8)
-            updateActiveBrushSettings { it.copy(color = next) }
+            updateActiveBrushSettings { it.copy(color = chosen) }
         }
-        if (recolorSelectionMode && hasSelection) surface?.recolorSelection(next)
+        if (recolorSelectionMode && hasSelection) surface?.recolorSelection(chosen)
         recolorSelectionMode = false
         colorPop = false
     }
@@ -717,6 +740,32 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
                         showOpacity = true,
                         alwaysStraight = alwaysStraight,
                         onAlwaysStraightChange = ::setAlwaysStraight,
+                    )
+                }
+            }
+            Box {
+                ShelfCanvasItem(
+                    label = "Tape",
+                    style = ShelfDrawing.TAPE,
+                    selected = tool == InkTool.TAPE,
+                    color = tapeSettings.color,
+                    enabled = !toolbarHidden,
+                    vertical = verticalToolbar,
+                    edge = toolbarEdge,
+                    onClick = {
+                        if (tool == InkTool.TAPE) tapePopover = true else selectTool(InkTool.TAPE)
+                    },
+                )
+                ToolbarPopover(
+                    expanded = tapePopover,
+                    edge = toolbarEdge,
+                    onDismissRequest = { tapePopover = false },
+                ) {
+                    TapeSettingsPopover(
+                        color = tapeSettings.color,
+                        tapeSize = tapeSettings.size,
+                        onColorChange = { value -> updateActiveBrushSettings { it.copy(color = value) } },
+                        onSizeChange = { value -> updateActiveBrushSettings { it.copy(size = value) } },
                     )
                 }
             }
@@ -1528,7 +1577,7 @@ private fun PenButtonActionChoices(
     }
 }
 
-private enum class ShelfDrawing { BALLPOINT, PENCIL, FOUNTAIN, MARKER, HIGHLIGHTER, CALLIGRAPHY, ERASER, LASSO, TEXT, RULER, LASER }
+private enum class ShelfDrawing { BALLPOINT, PENCIL, FOUNTAIN, MARKER, HIGHLIGHTER, TAPE, CALLIGRAPHY, ERASER, LASSO, TEXT, RULER, LASER }
 
 private fun PenType.toShelfStyle(): ShelfDrawing = when (this) {
     PenType.BALLPOINT -> ShelfDrawing.BALLPOINT
@@ -1678,6 +1727,7 @@ private class ShelfPainter(
         ShelfDrawing.FOUNTAIN -> fountain(top)
         ShelfDrawing.MARKER -> marker(top)
         ShelfDrawing.HIGHLIGHTER -> highlighter(top)
+        ShelfDrawing.TAPE -> tape(top)
         ShelfDrawing.CALLIGRAPHY -> brushPen(top)
         ShelfDrawing.ERASER -> eraser(top)
         ShelfDrawing.LASSO -> lasso(top)
@@ -1833,6 +1883,24 @@ private class ShelfPainter(
         }
         part(chisel, translucentInk, translucentInk)
         scope.drawLine(Color.White.copy(alpha = 0.4f), Offset(cx - 4f * u, t + 6.5f * u), Offset(cx + 4f * u, t + 2f * u), 1f * u, StrokeCap.Round)
+    }
+
+    private fun tape(t: Float) {
+        val halfWidth = 10f * u
+        val top = t + 8f * u
+        val tail = Path().apply {
+            moveTo(cx - 6f * u, top + 11f * u)
+            lineTo(cx - 1f * u, top + 11f * u)
+            lineTo(cx - 1f * u, bottom)
+            lineTo(cx - 6f * u, bottom)
+            close()
+        }
+        part(tail, ink.copy(alpha = 0.94f), outline)
+        val roll = Path().apply { addOval(Rect(cx - halfWidth, top, cx + halfWidth, top + 20f * u)) }
+        part(roll, bodyBrush(halfWidth), outline)
+        scope.drawCircle(if (dark) Color(0xFF232428) else Color(0xFFF7F4EA), 5f * u, Offset(cx, top + 10f * u))
+        scope.drawCircle(outline, 5f * u, Offset(cx, top + 10f * u), style = DrawStroke(width = 0.8f * u))
+        scope.drawLine(gloss, Offset(cx - 5f * u, top + 4f * u), Offset(cx - 5f * u, top + 16f * u), 1.2f * u)
     }
 
     private fun brushPen(t: Float) {
@@ -2032,6 +2100,48 @@ private fun BrushSettingsPopover(
                 Switch(checked = alwaysStraight == true, onCheckedChange = onChange)
             }
         }
+        }
+    }
+}
+
+@Composable
+private fun TapeSettingsPopover(
+    color: Int,
+    tapeSize: Float,
+    onColorChange: (Int) -> Unit,
+    onSizeChange: (Float) -> Unit,
+) {
+    Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surfaceContainer) {
+        Column(Modifier.width(264.dp).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("Tape", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Canvas(Modifier.fillMaxWidth().height(32.dp)) {
+                val left = 8.dp.toPx()
+                val top = size.height * 0.3f
+                val right = size.width - left
+                val bottom = size.height * 0.7f
+                clipRect(left, top, right, bottom) {
+                    drawRect(Color(color), topLeft = Offset(left, top), size = Size(right - left, bottom - top))
+                    var x = 0f
+                    while (x < size.width) {
+                        drawLine(Color.White.copy(alpha = 0.4f), Offset(x, bottom), Offset(x + size.height, top), 2.dp.toPx())
+                        x += 12.dp.toPx()
+                    }
+                }
+            }
+            Text("Width", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf(16f, 24f, 36f).forEach { preset ->
+                    FilterChip(
+                        selected = tapeSize == preset,
+                        onClick = { onSizeChange(preset) },
+                        label = { Text("${preset.toInt()} pt") },
+                    )
+                }
+            }
+            Text("Colour", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                TAPE_COLORS.forEach { swatch -> ColorDot(swatch, swatch == color, 32.dp) { onColorChange(swatch) } }
+            }
         }
     }
 }

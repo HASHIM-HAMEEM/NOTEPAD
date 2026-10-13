@@ -21,28 +21,81 @@ fun drawStrokes(
     toCanvas: Matrix,
     paperArgb: Int,
     wet: InProgressStroke? = null,
+    revealedTapeIndices: Set<Int> = emptySet(),
 ) {
     val paperDark = Color.luminance(paperArgb) < 0.5f
     val highlighter = StockBrushes.highlighter()
-    val highlights = strokes.filter { it.brush.family == highlighter }
-    val wetHighlighter = wet?.takeIf { it.brush?.family == highlighter }
-
-    if (highlights.isNotEmpty() || wetHighlighter != null) {
-        val layerPaint = Paint().apply {
-            blendMode = if (paperDark) BlendMode.SCREEN else BlendMode.MULTIPLY
+    for ((index, stroke) in strokes.withIndex()) {
+        when {
+            stroke.brush.family == highlighter -> {
+                val layer = canvas.saveLayer(null, Paint().apply {
+                    blendMode = if (paperDark) BlendMode.SCREEN else BlendMode.MULTIPLY
+                })
+                renderer.draw(canvas, opaqueHighlight(stroke, paperDark), toCanvas)
+                canvas.restoreToCount(layer)
+            }
+            stroke.brush.family == InkBrushFamilies.tape ->
+                drawTape(canvas, stroke, toCanvas, index in revealedTapeIndices)
+            else -> renderer.draw(canvas, stroke, toCanvas)
         }
-        val layer = canvas.saveLayer(null, layerPaint)
-        for (stroke in highlights) {
-            renderer.draw(canvas, opaqueHighlight(stroke, paperDark), toCanvas)
+    }
+    if (wet != null) {
+        if (wet.brush?.family == highlighter) {
+            val layer = canvas.saveLayer(null, Paint().apply {
+                blendMode = if (paperDark) BlendMode.SCREEN else BlendMode.MULTIPLY
+            })
+            renderer.draw(canvas, wet, toCanvas)
+            canvas.restoreToCount(layer)
+        } else {
+            renderer.draw(canvas, wet, toCanvas)
         }
-        wetHighlighter?.let { renderer.draw(canvas, it, toCanvas) }
-        canvas.restoreToCount(layer)
     }
+}
 
-    for (stroke in strokes) {
-        if (stroke.brush.family != highlighter) renderer.draw(canvas, stroke, toCanvas)
+private fun drawTape(canvas: Canvas, stroke: Stroke, toCanvas: Matrix, revealed: Boolean) {
+    if (stroke.inputs.size < 2) return
+    val first = stroke.inputs[0]
+    val last = stroke.inputs[stroke.inputs.size - 1]
+    val dx = last.x - first.x
+    val dy = last.y - first.y
+    val length = kotlin.math.hypot(dx, dy).coerceAtLeast(1f)
+    val angle = Math.toDegrees(kotlin.math.atan2(dy.toDouble(), dx.toDouble())).toFloat()
+    canvas.save()
+    canvas.concat(toCanvas)
+    canvas.rotate(angle, first.x, first.y)
+    val width = stroke.brush.size.coerceAtLeast(1f)
+    val alpha = if (revealed) 0.12f else 1f
+    val band = android.graphics.RectF(first.x, first.y - width / 2f, first.x + length, first.y + width / 2f)
+    val base = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = stroke.brush.colorIntArgb
+        this.alpha = (android.graphics.Color.alpha(color) * alpha).toInt()
     }
-    if (wet != null && wetHighlighter == null) renderer.draw(canvas, wet, toCanvas)
+    canvas.drawRect(band, base)
+    if (!revealed) {
+        val stripe = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = android.graphics.Color.WHITE
+            this.alpha = 54
+            strokeWidth = width * 0.12f
+        }
+        val save = canvas.save()
+        canvas.clipRect(band)
+        var x = first.x - width
+        while (x < first.x + length) {
+            canvas.drawLine(x, band.bottom, x + width, band.top, stripe)
+            x += width * 0.55f
+        }
+        canvas.restoreToCount(save)
+    } else {
+        val outline = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = stroke.brush.colorIntArgb
+            this.alpha = (android.graphics.Color.alpha(color) * 0.8f).toInt()
+            style = Paint.Style.STROKE
+            strokeWidth = 1.25f
+            pathEffect = android.graphics.DashPathEffect(floatArrayOf(width * 0.3f, width * 0.22f), 0f)
+        }
+        canvas.drawRect(band, outline)
+    }
+    canvas.restore()
 }
 
 private fun opaqueHighlight(stroke: Stroke, paperDark: Boolean): Stroke =
