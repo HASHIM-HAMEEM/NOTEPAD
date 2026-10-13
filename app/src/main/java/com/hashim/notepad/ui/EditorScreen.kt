@@ -570,6 +570,7 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
                     rulerVisible = !rulerVisible
                     haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                 })
+                ShelfCanvasItem("Laser", ShelfDrawing.LASER, tool == InkTool.LASER, color, onClick = { selectTool(InkTool.LASER) })
                     Box(Modifier.padding(start = 7.dp)) {
                         IconButton(onClick = { recolorSelectionMode = false; colorPop = true }, modifier = Modifier.size(44.dp)) {
                             ColorWheelButton(color)
@@ -840,7 +841,7 @@ private fun PenButtonActionChoices(
     }
 }
 
-private enum class ShelfDrawing { BALLPOINT, PENCIL, FOUNTAIN, MARKER, HIGHLIGHTER, CALLIGRAPHY, ERASER, LASSO, TEXT, RULER }
+private enum class ShelfDrawing { BALLPOINT, PENCIL, FOUNTAIN, MARKER, HIGHLIGHTER, CALLIGRAPHY, ERASER, LASSO, TEXT, RULER, LASER }
 
 private fun PenType.toShelfStyle(): ShelfDrawing = when (this) {
     PenType.BALLPOINT -> ShelfDrawing.BALLPOINT
@@ -958,6 +959,30 @@ private class ShelfPainter(val scope: DrawScope, val dark: Boolean, val ink: Col
         ShelfDrawing.LASSO -> lasso(top)
         ShelfDrawing.TEXT -> textTool(top)
         ShelfDrawing.RULER -> ruler(top)
+        ShelfDrawing.LASER -> laser(top)
+    }
+
+    private fun laser(t: Float) {
+        val tipY = t + 2.5f * u
+        val halfWidth = 2.5f * u
+        scope.drawCircle(Color(0x44FF3B30), 8f * u, Offset(cx, tipY + 1.5f * u))
+        scope.drawCircle(Color(0x88FF3B30), 4f * u, Offset(cx, tipY + 1.5f * u))
+        val body = Path().apply {
+            moveTo(cx - halfWidth * 0.55f, tipY + 3f * u)
+            lineTo(cx + halfWidth * 0.55f, tipY + 3f * u)
+            lineTo(cx + halfWidth, bottom - 4f * u)
+            lineTo(cx - halfWidth, bottom - 4f * u)
+            close()
+        }
+        part(body, Color(0xFF34373B), Color(0xFF17191C))
+        scope.drawLine(
+            Color.White.copy(alpha = if (dark) 0.18f else 0.34f),
+            Offset(cx - halfWidth * 0.18f, tipY + 6f * u),
+            Offset(cx - halfWidth * 0.45f, bottom - 7f * u),
+            0.7f * u,
+            StrokeCap.Round,
+        )
+        scope.drawCircle(Color(0xFFFF3B30), 2f * u, Offset(cx, tipY + 1.5f * u))
     }
 
     private fun ballpoint(t: Float) {

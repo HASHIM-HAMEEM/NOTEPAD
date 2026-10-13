@@ -1,6 +1,8 @@
 package com.hashim.notepad.ink
 
 import android.animation.ValueAnimator
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -52,6 +54,7 @@ private const val HIGHLIGHTER_STRAIGHTEN_DELAY_MS = 450L
 private const val SHAPE_STRAIGHTEN_DELAY_MS = 450L
 private const val SHAPE_HOLD_RADIUS_DP = 6f
 private const val SHAPE_SAMPLE_SPACING_PT = 2f
+private const val LASER_FADE_DURATION_MS = 1000L
 private const val POINT_STROKE_UNIT_LENGTH_CM = 2.54f / 72f
 private const val STYLUS_BUTTON_PRIMARY_KEYCODE = 308
 private const val STYLUS_BUTTON_SECONDARY_KEYCODE = 309
@@ -317,6 +320,36 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     private val pageClipPath = Path()
     private var deskColor = 0xFFF3EFE7.toInt()
     private val bitmapPaint = Paint(Paint.FILTER_BITMAP_FLAG)
+    private data class LaserTrail(val path: Path, var alpha: Float = 1f, var fadeAnimator: ValueAnimator? = null)
+    private val laserTrails = ArrayList<LaserTrail>()
+    private var activeLaserTrail: LaserTrail? = null
+    private var activeLaserPointerId = -1
+    private val laserHaloPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0xFFFF3B30.toInt()
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+        strokeJoin = Paint.Join.ROUND
+        strokeWidth = 18f * resources.displayMetrics.density
+    }
+    private val laserCorePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0xFFFF3B30.toInt()
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+        strokeJoin = Paint.Join.ROUND
+        strokeWidth = 4f * resources.displayMetrics.density
+    }
+    private val laserOverlay = object : View(context) {
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            laserTrails.forEach { trail ->
+                if (trail.alpha <= 0f) return@forEach
+                laserHaloPaint.alpha = (trail.alpha * 0.16f * 255f).toInt()
+                laserCorePaint.alpha = (trail.alpha * 255f).toInt()
+                canvas.drawPath(trail.path, laserHaloPaint)
+                canvas.drawPath(trail.path, laserCorePaint)
+            }
+        }
+    }
 
     private val scaleDetector = ScaleGestureDetector(context, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
         override fun onScale(d: ScaleGestureDetector): Boolean {
@@ -423,6 +456,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         updateRulerPaints()
         addView(strokeLayer, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
         addView(wetLayer, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+        addView(laserOverlay, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
     }
 
     private fun drawRuler(canvas: Canvas) {
@@ -1265,6 +1299,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         val idx = event.actionIndex
         val toolType = event.getToolType(idx)
         val isStylus = toolType == MotionEvent.TOOL_TYPE_STYLUS || toolType == MotionEvent.TOOL_TYPE_ERASER
+        if (activeLaserTrail != null && brushSpec.tool != InkTool.LASER) finishActiveLaserTrail()
         if (zoomEnabled && event.actionMasked == MotionEvent.ACTION_DOWN) {
             inStrip = event.y >= stripTop
         }
@@ -1297,6 +1332,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
             }
             return true
         }
+        if (brushSpec.tool == InkTool.LASER) return handleLaserPointer(event, idx)
         val eraserNow = toolType == MotionEvent.TOOL_TYPE_ERASER || brushSpec.tool == InkTool.ERASER ||
             (event.buttonState and MotionEvent.BUTTON_STYLUS_PRIMARY) != 0 ||
             stylusButtonPresses.containsKey(MotionEvent.BUTTON_STYLUS_PRIMARY)
@@ -1545,6 +1581,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     }
 
     private fun cancelCurrent(event: MotionEvent) {
+        finishActiveLaserTrail()
         currentStrokeId?.let {
             shapeStrokeContexts.remove(it)
             wetLayer.cancelStroke(it, event)
@@ -1552,6 +1589,60 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         currentStrokeId = null; currentPointerId = -1; erasing = false
         resetHighlighterStroke()
         strokeLayer.invalidate()
+    }
+
+    private fun handleLaserPointer(event: MotionEvent, actionIndex: Int): Boolean {
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
+                if (activeLaserTrail == null) {
+                    activeLaserPointerId = event.getPointerId(actionIndex)
+                    activeLaserTrail = LaserTrail(Path().apply { moveTo(event.getX(actionIndex), event.getY(actionIndex)) })
+                        .also(laserTrails::add)
+                    laserOverlay.invalidate()
+                }
+            }
+            MotionEvent.ACTION_MOVE -> {
+                val trail = activeLaserTrail ?: return true
+                val pointerIndex = event.findPointerIndex(activeLaserPointerId)
+                if (pointerIndex < 0) return true
+                for (historyIndex in 0 until event.historySize) {
+                    trail.path.lineTo(
+                        event.getHistoricalX(pointerIndex, historyIndex),
+                        event.getHistoricalY(pointerIndex, historyIndex),
+                    )
+                }
+                trail.path.lineTo(event.getX(pointerIndex), event.getY(pointerIndex))
+                laserOverlay.invalidate()
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
+                if (event.getPointerId(actionIndex) == activeLaserPointerId) {
+                    activeLaserTrail?.path?.lineTo(event.getX(actionIndex), event.getY(actionIndex))
+                    finishActiveLaserTrail()
+                }
+            }
+            MotionEvent.ACTION_CANCEL -> finishActiveLaserTrail()
+        }
+        return true
+    }
+
+    private fun finishActiveLaserTrail() {
+        val trail = activeLaserTrail ?: return
+        activeLaserTrail = null
+        activeLaserPointerId = -1
+        trail.fadeAnimator = ValueAnimator.ofFloat(1f, 0f).apply {
+            duration = LASER_FADE_DURATION_MS
+            addUpdateListener {
+                trail.alpha = it.animatedValue as Float
+                laserOverlay.invalidate()
+            }
+            addListener(object : AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: Animator) {
+                    laserTrails.remove(trail)
+                    laserOverlay.invalidate()
+                }
+            })
+            start()
+        }
     }
 
     private fun handleFingerNavigation(event: MotionEvent): Boolean {

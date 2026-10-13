@@ -8,7 +8,7 @@ import androidx.ink.brush.ExperimentalInkCustomBrushApi
 import androidx.ink.brush.StockBrushes
 import kotlin.math.roundToInt
 
-enum class InkTool { PEN, HIGHLIGHTER, ERASER, TEXT, LASSO }
+enum class InkTool { PEN, HIGHLIGHTER, ERASER, TEXT, LASSO, LASER }
 
 enum class PenType(val label: String) {
     BALLPOINT("Ballpoint"),
