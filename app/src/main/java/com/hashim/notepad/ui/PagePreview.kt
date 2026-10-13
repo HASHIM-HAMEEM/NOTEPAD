@@ -7,6 +7,7 @@ import android.graphics.Paint
 import android.graphics.RectF
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffColorFilter
+import android.os.Build
 import android.util.LruCache
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -14,6 +15,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -22,6 +24,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.ink.rendering.android.canvas.CanvasStrokeRenderer
 import androidx.ink.strokes.Stroke
 import com.hashim.notepad.data.NotePadRepository
@@ -39,8 +42,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.FileOutputStream
+import java.security.MessageDigest
+import kotlin.math.roundToInt
 
-/** Small in-memory caches so grids scroll without re-decoding. Keyed by page id + updated_at so edits refresh. */
+/** Small memory caches front the persistent WebP cache used by library covers. */
 private object PreviewCache {
     val bitmaps = LruCache<String, Bitmap>(24)
     val strokes = LruCache<String, List<Stroke>>(64)
@@ -52,14 +58,31 @@ private object PreviewCache {
  * Used for notebook covers and the page grid, so what you see in the library is what is on the page.
  */
 @Composable
-fun PagePreview(repo: NotePadRepository, page: Page?, paperColor: Color, modifier: Modifier = Modifier, lineColor: Color? = null) {
+fun PagePreview(
+    repo: NotePadRepository,
+    page: Page?,
+    paperColor: Color,
+    modifier: Modifier = Modifier,
+    lineColor: Color? = null,
+    renderEnabled: Boolean = true,
+    cropScale: Float = 1f,
+) {
     val context = LocalContext.current
-    var bitmap by remember(page?.id) { mutableStateOf<Bitmap?>(page?.let { PreviewCache.bitmaps.get(it.id) }) }
+    var targetWidthPx by remember { mutableIntStateOf(0) }
+    val renderWidth = (targetWidthPx * cropScale.coerceAtLeast(1f)).roundToInt().coerceIn(420, 1800)
+    val bitmapKey = page?.takeIf { it.kind == PageKind.PDF && it.assetId != null }?.let {
+        "${it.assetId}:${it.pdfPageIndex ?: 0}:$renderWidth"
+    }
+    var bitmap by remember(bitmapKey) { mutableStateOf<Bitmap?>(bitmapKey?.let { PreviewCache.bitmaps.get(it) }) }
+    val cropStartFraction = remember(bitmap, cropScale) {
+        bitmap?.let { focusCropStartFraction(it, cropScale) } ?: 0f
+    }
     var strokes by remember(page?.id, page?.updatedAt) { mutableStateOf<List<Stroke>>(page?.let { PreviewCache.strokes.get("${it.id}:${it.updatedAt}") } ?: emptyList()) }
     var pageImages by remember(page?.id, page?.updatedAt) { mutableStateOf(emptyList<PageImage>()) }
     var imageBitmaps by remember(page?.id, page?.updatedAt) { mutableStateOf(emptyMap<String, Bitmap>()) }
 
-    LaunchedEffect(page?.id, page?.updatedAt) {
+    LaunchedEffect(page?.id, page?.updatedAt, renderEnabled, renderWidth) {
+        if (!renderEnabled || targetWidthPx == 0) return@LaunchedEffect
         val p = page ?: return@LaunchedEffect
         val key = "${p.id}:${p.updatedAt}"
         val imageRows = repo.pageImages(p.id).first()
@@ -82,21 +105,37 @@ fun PagePreview(repo: NotePadRepository, page: Page?, paperColor: Color, modifie
             PreviewCache.strokes.put(key, list)
             strokes = list
         }
-        if (p.kind == PageKind.PDF && p.assetId != null && PreviewCache.bitmaps.get(p.id) == null) {
+        if (p.kind == PageKind.PDF && p.assetId != null && bitmapKey != null && PreviewCache.bitmaps.get(bitmapKey) == null) {
             val asset = repo.asset(p.assetId) ?: return@LaunchedEffect
             val bmp = withContext(Dispatchers.Default) {
-                runCatching { PdfPageSource(context, File(asset.localPath), com.hashim.notepad.pdf.PdfPasswordVault(context).read(asset.id)).use { it.render(p.pdfPageIndex ?: 0, 420) } }.getOrNull()
+                runCatching {
+                    val file = previewFile(context, p.assetId, p.pdfPageIndex ?: 0, renderWidth)
+                    val cached = if (file.exists()) BitmapFactory.decodeFile(file.absolutePath) else null
+                    cached ?: run {
+                        val rendered = PdfPageSource(context, File(asset.localPath), com.hashim.notepad.pdf.PdfPasswordVault(context).read(asset.id))
+                            .use { it.render(p.pdfPageIndex ?: 0, renderWidth) }
+                        file.parentFile?.mkdirs()
+                        val temporary = File(file.parentFile, "${file.name}.part")
+                        FileOutputStream(temporary).use { output ->
+                            val format = if (Build.VERSION.SDK_INT >= 30) Bitmap.CompressFormat.WEBP_LOSSY else Bitmap.CompressFormat.WEBP
+                            rendered.compress(format, 86, output)
+                        }
+                        if (!temporary.renameTo(file)) temporary.delete()
+                        rendered
+                    }
+                }.getOrNull()
             } ?: return@LaunchedEffect
-            PreviewCache.bitmaps.put(p.id, bmp)
+            PreviewCache.bitmaps.put(bitmapKey, bmp)
             bitmap = bmp
         }
     }
 
     val ruling = lineColor ?: if (paperColor.luminance() < 0.5f) Color(0xFF3A3A40) else Color(0xFFCDD1D8)
     val bookmarkColor = MaterialTheme.colorScheme.primary.toArgbInt()
-    Canvas(modifier.background(paperColor)) {
+    Canvas(modifier.onSizeChanged { if (it.width > 0) targetWidthPx = it.width }.background(paperColor)) {
         val p = page ?: return@Canvas
-        val scale = size.width / p.widthPt
+        val scale = size.width / p.widthPt * cropScale.coerceAtLeast(1f)
+        val cropStartPt = p.widthPt * cropStartFraction
         drawIntoCanvas { c ->
             val n = c.nativeCanvas
             val texturePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -107,6 +146,7 @@ fun PagePreview(repo: NotePadRepository, page: Page?, paperColor: Color, modifie
             n.drawRect(0f, 0f, size.width, size.height, texturePaint)
             n.save()
             n.scale(scale, scale)
+            n.translate(-cropStartPt, 0f)
             val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = ruling.toArgbInt(); strokeWidth = 0.8f }
             PageTemplateRenderer.draw(n, paint, p.widthPt, p.heightPt, p.kind)
             bitmap?.let { b ->
@@ -121,7 +161,9 @@ fun PagePreview(repo: NotePadRepository, page: Page?, paperColor: Color, modifie
                     n.drawBitmap(it, null, RectF(image.xPt, image.yPt, image.xPt + image.wPt, image.yPt + image.hPt), Paint(Paint.FILTER_BITMAP_FLAG))
                 }
             }
-            val toScreen = Matrix().apply { setScale(scale, scale) }
+            val toScreen = Matrix().apply {
+                setValues(floatArrayOf(scale, 0f, -cropStartPt * scale, 0f, scale, 0f, 0f, 0f, 1f))
+            }
             drawStrokes(
                 n,
                 strokes,
@@ -144,6 +186,43 @@ fun PagePreview(repo: NotePadRepository, page: Page?, paperColor: Color, modifie
             n.restore()
         }
     }
+}
+
+private fun previewFile(context: android.content.Context, assetId: String, pageIndex: Int, width: Int): File {
+    val key = "$assetId:$pageIndex:$width"
+    val digest = MessageDigest.getInstance("SHA-256").digest(key.toByteArray())
+        .joinToString("") { "%02x".format(it) }
+    return File(context.cacheDir, "page-previews/$digest.webp")
+}
+
+private fun focusCropStartFraction(bitmap: Bitmap, cropScale: Float): Float {
+    val columns = 64
+    val rows = 32
+    val pixelCounts = IntArray(columns)
+    val scanHeight = (bitmap.height * 0.45f).toInt().coerceAtLeast(1)
+    for (column in 0 until columns) {
+        val x = ((column + 0.5f) * bitmap.width / columns).toInt().coerceIn(0, bitmap.width - 1)
+        for (row in 0 until rows) {
+            val y = ((row + 0.5f) * scanHeight / rows).toInt().coerceIn(0, bitmap.height - 1)
+            val color = bitmap.getPixel(x, y)
+            if (android.graphics.Color.red(color) + android.graphics.Color.green(color) + android.graphics.Color.blue(color) < 680) {
+                pixelCounts[column]++
+            }
+        }
+    }
+    val visibleColumns = (columns / cropScale.coerceAtLeast(1f)).toInt().coerceIn(1, columns)
+    val prefix = IntArray(columns + 1)
+    pixelCounts.forEachIndexed { index, count -> prefix[index + 1] = prefix[index] + count }
+    var bestStart = 0
+    var bestCount = -1
+    for (start in 0..columns - visibleColumns) {
+        val count = prefix[start + visibleColumns] - prefix[start]
+        if (count > bestCount) {
+            bestCount = count
+            bestStart = start
+        }
+    }
+    return bestStart.toFloat() / columns
 }
 
 private fun Color.luminance(): Float = 0.2126f * red + 0.7152f * green + 0.0722f * blue

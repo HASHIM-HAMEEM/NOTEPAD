@@ -10,7 +10,11 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.IntentSenderRequest
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.AnimatedVisibilityScope
+import androidx.compose.animation.ExperimentalSharedTransitionApi
+import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.fadeIn
@@ -31,6 +35,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -51,6 +56,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.hashim.notepad.data.Folder
@@ -103,7 +109,7 @@ private fun showScannerFallback(host: SnackbarHostState, scope: kotlinx.coroutin
 private data class FolderSnapshot(val value: List<Folder>?)
 
 /** The library: every notebook as a true miniature of its first page. */
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class, ExperimentalSharedTransitionApi::class)
 @Composable
 fun NotebooksScreen(
     repo: NotePadRepository,
@@ -120,11 +126,12 @@ fun NotebooksScreen(
     dynamicColor: Boolean,
     onThemeChange: (ThemeMode) -> Unit,
     onDynamicChange: (Boolean) -> Unit,
-    selectedId: String? = null,
     compact: Boolean = false,
     showAccountButton: Boolean = true,
     sharedItems: List<Uri> = emptyList(),
     sharedMimeType: String? = null,
+    sharedTransitionScope: SharedTransitionScope? = null,
+    animatedVisibilityScope: AnimatedVisibilityScope? = null,
 ) {
     val context = LocalContext.current
     val tabletLayout = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp >= 840 && !compact
@@ -135,6 +142,8 @@ fun NotebooksScreen(
     val folderSnapshot by foldersFlow.collectAsState(initial = FolderSnapshot(null))
     val folders = folderSnapshot.value.orEmpty()
     val tags by repo.tags().collectAsState(initial = emptyList())
+    val gridState = rememberLazyGridState()
+    val renderThumbnails = !gridState.isScrollInProgress
     val libraryPrefs = remember(context) { context.getSharedPreferences("notepad", 0) }
     var selectedFolderId by remember { mutableStateOf(libraryPrefs.getString("library_folder", ALL_FOLDERS) ?: ALL_FOLDERS) }
     var librarySort by remember {
@@ -161,6 +170,7 @@ fun NotebooksScreen(
     var showSaveShared by remember { mutableStateOf(false) }
     var sharedTitle by remember { mutableStateOf("") }
     var sharedFolderId by remember { mutableStateOf<String?>(null) }
+    var pendingImportUris by remember { mutableStateOf<List<Uri>>(emptyList()) }
     var passwordUri by remember { mutableStateOf<Uri?>(null) }
     var passwordEntry by remember { mutableStateOf("") }
     var passwordFolderId by remember { mutableStateOf<String?>(null) }
@@ -169,6 +179,14 @@ fun NotebooksScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val pageImageImporter = remember(context) { PageImageImporter(context) }
     val fileImporter = remember(context, repo) { FileImporter(context, repo) }
+    fun requestImportDetails(uris: List<Uri>, title: String? = null) {
+        if (uris.isEmpty()) return
+        pendingImportUris = uris
+        val filename = runCatching { ImportStorage(context).displayName(uris.first()) }.getOrDefault("Imported file")
+        sharedTitle = title ?: filename.substringBeforeLast('.', filename)
+        sharedFolderId = selectedFolderId.takeUnless { it == ALL_FOLDERS }
+        showSaveShared = true
+    }
     fun openStoredFile(notebook: Notebook) {
         scope.launch {
             val asset = notebook.fileAssetId?.let { repo.asset(it) }
@@ -191,12 +209,7 @@ fun NotebooksScreen(
     }
     LaunchedEffect(selectedFolderId) { libraryPrefs.edit().putString("library_folder", selectedFolderId).apply() }
     LaunchedEffect(sharedItems) {
-        if (sharedItems.isNotEmpty()) {
-            val filename = runCatching { ImportStorage(context).displayName(sharedItems.first()) }.getOrDefault("Imported file")
-            sharedTitle = filename.substringBeforeLast('.', filename)
-            sharedFolderId = selectedFolderId.takeUnless { it == ALL_FOLDERS }
-            showSaveShared = true
-        }
+        if (sharedItems.isNotEmpty()) requestImportDetails(sharedItems)
     }
     LaunchedEffect(librarySort) { libraryPrefs.edit().putString("library_sort", librarySort.name).apply() }
     LaunchedEffect(folderSnapshot, selectedFolderId) {
@@ -216,120 +229,24 @@ fun NotebooksScreen(
 
     val pickPdf = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         if (uris.isEmpty()) return@rememberLauncherForActivityResult
-        importJob = scope.launch {
-            onImportingChanged(true)
-            try {
-                var firstImportedId: String? = null
-                for (uri in uris) {
-                    try {
-                        val id = importer.importAsNotebook(uri, selectedFolderId.takeUnless { it == ALL_FOLDERS }) { importProgress = it }
-                        if (firstImportedId == null) firstImportedId = id
-                    } catch (error: Throwable) {
-                        if (error is kotlinx.coroutines.CancellationException) throw error
-                        if (error is PdfPasswordRequiredException) {
-                            passwordUri = uri
-                            passwordEntry = ""
-                            passwordFolderId = selectedFolderId.takeUnless { it == ALL_FOLDERS }
-                            passwordTitle = null
-                            passwordFolderPending = true
-                            break
-                        }
-                        Toast.makeText(context, error.message ?: "Could not import PDF", Toast.LENGTH_LONG).show()
-                    }
-                }
-                if (passwordUri == null) firstImportedId?.let { onContinueAtPosition(it, 0) }
-            } finally {
-                importProgress = null
-                onImportingChanged(false)
-            }
-        }
+        requestImportDetails(uris)
     }
     val pickImages = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(20)) { uris ->
         if (uris.isEmpty()) return@rememberLauncherForActivityResult
-        importJob = scope.launch {
-            onImportingChanged(true)
-            val imports = mutableListOf<ImportedImageContent>()
-            var committed = false
-            try {
-                uris.forEachIndexed { index, uri ->
-                    importProgress = ImportProgress("image ${index + 1} of ${uris.size}", (index * 100 / uris.size).coerceIn(0, 99))
-                    val image = pageImageImporter.import(uri)
-                    val fit = PageImageImporter.fitToA4(image.widthPx, image.heightPx)
-                    imports += ImportedImageContent(image.asset, fit[0], fit[1], fit[2], fit[3])
-                }
-                val id = kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
-                    repo.createImageNotebook(imports.firstOrNull()?.asset?.name?.substringBeforeLast('.') ?: "Image notes", imports, selectedFolderId.takeUnless { it == ALL_FOLDERS })
-                        .also { committed = true }
-                }
-                importProgress = null
-                onContinueAtPosition(id, 0)
-            } catch (error: Throwable) {
-                if (!committed) imports.forEach { File(it.asset.localPath).delete() }
-                if (error is kotlinx.coroutines.CancellationException) throw error
-                Toast.makeText(context, error.message ?: "Could not import images", Toast.LENGTH_LONG).show()
-            } finally {
-                importProgress = null
-                onImportingChanged(false)
-            }
-        }
+        requestImportDetails(uris)
     }
     val pickAnyFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         if (uris.isEmpty()) return@rememberLauncherForActivityResult
-        importJob = scope.launch {
-            onImportingChanged(true)
-            try {
-                for (uri in uris) {
-                    runCatching {
-                        fileImporter.import(uri, selectedFolderId.takeUnless { it == ALL_FOLDERS }) { importProgress = it }
-                    }.onFailure {
-                        if (it is CancellationException) throw it
-                        Toast.makeText(context, it.message ?: "Could not import file", Toast.LENGTH_LONG).show()
-                    }
-                }
-            } finally {
-                importProgress = null
-                onImportingChanged(false)
-            }
-        }
+        requestImportDetails(uris)
     }
     val scannerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
         if (result.resultCode == Activity.RESULT_OK) {
             val scan = GmsDocumentScanningResult.fromActivityResultIntent(result.data)
             val pdfUri = scan?.pdf?.uri
             val imageUris = scan?.pages.orEmpty().map { it.imageUri }
-            if (pdfUri != null || imageUris.isNotEmpty()) importJob = scope.launch {
-                onImportingChanged(true)
-                try {
-                    val id = if (pdfUri != null) {
-                        importer.importAsNotebook(pdfUri, selectedFolderId.takeUnless { it == ALL_FOLDERS }) { importProgress = it }
-                    } else {
-                        val images = mutableListOf<ImportedImageContent>()
-                        var committed = false
-                        try {
-                            imageUris.forEachIndexed { index, uri ->
-                                importProgress = ImportProgress("scan ${index + 1} of ${imageUris.size}", (index * 100 / imageUris.size).coerceIn(0, 99))
-                                val image = pageImageImporter.import(uri)
-                                val fit = PageImageImporter.fitToA4(image.widthPx, image.heightPx)
-                                images += ImportedImageContent(image.asset, fit[0], fit[1], fit[2], fit[3])
-                            }
-                            kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
-                                repo.createImageNotebook("Scanned notes", images, selectedFolderId.takeUnless { it == ALL_FOLDERS })
-                                    .also { committed = true }
-                            }
-                        } catch (error: Throwable) {
-                            if (!committed) images.forEach { File(it.asset.localPath).delete() }
-                            throw error
-                        }
-                    }
-                    onContinueAtPosition(id, 0)
-                } catch (error: Throwable) {
-                    if (error is kotlinx.coroutines.CancellationException) throw error
-                    Toast.makeText(context, error.message ?: "Scan import failed", Toast.LENGTH_LONG).show()
-                } finally {
-                    importProgress = null
-                    onImportingChanged(false)
-                }
-            } else showScannerFallback(snackbarHostState, scope) { pickImages.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
+            if (pdfUri != null) requestImportDetails(listOf(pdfUri), "Scanned notes")
+            else if (imageUris.isNotEmpty()) requestImportDetails(imageUris, "Scanned notes")
+            else showScannerFallback(snackbarHostState, scope) { pickImages.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
         } else {
             showScannerFallback(snackbarHostState, scope) { pickImages.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
         }
@@ -377,20 +294,23 @@ fun NotebooksScreen(
             )
         },
     ) { padding ->
-        Box(Modifier.fillMaxSize().padding(padding)) {
+        Row(Modifier.fillMaxSize().padding(padding)) {
         if (tabletLayout) SubjectSpineColumn(
             folders = folders,
+            counts = notebooks.groupingBy { it.folderId }.eachCount(),
+            allCount = notebooks.size,
             selectedFolderId = selectedFolderId,
             onSelect = { selectedFolderId = it },
             onAdd = { showCreateFolder = true },
             onLongPress = { folderActionsFor = it },
-            modifier = Modifier.align(Alignment.TopStart).width(82.dp).fillMaxHeight(),
+            modifier = Modifier.width(120.dp).fillMaxHeight(),
         )
         LazyVerticalGrid(
-            columns = GridCells.Adaptive(200.dp),
-            modifier = Modifier.fillMaxSize().padding(start = if (tabletLayout) 82.dp else 0.dp),
-            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 112.dp),
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            state = gridState,
+            columns = if (tabletLayout) GridCells.Adaptive(168.dp) else GridCells.Fixed(1),
+            modifier = Modifier.weight(1f).fillMaxHeight(),
+            contentPadding = PaddingValues(start = 24.dp, end = 24.dp, top = 8.dp, bottom = 112.dp),
+            horizontalArrangement = Arrangement.spacedBy(20.dp),
             verticalArrangement = Arrangement.spacedBy(20.dp),
         ) {
             item(span = { GridItemSpan(maxLineSpan) }) {
@@ -401,8 +321,8 @@ fun NotebooksScreen(
                     tabletLayout = tabletLayout,
                     onSearch = onSearch, onAccount = onAccount, onAppearance = { showAppearance = true },
                     onNew = { showNew = true },
-                    folders = folders, tags = tags, selectedFolderId = selectedFolderId, selectedTagId = selectedTagId,
-                    onSelectFolder = { selectedFolderId = it }, onSelectTag = { selectedTagId = if (selectedTagId == it) null else it },
+                    folders = folders, selectedFolderId = selectedFolderId,
+                    onSelectFolder = { selectedFolderId = it },
                     onAddFolder = { showCreateFolder = true }, onFolderLongPress = { folderActionsFor = it },
                 )
             }
@@ -417,18 +337,36 @@ fun NotebooksScreen(
                             horizontalArrangement = Arrangement.spacedBy(16.dp),
                         ) {
                             recent.forEach { nb ->
-                                NotebookCard(
-                                repo, nb, tags, nb.id == selectedId, compact, Modifier.width(164.dp),
+                                ContinueReadingCard(
+                                    repo = repo,
+                                    notebook = nb,
+                                    subjectColor = subjectColor(nb, folders),
+                                    renderThumbnail = renderThumbnails,
                                     onOpen = { onContinueAtPosition(nb.id, nb.lastPageIndex) },
-                                    onMore = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); actionsFor = nb },
                                 )
                             }
                         }
                     }
                 }
-                item(span = { GridItemSpan(maxLineSpan) }) {
-                    Text("Your library", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            }
+            if (tags.isNotEmpty()) item(span = { GridItemSpan(maxLineSpan) }) {
+                Row(
+                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    tags.forEach { tag ->
+                        FilterChip(
+                            selected = selectedTagId == tag.id,
+                            onClick = { selectedTagId = if (selectedTagId == tag.id) null else tag.id },
+                            label = { Text("#${tag.name}", maxLines = 1) },
+                            shape = CircleShape,
+                        )
+                    }
                 }
+            }
+            item(span = { GridItemSpan(maxLineSpan) }) {
+                Text("Your library", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             }
             if (notebooks.isEmpty() && !importing) item(span = { GridItemSpan(maxLineSpan) }) {
                 EmptyLibrary(onNew = { showNew = true }, onImport = { pickPdf.launch(arrayOf("application/pdf")) })
@@ -438,8 +376,12 @@ fun NotebooksScreen(
             }
             items(sortedNotebooks, key = { it.id }) { nb ->
                 NotebookCard(
-                    repo = repo, notebook = nb, tags = tags, selected = nb.id == selectedId, compact = compact,
+                    repo = repo, notebook = nb, tags = tags, compact = compact,
                     modifier = Modifier.animateItem(),
+                    subjectColor = subjectColor(nb, folders),
+                    renderThumbnail = renderThumbnails,
+                    sharedTransitionScope = sharedTransitionScope,
+                    animatedVisibilityScope = animatedVisibilityScope,
                     onOpen = { if (nb.documentKind == "file") openStoredFile(nb) else onContinueAtPosition(nb.id, nb.lastPageIndex) },
                     onMore = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); actionsFor = nb },
                 )
@@ -559,7 +501,8 @@ fun NotebooksScreen(
         dismissButton = { TextButton(onClick = { passwordUri = null; passwordFolderId = null; passwordTitle = null; passwordFolderPending = false }) { Text("Cancel") } },
     )
 
-    if (showSaveShared) ModalBottomSheet(onDismissRequest = { showSaveShared = false }) {
+    val saveItems = pendingImportUris.ifEmpty { sharedItems }
+    if (showSaveShared) ModalBottomSheet(onDismissRequest = { showSaveShared = false; pendingImportUris = emptyList() }) {
         SheetTitle("Save to NotePad")
         OutlinedTextField(
             value = sharedTitle,
@@ -579,14 +522,17 @@ fun NotebooksScreen(
         Button(
             onClick = {
                 val folder = sharedFolderId
+                val itemsToSave = saveItems
                 showSaveShared = false
+                pendingImportUris = emptyList()
                 importJob = scope.launch {
                     onImportingChanged(true)
                     try {
                         var firstOpenedId: String? = null
-                        val imageUris = sharedItems.filter { uri ->
+                        val imageUris = itemsToSave.filter { uri ->
                             val name = ImportStorage(context).displayName(uri)
                             context.contentResolver.getType(uri)?.startsWith("image/") == true ||
+                                (uri in sharedItems && sharedMimeType?.startsWith("image/") == true) ||
                                 name.substringAfterLast('.', "").lowercase() in setOf("png", "jpg", "jpeg", "webp")
                         }
                         if (imageUris.isNotEmpty()) {
@@ -608,10 +554,11 @@ fun NotebooksScreen(
                                 throw error
                             }
                         }
-                        sharedItems.filterNot { it in imageUris }.forEachIndexed { index, uri ->
+                        itemsToSave.filterNot { it in imageUris }.forEachIndexed { index, uri ->
                             if (passwordUri != null) return@forEachIndexed
                             val name = ImportStorage(context).displayName(uri).ifBlank { "Shared file" }
                             val mime = context.contentResolver.getType(uri).orEmpty()
+                                .ifBlank { sharedMimeType.takeIf { uri in sharedItems }.orEmpty() }
                             val title = sharedTitle.takeIf { index == 0 && it.isNotBlank() }
                             val id = try {
                                 when {
@@ -641,7 +588,7 @@ fun NotebooksScreen(
             },
             enabled = sharedTitle.isNotBlank(),
             modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp),
-        ) { Text("Save ${sharedItems.size} item${if (sharedItems.size == 1) "" else "s"}") }
+        ) { Text("Save ${saveItems.size} item${if (saveItems.size == 1) "" else "s"}") }
         Spacer(Modifier.height(24.dp))
     }
 
@@ -855,24 +802,35 @@ private fun LibraryHeader(
     onAppearance: () -> Unit,
     onNew: () -> Unit,
     folders: List<Folder>,
-    tags: List<Tag>,
     selectedFolderId: String,
-    selectedTagId: String?,
     onSelectFolder: (String) -> Unit,
-    onSelectTag: (String) -> Unit,
     onAddFolder: () -> Unit,
     onFolderLongPress: (Folder) -> Unit,
 ) {
     var sortExpanded by remember { mutableStateOf(false) }
     Column(Modifier.statusBarsPadding().padding(top = 12.dp, bottom = 4.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text("Library", style = if (compact) MaterialTheme.typography.headlineSmall else MaterialTheme.typography.displaySmall)
+            Column(Modifier.padding(end = 16.dp)) {
                 Text(
-                    if (importing) "Importing…" else if (count == 0) "Nothing here yet" else "$count item${if (count == 1) "" else "s"}",
-                    style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    "Library",
+                    style = (if (compact) MaterialTheme.typography.headlineSmall else MaterialTheme.typography.headlineLarge)
+                        .copy(fontFamily = FontFamily.Serif),
                 )
+                Text(if (importing) "Importing…" else "$count items", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
+            Surface(
+                onClick = onSearch,
+                shape = RoundedCornerShape(18.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                modifier = Modifier.weight(1f).widthIn(max = 360.dp).height(46.dp),
+            ) {
+                Row(Modifier.padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Outlined.Search, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.width(10.dp))
+                    Text("Search books and notes", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+            Spacer(Modifier.width(8.dp))
             Box {
                 IconButton(onClick = { sortExpanded = true }) { Icon(Icons.Outlined.Sort, "Sort") }
                 DropdownMenu(expanded = sortExpanded, onDismissRequest = { sortExpanded = false }) {
@@ -881,7 +839,7 @@ private fun LibraryHeader(
                     }
                 }
             }
-            if (compact) IconButton(onClick = onNew) { Icon(Icons.Default.Add, "New") }
+            IconButton(onClick = onNew) { Icon(Icons.Default.Add, "Import") }
             IconButton(onClick = onAppearance) { Icon(Icons.Outlined.Palette, "Appearance") }
             if (showAccountButton) IconButton(onClick = onAccount) { Icon(Icons.Outlined.AccountCircle, "Sync & account") }
         }
@@ -927,33 +885,7 @@ private fun LibraryHeader(
                 shape = CircleShape,
             )
         }
-        if (tags.isNotEmpty()) {
-            Row(
-                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                tags.forEach { tag ->
-                    FilterChip(
-                        selected = selectedTagId == tag.id,
-                        onClick = { onSelectTag(tag.id) },
-                        label = { Text("#${tag.name}", maxLines = 1) },
-                        shape = CircleShape,
-                    )
-                }
-            }
-        }
-        Spacer(Modifier.height(12.dp))
-        Surface(
-            onClick = onSearch, shape = RoundedCornerShape(26.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh,
-            modifier = Modifier.fillMaxWidth().height(50.dp),
-        ) {
-            Row(Modifier.padding(horizontal = 18.dp), verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Outlined.Search, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.width(12.dp))
-                Text("Search handwriting, text and PDFs", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-        }
+        Spacer(Modifier.height(8.dp))
         AnimatedVisibility(importing || progress != null, enter = fadeIn(), exit = fadeOut()) {
             Column(Modifier.fillMaxWidth().padding(top = 10.dp)) {
                 if (progress != null) Row(verticalAlignment = Alignment.CenterVertically) {
@@ -974,6 +906,8 @@ private fun LibraryHeader(
 @Composable
 private fun SubjectSpineColumn(
     folders: List<Folder>,
+    counts: Map<String?, Int>,
+    allCount: Int,
     selectedFolderId: String,
     onSelect: (String) -> Unit,
     onAdd: () -> Unit,
@@ -981,55 +915,123 @@ private fun SubjectSpineColumn(
     modifier: Modifier = Modifier,
 ) {
     Column(
-        modifier.verticalScroll(rememberScrollState()).padding(vertical = 18.dp),
+        modifier.verticalScroll(rememberScrollState()).padding(start = 8.dp, end = 4.dp, top = 18.dp, bottom = 18.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        SubjectSpine("All", selectedFolderId == ALL_FOLDERS, MaterialTheme.colorScheme.primary) { onSelect(ALL_FOLDERS) }
+        SubjectSpine("All", allCount, selectedFolderId == ALL_FOLDERS, MaterialTheme.colorScheme.primary, { onSelect(ALL_FOLDERS) })
         folders.forEach { folder ->
             val color = runCatching { Color(android.graphics.Color.parseColor(folder.color ?: "#75885C")) }.getOrDefault(Color(0xFF75885C))
-            Box(Modifier.combinedClickable(onClick = { onSelect(folder.id) }, onLongClick = { onLongPress(folder) })) {
-                SubjectSpine(folder.name, selectedFolderId == folder.id, color) { onSelect(folder.id) }
-            }
+            SubjectSpine(folder.name, counts[folder.id] ?: 0, selectedFolderId == folder.id, color, { onSelect(folder.id) }, { onLongPress(folder) })
         }
-        SubjectSpine("+ New subject", false, MaterialTheme.colorScheme.surfaceContainerHigh, onAdd)
+        Spacer(Modifier.height(6.dp))
+        SubjectSpine("+ New subject", null, false, MaterialTheme.colorScheme.surfaceContainerHigh, onAdd)
     }
 }
 
 @Composable
-private fun SubjectSpine(label: String, selected: Boolean, color: Color, onClick: () -> Unit) {
-    val base = if (selected) color else color.copy(alpha = 0.24f)
-    val foreground = if (selected && android.graphics.Color.luminance(color.toArgb()) < 0.55f) Color.White else Color(0xFF282622)
-    Box(
+private fun SubjectSpine(label: String, count: Int?, selected: Boolean, color: Color, onClick: () -> Unit, onLongPress: (() -> Unit)? = null) {
+    val offset by animateDpAsState(if (selected) 6.dp else 0.dp, spring(dampingRatio = 0.72f, stiffness = 520f), label = "subject-spine")
+    val shape = RoundedCornerShape(16.dp)
+    val base = if (selected || label.startsWith("+")) color else color.copy(alpha = 0.35f)
+    val foreground = if (selected) {
+        if (android.graphics.Color.luminance(color.toArgb()) < 0.55f) Color.White else Color(0xFF282622)
+    } else MaterialTheme.colorScheme.onSurface
+    Column(
         Modifier
-            .offset(x = if (selected) 4.dp else 0.dp)
-            .width(if (selected) 70.dp else 62.dp)
-            .height(108.dp)
-            .clip(RoundedCornerShape(topEnd = 12.dp, bottomEnd = 12.dp))
+            .offset(x = offset)
+            .width(96.dp)
+            .height(112.dp)
+            .shadow(if (selected) 9.dp else 0.dp, shape, spotColor = Color.Black.copy(alpha = 0.2f))
+            .clip(shape)
             .background(base)
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center,
+            .combinedClickable(onClick = onClick, onLongClick = onLongPress),
+        horizontalAlignment = Alignment.Start,
+        verticalArrangement = Arrangement.Center,
     ) {
         Text(
             label,
-            Modifier.width(96.dp).height(24.dp).graphicsLayer { rotationZ = -90f },
-            style = MaterialTheme.typography.labelLarge,
+            Modifier.padding(start = 14.dp, end = 8.dp),
+            style = if (label.startsWith("+")) MaterialTheme.typography.labelMedium else MaterialTheme.typography.labelLarge,
             fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
             color = foreground,
-            maxLines = 1,
+            maxLines = if (label.startsWith("+")) 2 else 1,
             overflow = TextOverflow.Ellipsis,
         )
+        if (count != null) Text("$count", Modifier.padding(start = 14.dp, top = 2.dp), style = MaterialTheme.typography.labelSmall, color = foreground.copy(alpha = 0.78f))
     }
 }
 
+@Composable
+private fun ContinueReadingCard(
+    repo: NotePadRepository,
+    notebook: Notebook,
+    subjectColor: Color,
+    renderThumbnail: Boolean,
+    onOpen: () -> Unit,
+) {
+    val pages by repo.pages(notebook.id).collectAsState(initial = emptyList())
+    val page = pages.getOrNull(notebook.lastPageIndex)
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val scale by animateFloatAsState(if (pressed) 0.98f else 1f, spring(stiffness = Spring.StiffnessMediumLow), label = "continue-press")
+    Surface(
+        modifier = Modifier.width(360.dp).height(150.dp).graphicsLayer { scaleX = scale; scaleY = scale }
+            .combinedClickable(interactionSource = interaction, indication = null, onClick = onOpen),
+        shape = RoundedCornerShape(22.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.width(146.dp).fillMaxHeight().clip(RoundedCornerShape(topStart = 22.dp, bottomStart = 22.dp))) {
+                PagePreview(
+                    repo = repo,
+                    page = page,
+                    paperColor = MaterialTheme.colorScheme.surface,
+                    modifier = Modifier.fillMaxSize(),
+                    renderEnabled = renderThumbnail,
+                    cropScale = 3.5f,
+                )
+                Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.035f)))
+            }
+            Column(Modifier.weight(1f).padding(horizontal = 16.dp, vertical = 14.dp), verticalArrangement = Arrangement.Center) {
+                Text(notebook.title, style = MaterialTheme.typography.titleMedium.copy(fontFamily = titleFontFamily(notebook.title)), fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Spacer(Modifier.height(5.dp))
+                Text(progressLabel(notebook.lastPageIndex, notebook.pageCount), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(recentlyOpenedLabel(notebook.lastOpenedAt), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                LinearProgressIndicator(
+                    progress = { ((notebook.lastPageIndex + 1f) / notebook.pageCount.coerceAtLeast(1)).coerceIn(0f, 1f) },
+                    modifier = Modifier.fillMaxWidth().padding(top = 9.dp).height(3.dp).clip(CircleShape),
+                    color = subjectColor,
+                    trackColor = subjectColor.copy(alpha = 0.18f),
+                )
+            }
+        }
+    }
+}
+
+private fun recentlyOpenedLabel(openedAt: Long?): String {
+    val elapsed = (System.currentTimeMillis() - (openedAt ?: System.currentTimeMillis())).coerceAtLeast(0L)
+    val minutes = elapsed / 60_000
+    return when {
+        minutes < 1 -> "Just now"
+        minutes < 60 -> "$minutes min ago"
+        minutes < 24 * 60 -> "${minutes / 60} h ago"
+        else -> "${minutes / (24 * 60)} d ago"
+    }
+}
+
+@OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
 private fun NotebookCard(
     repo: NotePadRepository,
     notebook: Notebook,
     tags: List<Tag>,
-    selected: Boolean,
     compact: Boolean,
     modifier: Modifier,
+    subjectColor: Color,
+    renderThumbnail: Boolean,
+    sharedTransitionScope: SharedTransitionScope?,
+    animatedVisibilityScope: AnimatedVisibilityScope?,
     onOpen: () -> Unit,
     onMore: () -> Unit,
 ) {
@@ -1039,13 +1041,22 @@ private fun NotebookCard(
     val scale by animateFloatAsState(if (pressed) 0.96f else 1f, spring(stiffness = Spring.StiffnessMediumLow), label = "press")
     val cover = remember(notebook.id, notebook.coverColor) { bookCoverColor(notebook) }
     val tagNames = remember(tags, notebook.tagIds) { tags.filter { it.id in notebook.tagIds }.take(2).map { it.name } }
+    val coverAspect = pages.firstOrNull()?.let { (it.widthPt / it.heightPt).coerceIn(0.58f, 1.3f) } ?: 0.72f
     val radius = RoundedCornerShape(topStart = 4.dp, bottomStart = 4.dp, topEnd = 10.dp, bottomEnd = 10.dp)
+    val sharedModifier = if (sharedTransitionScope != null && animatedVisibilityScope != null) {
+        with(sharedTransitionScope) {
+            Modifier.sharedElement(
+                sharedContentState = rememberSharedContentState("notebook-cover-${notebook.id}"),
+                animatedVisibilityScope = animatedVisibilityScope,
+            )
+        }
+    } else Modifier
     Column(modifier.graphicsLayer { scaleX = scale; scaleY = scale }) {
         Box(
-            Modifier.fillMaxWidth().aspectRatio(0.72f)
-                .shadow(if (selected) 8.dp else 4.dp, radius, spotColor = Color.Black.copy(alpha = 0.36f))
+            Modifier.fillMaxWidth().aspectRatio(coverAspect)
+                .shadow(4.dp, radius, spotColor = Color.Black.copy(alpha = 0.2f))
                 .clip(radius)
-                .then(if (selected) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, radius) else Modifier)
+                .then(sharedModifier)
                 .combinedClickable(interactionSource = interaction, indication = null, onClick = onOpen, onLongClick = onMore),
         ) {
             when {
@@ -1053,9 +1064,9 @@ private fun NotebookCard(
                 pages.any { it.kind == PageKind.PDF } -> Box(Modifier.fillMaxSize()) {
                     Box(Modifier.fillMaxSize().padding(start = 2.dp, top = 4.dp).background(Color(0xFFE7E1D7), radius))
                     Box(Modifier.fillMaxSize().padding(start = 1.dp, top = 2.dp).background(Color(0xFFF3F0E9), radius))
-                    PagePreview(repo, pages.firstOrNull(), Color(0xFFFFFEFA), Modifier.fillMaxSize().padding(end = 2.dp, bottom = 4.dp))
+                    PagePreview(repo, pages.firstOrNull(), Color(0xFFFFFEFA), Modifier.fillMaxSize().padding(end = 2.dp, bottom = 4.dp), renderEnabled = renderThumbnail, cropScale = 2.2f)
                     Box(Modifier.fillMaxHeight().width(9.dp).background(Color.Black.copy(alpha = 0.12f)))
-                    Surface(Modifier.align(Alignment.TopEnd).padding(8.dp), color = Color(0xFFB4532A), shape = RoundedCornerShape(4.dp)) {
+                    Surface(Modifier.align(Alignment.BottomEnd).padding(8.dp), color = Color(0xFFB4532A), shape = RoundedCornerShape(4.dp)) {
                         Text("PDF", Modifier.padding(horizontal = 7.dp, vertical = 4.dp), color = Color.White, style = MaterialTheme.typography.labelSmall)
                     }
                 }
@@ -1066,7 +1077,11 @@ private fun NotebookCard(
         Row(verticalAlignment = Alignment.Top) {
             Column(Modifier.weight(1f)) {
                 Text(notebook.title, style = MaterialTheme.typography.titleSmall.copy(fontFamily = titleFontFamily(notebook.title)), fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Text(meta(notebook), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(7.dp).clip(CircleShape).background(subjectColor))
+                    Spacer(Modifier.width(6.dp))
+                    Text(meta(notebook), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                }
                 if (notebook.lastOpenedAt != null && notebook.pageCount > 0) {
                     Text(progressLabel(notebook.lastPageIndex, notebook.pageCount), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     LinearProgressIndicator(
@@ -1078,6 +1093,12 @@ private fun NotebookCard(
             if (!compact) IconButton(onClick = onMore, modifier = Modifier.size(28.dp)) { Icon(Icons.Default.MoreVert, "More", tint = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
     }
+}
+
+@Composable
+private fun subjectColor(notebook: Notebook, folders: List<Folder>): Color {
+    val hex = folders.firstOrNull { it.id == notebook.folderId }?.color ?: return MaterialTheme.colorScheme.primary
+    return runCatching { Color(android.graphics.Color.parseColor(hex)) }.getOrDefault(Color(0xFF75885C))
 }
 
 @Composable

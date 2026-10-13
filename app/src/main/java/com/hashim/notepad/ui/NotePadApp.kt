@@ -5,6 +5,10 @@ import android.widget.Toast
 import com.hashim.notepad.InboundShare
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.togetherWith
+import androidx.compose.animation.ExperimentalSharedTransitionApi
+import androidx.compose.animation.SharedTransitionLayout
+import androidx.compose.animation.SharedTransitionScope
+import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.platform.LocalContext
@@ -45,6 +49,7 @@ sealed interface Screen {
 }
 
 @Composable
+@OptIn(ExperimentalSharedTransitionApi::class)
 fun NotePadApp(
     initialPdf: Uri?,
     initialAuthCallback: Uri?,
@@ -119,6 +124,8 @@ fun NotePadApp(
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val showNavigationRail = maxWidth >= 840.dp && screen !is Screen.Editor
         val screenContent: @Composable () -> Unit = {
+            SharedTransitionLayout {
+            val sharedScope = this
             androidx.compose.animation.AnimatedContent(
                 targetState = screen,
                 transitionSpec = {
@@ -140,6 +147,7 @@ fun NotePadApp(
                 },
                 label = "screen",
             ) { s ->
+                val visibilityScope = this
                 when (s) {
                     Screen.Notebooks -> NotebooksScreen(
                         repo = repo, importer = importer, bundles = bundles, exporter = exporter, importing = importing,
@@ -155,38 +163,33 @@ fun NotePadApp(
                         onSearch = { screen = Screen.Search }, onAccount = { screen = Screen.Account },
                         themeMode = themeMode, dynamicColor = dynamicColor, onThemeChange = onThemeChange, onDynamicChange = onDynamicChange,
                         showAccountButton = !showNavigationRail,
+                        sharedTransitionScope = sharedScope,
+                        animatedVisibilityScope = visibilityScope,
                     )
                     Screen.Account -> AccountScreen(onBack = { screen = Screen.Notebooks })
                     Screen.Search -> SearchScreen(repo = repo, onBack = { screen = Screen.Notebooks }, onOpenPage = { nb, page -> screen = Screen.Editor(nb, page) })
-                    is Screen.Pages -> androidx.compose.foundation.layout.BoxWithConstraints {
-                        val twoPane = maxWidth >= 840.dp
-                        if (twoPane) androidx.compose.foundation.layout.Row {
-                            androidx.compose.foundation.layout.Box(Modifier.width(320.dp)) {
-                                NotebooksScreen(
-                                    repo = repo, importer = importer, bundles = bundles, exporter = exporter, importing = importing, onImportingChanged = { importing = it },
-                                    sharedItems = initialShare?.uris.orEmpty(), sharedMimeType = initialShare?.mimeType,
-                                    onOpen = { screen = Screen.Pages(it) }, onSearch = { screen = Screen.Search }, onAccount = { screen = Screen.Account }, selectedId = s.notebookId, compact = true,
-                                    themeMode = themeMode, dynamicColor = dynamicColor, onThemeChange = onThemeChange, onDynamicChange = onDynamicChange,
-                                    showAccountButton = false,
-                                )
-                            }
-                            androidx.compose.material3.VerticalDivider()
-                            androidx.compose.foundation.layout.Box(Modifier.weight(1f)) {
-                                PagesScreen(repo = repo, notebookId = s.notebookId, exporter = exporter, recognizer = recognizer, bundles = bundles,
-                                    onBack = { screen = Screen.Notebooks }, onOpenPage = { screen = Screen.Editor(s.notebookId, it) }, showBack = false)
-                            }
-                        } else PagesScreen(
-                            repo = repo, notebookId = s.notebookId, exporter = exporter, recognizer = recognizer, bundles = bundles,
-                            onBack = { screen = Screen.Notebooks },
-                            onOpenPage = { screen = Screen.Editor(s.notebookId, it) },
-                        )
-                    }
-                    is Screen.Editor -> EditorScreen(
-                        repo = repo, notebookId = s.notebookId, pageId = s.pageId, recognizer = recognizer,
-                        onBack = { screen = Screen.Pages(s.notebookId) },
-                        onNavigateToPage = { screen = Screen.Editor(s.notebookId, it) },
+                    is Screen.Pages -> PagesScreen(
+                        repo = repo, notebookId = s.notebookId, exporter = exporter, recognizer = recognizer, bundles = bundles,
+                        onBack = { screen = Screen.Notebooks },
+                        onOpenPage = { screen = Screen.Editor(s.notebookId, it) },
                     )
+                    is Screen.Editor -> {
+                        val sharedModifier = with(sharedScope) {
+                            Modifier.sharedElement(
+                                sharedContentState = rememberSharedContentState("notebook-cover-${s.notebookId}"),
+                                animatedVisibilityScope = visibilityScope,
+                            )
+                        }
+                        Box(sharedModifier.fillMaxSize()) {
+                            EditorScreen(
+                                repo = repo, notebookId = s.notebookId, pageId = s.pageId, recognizer = recognizer,
+                                onBack = { screen = Screen.Pages(s.notebookId) },
+                                onNavigateToPage = { screen = Screen.Editor(s.notebookId, it) },
+                            )
+                        }
+                    }
                 }
+            }
             }
         }
 
