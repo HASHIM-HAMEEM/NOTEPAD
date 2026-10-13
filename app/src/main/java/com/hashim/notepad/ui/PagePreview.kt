@@ -67,6 +67,8 @@ fun PagePreview(
     lineColor: Color? = null,
     renderEnabled: Boolean = true,
     cropScale: Float = 1f,
+    cropToContent: Boolean = false,
+    contentOnRight: Boolean = false,
 ) {
     val context = LocalContext.current
     var targetWidthPx by remember { mutableIntStateOf(0) }
@@ -75,12 +77,15 @@ fun PagePreview(
         "${it.assetId}:${it.pdfPageIndex ?: 0}:$renderWidth"
     }
     var bitmap by remember(bitmapKey) { mutableStateOf<Bitmap?>(bitmapKey?.let { PreviewCache.bitmaps.get(it) }) }
-    val cropStartFraction = remember(bitmap, cropScale) {
-        bitmap?.let { focusCropStartFraction(it, cropScale) } ?: 0f
+    val cropStartFraction = remember(bitmap, cropScale, cropToContent) {
+        if (cropToContent) 0f else bitmap?.let { focusCropStartFraction(it, cropScale) } ?: 0f
     }
     var strokes by remember(page?.id, page?.updatedAt) { mutableStateOf<List<Stroke>>(page?.let { PreviewCache.strokes.get("${it.id}:${it.updatedAt}") } ?: emptyList()) }
     var pageImages by remember(page?.id, page?.updatedAt) { mutableStateOf(emptyList<PageImage>()) }
     var imageBitmaps by remember(page?.id, page?.updatedAt) { mutableStateOf(emptyMap<String, Bitmap>()) }
+    val contentBounds = remember(page?.id, page?.updatedAt, bitmap, strokes, pageImages, cropToContent) {
+        if (cropToContent && page != null) pageContentBounds(page, bitmap, strokes, pageImages) else null
+    }
 
     LaunchedEffect(page?.id, page?.updatedAt, renderEnabled, renderWidth) {
         if (!renderEnabled || targetWidthPx == 0) return@LaunchedEffect
@@ -137,8 +142,19 @@ fun PagePreview(
     val bookmarkColor = MaterialTheme.colorScheme.primary.toArgbInt()
     Canvas(modifier.onSizeChanged { if (it.width > 0) targetWidthPx = it.width }.background(paperColor)) {
         val p = page ?: return@Canvas
-        val scale = size.width / p.widthPt * cropScale.coerceAtLeast(1f)
-        val cropStartPt = p.widthPt * cropStartFraction
+        val crop = contentBounds?.let { fitCropToAspect(it, p.widthPt, p.heightPt, size.width / size.height, contentOnRight) }
+        val fitWholePage = cropToContent && crop == null
+        val scale = when {
+            crop != null -> minOf(size.width / crop.width, size.height / crop.height)
+            fitWholePage -> size.height / p.heightPt
+            else -> size.width / p.widthPt * cropScale.coerceAtLeast(1f)
+        }
+        val tx = when {
+            crop != null -> (size.width - crop.width * scale) / 2f - crop.left * scale
+            fitWholePage -> (size.width - p.widthPt * scale) / 2f
+            else -> -p.widthPt * cropStartFraction * scale
+        }
+        val ty = if (crop != null) (size.height - crop.height * scale) / 2f - crop.top * scale else 0f
         drawIntoCanvas { c ->
             val n = c.nativeCanvas
             val texturePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -148,8 +164,10 @@ fun PagePreview(
             }
             n.drawRect(0f, 0f, size.width, size.height, texturePaint)
             n.save()
-            n.scale(scale, scale)
-            n.translate(-cropStartPt, 0f)
+            val toScreen = Matrix().apply {
+                setValues(floatArrayOf(scale, 0f, tx, 0f, scale, ty, 0f, 0f, 1f))
+            }
+            n.concat(toScreen)
             val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = ruling.toArgbInt(); strokeWidth = 0.8f }
             PageTemplateRenderer.draw(n, paint, p.widthPt, p.heightPt, p.kind)
             bitmap?.let { b ->
@@ -163,9 +181,6 @@ fun PagePreview(
                 imageBitmaps[image.assetId]?.let {
                     n.drawBitmap(it, null, RectF(image.xPt, image.yPt, image.xPt + image.wPt, image.yPt + image.hPt), Paint(Paint.FILTER_BITMAP_FLAG))
                 }
-            }
-            val toScreen = Matrix().apply {
-                setValues(floatArrayOf(scale, 0f, -cropStartPt * scale, 0f, scale, 0f, 0f, 0f, 1f))
             }
             drawStrokes(
                 n,
@@ -189,6 +204,72 @@ fun PagePreview(
             n.restore()
         }
     }
+}
+
+private data class PreviewBounds(val left: Float, val top: Float, val right: Float, val bottom: Float) {
+    val width get() = right - left
+    val height get() = bottom - top
+}
+
+private fun pageContentBounds(page: Page, bitmap: Bitmap?, strokes: List<Stroke>, images: List<PageImage>): PreviewBounds? {
+    var result = bitmap?.let { source ->
+        val columns = 96
+        val rows = 48
+        var minX = columns
+        var maxX = -1
+        var minY = rows
+        var maxY = -1
+        val scanFraction = 0.20f
+        val scanHeight = (source.height * scanFraction).toInt().coerceAtLeast(1)
+        for (row in 0 until rows) for (column in 0 until columns) {
+            val x = ((column + 0.5f) * source.width / columns).toInt().coerceIn(0, source.width - 1)
+            val y = ((row + 0.5f) * scanHeight / rows).toInt().coerceIn(0, source.height - 1)
+            val color = source.getPixel(x, y)
+            if (android.graphics.Color.red(color) + android.graphics.Color.green(color) + android.graphics.Color.blue(color) < 690) {
+                minX = minOf(minX, column)
+                maxX = maxOf(maxX, column)
+                minY = minOf(minY, row)
+                maxY = maxOf(maxY, row)
+            }
+        }
+        if (maxX < minX || maxY < minY) null else PreviewBounds(
+            minX.toFloat() / columns * page.widthPt,
+            minY.toFloat() / rows * page.heightPt * scanFraction,
+            (maxX + 1f) / columns * page.widthPt,
+            (maxY + 1f) / rows * page.heightPt * scanFraction,
+        )
+    }
+    fun include(bounds: PreviewBounds) {
+        result = PreviewBounds(
+            minOf(result?.left ?: bounds.left, bounds.left),
+            minOf(result?.top ?: bounds.top, bounds.top),
+            maxOf(result?.right ?: bounds.right, bounds.right),
+            maxOf(result?.bottom ?: bounds.bottom, bounds.bottom),
+        )
+    }
+    strokes.forEach { stroke ->
+        stroke.shape.computeBoundingBox()?.let { box -> include(PreviewBounds(box.xMin, box.yMin, box.xMax, box.yMax)) }
+    }
+    images.forEach { image -> include(PreviewBounds(image.xPt, image.yPt, image.xPt + image.wPt, image.yPt + image.hPt)) }
+    return result
+}
+
+private fun fitCropToAspect(bounds: PreviewBounds, pageWidth: Float, pageHeight: Float, aspect: Float, contentOnRight: Boolean): PreviewBounds? {
+    if (bounds.width <= 0f || bounds.height <= 0f || aspect <= 0f) return null
+    val marginX = maxOf(12f, bounds.width * 0.12f)
+    val marginY = maxOf(12f, bounds.height * 0.18f)
+    val maxWidth = minOf(pageWidth, pageHeight * aspect)
+    var height = (bounds.height + marginY * 2f).coerceAtMost(pageHeight)
+    var width = (height * aspect).coerceAtMost(maxWidth)
+    if (height > pageHeight) {
+        height = pageHeight
+        width = height * aspect
+    }
+    height = width / aspect
+    val anchorX = if (contentOnRight) bounds.right else bounds.left
+    val left = (if (contentOnRight) anchorX - width + marginX else anchorX - marginX).coerceIn(0f, pageWidth - width)
+    val top = ((bounds.top + bounds.bottom - height) / 2f).coerceIn(0f, pageHeight - height)
+    return PreviewBounds(left, top, left + width, top + height)
 }
 
 private fun previewFile(context: android.content.Context, assetId: String, pageIndex: Int, width: Int): File {

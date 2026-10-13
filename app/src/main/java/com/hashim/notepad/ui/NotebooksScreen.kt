@@ -20,6 +20,7 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -47,8 +48,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -309,7 +312,7 @@ fun NotebooksScreen(
             state = gridState,
             columns = if (tabletLayout) GridCells.Adaptive(168.dp) else GridCells.Fixed(1),
             modifier = Modifier.weight(1f).fillMaxHeight(),
-            contentPadding = PaddingValues(start = 24.dp, end = 24.dp, top = 8.dp, bottom = 112.dp),
+            contentPadding = PaddingValues(start = 24.dp, end = 24.dp, top = 8.dp, bottom = 184.dp),
             horizontalArrangement = Arrangement.spacedBy(20.dp),
             verticalArrangement = Arrangement.spacedBy(20.dp),
         ) {
@@ -937,28 +940,32 @@ private fun SubjectSpine(label: String, count: Int?, selected: Boolean, color: C
     val foreground = if (selected) {
         if (android.graphics.Color.luminance(color.toArgb()) < 0.55f) Color.White else Color(0xFF282622)
     } else MaterialTheme.colorScheme.onSurface
-    Column(
+    Box(
         Modifier
             .offset(x = offset)
-            .width(96.dp)
-            .height(112.dp)
+            .width(84.dp)
+            .height(148.dp)
             .shadow(if (selected) 9.dp else 0.dp, shape, spotColor = Color.Black.copy(alpha = 0.2f))
             .clip(shape)
-            .background(base)
+            .background(Brush.verticalGradient(listOf(base.copy(alpha = base.alpha * 0.82f), base, base.copy(alpha = base.alpha * 0.94f))))
             .combinedClickable(onClick = onClick, onLongClick = onLongPress),
-        horizontalAlignment = Alignment.Start,
-        verticalArrangement = Arrangement.Center,
+        contentAlignment = Alignment.Center,
     ) {
         Text(
             label,
-            Modifier.padding(start = 14.dp, end = 8.dp),
-            style = if (label.startsWith("+")) MaterialTheme.typography.labelMedium else MaterialTheme.typography.labelLarge,
+            Modifier.width(124.dp).rotate(-90f),
+            style = MaterialTheme.typography.titleSmall.copy(fontFamily = FontFamily.Serif),
             fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
             color = foreground,
-            maxLines = if (label.startsWith("+")) 2 else 1,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
-        if (count != null) Text("$count", Modifier.padding(start = 14.dp, top = 2.dp), style = MaterialTheme.typography.labelSmall, color = foreground.copy(alpha = 0.78f))
+        if (count != null) Text("$count", Modifier.align(Alignment.BottomCenter).padding(bottom = 9.dp), style = MaterialTheme.typography.labelSmall, color = foreground.copy(alpha = 0.84f))
+        Canvas(Modifier.fillMaxSize()) {
+            val x = 1.dp.toPx()
+            drawLine(Color.White.copy(alpha = if (selected) 0.32f else 0.2f), Offset(x, 10.dp.toPx()), Offset(x, size.height - 10.dp.toPx()), 1.dp.toPx())
+        }
     }
 }
 
@@ -986,10 +993,13 @@ private fun ContinueReadingCard(
                 PagePreview(
                     repo = repo,
                     page = page,
-                    paperColor = MaterialTheme.colorScheme.surface,
+                    paperColor = notebook.coverColor?.let { runCatching { Color(android.graphics.Color.parseColor(it)) }.getOrNull() }
+                        ?: MaterialTheme.colorScheme.surface,
                     modifier = Modifier.fillMaxSize(),
                     renderEnabled = renderThumbnail,
                     cropScale = 3.5f,
+                    cropToContent = true,
+                    contentOnRight = notebook.language.substringBefore('-') in setOf("ar", "fa", "ur"),
                 )
                 Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.035f)))
             }
@@ -998,14 +1008,20 @@ private fun ContinueReadingCard(
                 Spacer(Modifier.height(5.dp))
                 Text(progressLabel(notebook.lastPageIndex, notebook.pageCount), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text(recentlyOpenedLabel(notebook.lastOpenedAt), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                LinearProgressIndicator(
-                    progress = { ((notebook.lastPageIndex + 1f) / notebook.pageCount.coerceAtLeast(1)).coerceIn(0f, 1f) },
-                    modifier = Modifier.fillMaxWidth().padding(top = 9.dp).height(3.dp).clip(CircleShape),
-                    color = subjectColor,
-                    trackColor = subjectColor.copy(alpha = 0.18f),
+                LibraryProgressTrack(
+                    ((notebook.lastPageIndex + 1f) / notebook.pageCount.coerceAtLeast(1)).coerceIn(0f, 1f),
+                    subjectColor,
+                    Modifier.fillMaxWidth().padding(top = 9.dp),
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun LibraryProgressTrack(progress: Float, color: Color, modifier: Modifier = Modifier) {
+    Box(modifier.height(3.dp).clip(CircleShape).background(color.copy(alpha = 0.18f))) {
+        Box(Modifier.fillMaxHeight().fillMaxWidth(progress.coerceIn(0f, 1f)).clip(CircleShape).background(color))
     }
 }
 
@@ -1084,9 +1100,10 @@ private fun NotebookCard(
                 }
                 if (notebook.lastOpenedAt != null && notebook.pageCount > 0) {
                     Text(progressLabel(notebook.lastPageIndex, notebook.pageCount), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    LinearProgressIndicator(
-                        progress = { ((notebook.lastPageIndex + 1f) / notebook.pageCount).coerceIn(0f, 1f) },
-                        modifier = Modifier.fillMaxWidth().padding(top = 5.dp).clip(CircleShape),
+                    LibraryProgressTrack(
+                        ((notebook.lastPageIndex + 1f) / notebook.pageCount).coerceIn(0f, 1f),
+                        subjectColor,
+                        Modifier.fillMaxWidth().padding(top = 5.dp),
                     )
                 }
             }
