@@ -342,7 +342,7 @@ private fun BookCover(title: String, color: Color, isPdf: Boolean, modifier: Mod
         }
         Text(
             title,
-            Modifier.fillMaxWidth().padding(start = 22.dp, top = 20.dp, end = 16.dp),
+            Modifier.fillMaxWidth().padding(start = 22.dp, top = 20.dp, end = if (isPdf) 56.dp else 16.dp),
             color = titleColor,
             style = MaterialTheme.typography.titleMedium.copy(fontFamily = titleFontFamily(title), fontWeight = FontWeight.SemiBold),
             maxLines = 3,

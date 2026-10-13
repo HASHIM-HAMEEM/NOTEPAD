@@ -659,8 +659,8 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     }
 
     private fun updateRulerPaints() {
-        rulerFillPaint.color = if (rulerDarkTheme) 0xEB2A2A2D.toInt() else 0xE0FFFFFF.toInt()
-        rulerOutlinePaint.color = if (rulerDarkTheme) 0x99000000.toInt() else 0xFFBCC1C7.toInt()
+        rulerFillPaint.color = if (rulerDarkTheme) 0xEB2A2A2D.toInt() else 0xEBF1F2F4.toInt()
+        rulerOutlinePaint.color = if (rulerDarkTheme) 0x99000000.toInt() else 0xFF9AA0A6.toInt()
         rulerTickPaint.color = if (rulerDarkTheme) 0xFFE0E0E0.toInt() else 0xFF333333.toInt()
         rulerTextPaint.color = if (rulerDarkTheme) 0xFFE0E0E0.toInt() else 0xFF333333.toInt()
         rulerHandlePaint.color = rulerFillPaint.color

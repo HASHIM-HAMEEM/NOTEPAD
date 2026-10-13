@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
@@ -103,25 +104,29 @@ fun AccountScreen(onBack: () -> Unit) {
                                 }, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
-                        if (status.state == SyncState.DISABLED) {
-                            Icon(
-                                Icons.Outlined.CloudOff,
-                                null,
-                                Modifier.size(40.dp).align(Alignment.CenterHorizontally),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
+                        val title = when (status.state) {
+                            SyncState.DISABLED -> "Sync not configured in this build"
+                            SyncState.SIGNED_OUT -> "Not signed in — notes stay on this device"
+                            SyncState.NEEDS_KEY -> "Signed in as ${session?.email}. Set your encryption passphrase to start syncing."
+                            SyncState.IDLE -> "Synced as ${session?.email}"
+                            SyncState.SYNCING -> "Syncing…"
+                            SyncState.ERROR -> "Sync error"
+                            SyncState.OFFLINE -> "Offline — changes queued"
                         }
-                        Text(
-                            when (status.state) {
-                                SyncState.DISABLED -> "Sync not configured in this build"
-                                SyncState.SIGNED_OUT -> "Not signed in — notes stay on this device"
-                                SyncState.NEEDS_KEY -> "Signed in as ${session?.email}. Set your encryption passphrase to start syncing."
-                                SyncState.IDLE -> "Synced as ${session?.email}"
-                                SyncState.SYNCING -> "Syncing…"
-                                SyncState.ERROR -> "Sync error"
-                                SyncState.OFFLINE -> "Offline — changes queued"
-                            }, style = MaterialTheme.typography.headlineSmall
-                        )
+                        if (status.state == SyncState.DISABLED) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    Icons.Outlined.CloudOff,
+                                    null,
+                                    Modifier.size(40.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                Spacer(Modifier.width(16.dp))
+                                Text(title, Modifier.weight(1f), style = MaterialTheme.typography.headlineSmall)
+                            }
+                        } else {
+                            Text(title, style = MaterialTheme.typography.headlineSmall)
+                        }
                         if (status.lastSyncAt > 0) Text("Last sync: ${DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(status.lastSyncAt))}", style = MaterialTheme.typography.bodySmall)
                         Text("Pending changes: ${status.pending}", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         status.message?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = if (status.state == SyncState.ERROR) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant) }

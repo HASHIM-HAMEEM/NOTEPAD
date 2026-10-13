@@ -599,6 +599,7 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
                 DropdownMenu(
                     expanded = morePop,
                     onDismissRequest = { morePop = false },
+                    modifier = Modifier.width(320.dp),
                     shape = RoundedCornerShape(22.dp),
                     containerColor = MaterialTheme.colorScheme.surfaceContainer,
                 ) {
@@ -618,7 +619,7 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
                         trailingIcon = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
                         onClick = { morePop = false; showPenButtonSettings = true },
                     )
-                    ToggleItem("Pixel eraser", "Erase pixels instead of whole strokes", Icons.Outlined.AutoFixNormal, pixelEraser) { pixelEraser = it }
+                    ToggleItem("Pixel eraser", "Erase pixels, not strokes", Icons.Outlined.AutoFixNormal, pixelEraser) { pixelEraser = it }
                 }
             }
         }
