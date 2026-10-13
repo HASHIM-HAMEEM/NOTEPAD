@@ -77,6 +77,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     var primaryButtonAction: StylusButtonAction = StylusButtonAction.SWITCH_TO_ERASER
     var secondaryButtonAction: StylusButtonAction = StylusButtonAction.PREVIOUS_PEN
     var onSample: ((PointerSample) -> Unit)? = null
+    var onDrawingActiveChanged: ((Boolean) -> Unit)? = null
     var onStrokesChanged: ((List<Stroke>) -> Unit)? = null
     var onUndoRedoChanged: ((Boolean, Boolean) -> Unit)? = null
     var onZoomChanged: ((Int) -> Unit)? = null
@@ -269,6 +270,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     private var highlighterDownY = 0f
     private var currentPointerId = -1
     private var erasing = false
+    private var drawingInputActive = false
     private var lastPanX = 0f
     private var lastPanY = 0f
     private var panning = false
@@ -1333,8 +1335,28 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         if (!isStylus && !fingerDraws) return handleFingerNavigation(event)
         if (!isStylus && event.pointerCount > 1) { cancelCurrent(event); return handleFingerNavigation(event) }
 
-        if (brushSpec.tool == InkTool.LASSO) return handleLasso(event, if (event.actionMasked == MotionEvent.ACTION_MOVE) event.findPointerIndex(currentPointerId).takeIf { it >= 0 } ?: 0 else idx).also {
+        if (brushSpec.tool == InkTool.LASSO) {
+            if (event.actionMasked == MotionEvent.ACTION_DOWN || event.actionMasked == MotionEvent.ACTION_POINTER_DOWN) {
+                setDrawingInputActive(true)
+            }
+            val handled = handleLasso(
+                event,
+                if (event.actionMasked == MotionEvent.ACTION_MOVE) {
+                    event.findPointerIndex(currentPointerId).takeIf { it >= 0 } ?: 0
+                } else {
+                    idx
+                },
+            )
             if (event.actionMasked == MotionEvent.ACTION_DOWN) currentPointerId = event.getPointerId(idx)
+            if (
+                event.actionMasked == MotionEvent.ACTION_UP ||
+                event.actionMasked == MotionEvent.ACTION_POINTER_UP ||
+                event.actionMasked == MotionEvent.ACTION_CANCEL
+            ) {
+                currentPointerId = -1
+                setDrawingInputActive(false)
+            }
+            return handled
         }
         if (brushSpec.tool == InkTool.TEXT) {
             if (event.actionMasked == MotionEvent.ACTION_UP) {
@@ -1343,7 +1365,18 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
             }
             return true
         }
-        if (brushSpec.tool == InkTool.LASER) return handleLaserPointer(event, idx)
+        if (brushSpec.tool == InkTool.LASER) {
+            val handled = handleLaserPointer(event, idx)
+            if (activeLaserTrail != null) setDrawingInputActive(true)
+            else if (
+                event.actionMasked == MotionEvent.ACTION_UP ||
+                event.actionMasked == MotionEvent.ACTION_POINTER_UP ||
+                event.actionMasked == MotionEvent.ACTION_CANCEL
+            ) {
+                setDrawingInputActive(false)
+            }
+            return handled
+        }
         val eraserNow = toolType == MotionEvent.TOOL_TYPE_ERASER || brushSpec.tool == InkTool.ERASER ||
             (event.buttonState and MotionEvent.BUTTON_STYLUS_PRIMARY) != 0 ||
             stylusButtonPresses.containsKey(MotionEvent.BUTTON_STYLUS_PRIMARY)
@@ -1351,6 +1384,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
                 if (currentStrokeId != null || highlighterWet != null || erasing) return true
+                setDrawingInputActive(true)
                 if (isStylus) markStylusButtonStroke()
                 currentPointerId = event.getPointerId(idx)
                 erasing = eraserNow
@@ -1404,7 +1438,9 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
                         wetLayer.finishStroke(adjusted, currentPointerId, strokeId)
                     }
                 }
-                currentStrokeId = null; currentPointerId = -1; erasing = false; rulerSnapActive = false; return true
+                currentStrokeId = null; currentPointerId = -1; erasing = false; rulerSnapActive = false
+                setDrawingInputActive(false)
+                return true
             }
             MotionEvent.ACTION_CANCEL -> { cancelCurrent(event); rulerSnapActive = false; return true }
         }
@@ -1599,7 +1635,14 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         }
         currentStrokeId = null; currentPointerId = -1; erasing = false
         resetHighlighterStroke()
+        setDrawingInputActive(false)
         strokeLayer.invalidate()
+    }
+
+    private fun setDrawingInputActive(active: Boolean) {
+        if (drawingInputActive == active) return
+        drawingInputActive = active
+        onDrawingActiveChanged?.invoke(active)
     }
 
     private fun handleLaserPointer(event: MotionEvent, actionIndex: Int): Boolean {
@@ -1640,6 +1683,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         val trail = activeLaserTrail ?: return
         activeLaserTrail = null
         activeLaserPointerId = -1
+        setDrawingInputActive(false)
         trail.fadeAnimator = ValueAnimator.ofFloat(1f, 0f).apply {
             duration = LASER_FADE_DURATION_MS
             addUpdateListener {

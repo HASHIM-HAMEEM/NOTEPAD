@@ -5,20 +5,24 @@ import android.util.Log
 import android.view.KeyEvent
 import android.widget.Toast
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
@@ -34,6 +38,7 @@ import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Speed
 import androidx.compose.material.icons.outlined.TouchApp
 import androidx.compose.material.icons.outlined.ZoomIn
+import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -58,8 +63,12 @@ import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.contentDescription
@@ -70,8 +79,15 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntRect
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupPositionProvider
+import androidx.compose.ui.window.PopupProperties
 import androidx.ink.strokes.Stroke
 import com.hashim.notepad.data.NotePadRepository
 import com.hashim.notepad.data.Page
@@ -91,11 +107,13 @@ import com.hashim.notepad.ink.StylusDetector
 import com.hashim.notepad.pdf.PdfPageSource
 import com.hashim.notepad.recognition.InkRecognizer
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.withContext
 import java.io.File
+import kotlin.math.roundToInt
 
 private val PALETTE = listOf(
     0xFF000000, 0xFF4A4A4A, 0xFF8E8E93, 0xFFC7C7CC, 0xFFFFFFFF, 0xFF1B2A4E,
@@ -106,6 +124,7 @@ private val PALETTE = listOf(
 
 private data class ToolBrushSettings(val color: Int, val size: Float, val opacity: Float)
 private data class DrawingToolSelection(val tool: InkTool, val pen: PenType)
+private enum class EditorToolbarEdge { TOP, BOTTOM, START, END }
 
 private fun PenType.defaultOpacity() = if (this == PenType.MARKER) 230f / 255f else 1f
 
@@ -158,6 +177,19 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
 
     var tool by rememberSaveableTool()
     val preferences = remember(context) { context.getSharedPreferences("notepad", 0) }
+    var toolbarEdge by remember(preferences) {
+        mutableStateOf(
+            runCatching {
+                EditorToolbarEdge.valueOf(
+                    preferences.getString("editor_toolbar_edge", EditorToolbarEdge.TOP.name)
+                        ?: EditorToolbarEdge.TOP.name,
+                )
+            }.getOrDefault(EditorToolbarEdge.TOP),
+        )
+    }
+    var toolbarPinned by remember(preferences) {
+        mutableStateOf(preferences.getBoolean("editor_toolbar_pinned", false))
+    }
     var pen by rememberSaveable {
         mutableStateOf(
             runCatching {
@@ -213,6 +245,14 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
     var showPenButtonSettings by remember { mutableStateOf(false) }
     var zoomPercent by remember { mutableIntStateOf(100) }
     var rulerVisible by remember { mutableStateOf(false) }
+    var drawingActive by remember { mutableStateOf(false) }
+    var toolbarAutoHidden by remember { mutableStateOf(false) }
+    var toolbarSize by remember { mutableStateOf(IntSize.Zero) }
+    var toolbarPositionReady by remember { mutableStateOf(false) }
+    var toolbarDragging by remember { mutableStateOf(false) }
+    var toolbarDragPosition by remember { mutableStateOf(IntOffset.Zero) }
+    val toolbarX = remember { Animatable(0f) }
+    val toolbarY = remember { Animatable(0f) }
     val darkTheme = MaterialTheme.colorScheme.isDark
     val toolbarColor = when {
         darkTheme -> Color(0xFF111111)
@@ -262,6 +302,8 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
     }
     LaunchedEffect(primaryButtonAction) { preferences.edit().putString("stylus.primaryAction", primaryButtonAction.name).apply() }
     LaunchedEffect(secondaryButtonAction) { preferences.edit().putString("stylus.secondaryAction", secondaryButtonAction.name).apply() }
+    LaunchedEffect(toolbarEdge) { preferences.edit().putString("editor_toolbar_edge", toolbarEdge.name).apply() }
+    LaunchedEffect(toolbarPinned) { preferences.edit().putBoolean("editor_toolbar_pinned", toolbarPinned).apply() }
     LaunchedEffect(spec, fingerDraws, surface) { surface?.let { it.brushSpec = spec; it.fingerDraws = fingerDraws; if (spec.tool != InkTool.LASSO) it.clearSelection() } }
     DisposableEffect(surface) {
         val target = surface
@@ -327,6 +369,18 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
     var penPopover by remember { mutableStateOf<PenType?>(null) }
     var highlighterPopover by remember { mutableStateOf(false) }
     var morePop by remember { mutableStateOf(false) }
+    val toolbarOverlayOpen = penPopover != null || highlighterPopover || colorPop || morePop ||
+        showPenButtonSettings || editingBlock != null || newBlockAt != null
+    LaunchedEffect(drawingActive, toolbarPinned, toolbarOverlayOpen) {
+        if (toolbarPinned || toolbarOverlayOpen) {
+            toolbarAutoHidden = false
+        } else if (drawingActive) {
+            toolbarAutoHidden = true
+        } else {
+            delay(500)
+            toolbarAutoHidden = false
+        }
+    }
     val haptics = LocalHapticFeedback.current
 
     fun currentDrawingSelection() = DrawingToolSelection(tool, pen)
@@ -442,16 +496,112 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
     }
 
     val statusBarHeight = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+    val navigationBarHeight = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     val toolbarContentColor = if (darkTheme) Color(0xFFEDEDED) else Color(0xFF333333)
     val displayedRecentColors = (recentColors + listOf(0xFFFFFFFF.toInt(), 0xFF1B2A4E.toInt()))
         .distinct()
         .take(2)
     BoxWithConstraints(Modifier.fillMaxSize().background(toolbarColor)) {
+        val density = androidx.compose.ui.platform.LocalDensity.current
+        val verticalToolbar = toolbarEdge == EditorToolbarEdge.START || toolbarEdge == EditorToolbarEdge.END
+        val narrowToolbar = maxWidth < 520.dp
+        val toolbarWidth = if (verticalToolbar) 76.dp else minOf(680.dp, (maxWidth - 186.dp).coerceAtLeast(0.dp))
+        val sideToolbarClearance = if (verticalToolbar) 48.dp else 0.dp
+        val pageIndicatorClearance = if (toolbarEdge == EditorToolbarEdge.START) 64.dp else 0.dp
+        val toolbarSafeHeight =
+            (maxHeight - statusBarHeight - navigationBarHeight - 24.dp - sideToolbarClearance - pageIndicatorClearance)
+                .coerceAtLeast(0.dp)
+        val containerWidthPx = with(density) { maxWidth.roundToPx() }
+        val containerHeightPx = with(density) { maxHeight.roundToPx() }
+        val statusBarPx = with(density) { statusBarHeight.roundToPx() }
+        val navigationBarPx = with(density) { navigationBarHeight.roundToPx() }
+        val toolbarGapPx = with(density) { 12.dp.roundToPx() }
+        val safeTopPx = statusBarPx + toolbarGapPx
+        val dockSafeTopPx = safeTopPx + with(density) { sideToolbarClearance.roundToPx() }
+
+        fun dockedToolbarPosition(edge: EditorToolbarEdge, size: IntSize): IntOffset {
+            val maxX = (containerWidthPx - size.width).coerceAtLeast(0)
+            val maxY = (containerHeightPx - size.height).coerceAtLeast(0)
+            val safeMinY = dockSafeTopPx.coerceIn(0, maxY)
+            val pageIndicatorClearancePx = if (edge == EditorToolbarEdge.START) with(density) { 64.dp.roundToPx() } else 0
+            val safeMaxY = (containerHeightPx - navigationBarPx - toolbarGapPx - pageIndicatorClearancePx - size.height)
+                .coerceIn(safeMinY, maxY)
+            val x = when (edge) {
+                EditorToolbarEdge.TOP, EditorToolbarEdge.BOTTOM -> (containerWidthPx - size.width) / 2
+                EditorToolbarEdge.START -> toolbarGapPx.coerceAtMost(maxX)
+                EditorToolbarEdge.END -> (maxX - toolbarGapPx).coerceAtLeast(0)
+            }
+            val y = when (edge) {
+                EditorToolbarEdge.TOP -> safeMinY
+                EditorToolbarEdge.BOTTOM -> safeMaxY
+                EditorToolbarEdge.START, EditorToolbarEdge.END ->
+                    (safeMinY + safeMaxY) / 2
+            }
+            return IntOffset(x, y.coerceIn(0, maxY))
+        }
+
+        fun nearestToolbarEdge(position: IntOffset): EditorToolbarEdge {
+            val centerX = position.x + toolbarSize.width / 2
+            val centerY = position.y + toolbarSize.height / 2
+            return listOf(
+                EditorToolbarEdge.TOP to (centerY - statusBarPx).coerceAtLeast(0),
+                EditorToolbarEdge.BOTTOM to (containerHeightPx - navigationBarPx - centerY).coerceAtLeast(0),
+                EditorToolbarEdge.START to centerX.coerceAtLeast(0),
+                EditorToolbarEdge.END to (containerWidthPx - centerX).coerceAtLeast(0),
+            ).minBy { it.second }.first
+        }
+
+        LaunchedEffect(toolbarEdge, toolbarSize, maxWidth, maxHeight, statusBarHeight, navigationBarHeight, toolbarDragging) {
+            if (toolbarSize.width == 0 || toolbarSize.height == 0 || toolbarDragging) return@LaunchedEffect
+            val target = dockedToolbarPosition(toolbarEdge, toolbarSize)
+            if (!toolbarPositionReady) {
+                toolbarX.snapTo(target.x.toFloat())
+                toolbarY.snapTo(target.y.toFloat())
+                toolbarPositionReady = true
+            } else {
+                coroutineScope {
+                    launch {
+                        toolbarX.animateTo(
+                            target.x.toFloat(),
+                            spring(dampingRatio = 1.05f, stiffness = 420f),
+                        )
+                    }
+                    launch {
+                        toolbarY.animateTo(
+                            target.y.toFloat(),
+                            spring(dampingRatio = 1.05f, stiffness = 420f),
+                        )
+                    }
+                }
+            }
+        }
+
+        val toolbarHidden = toolbarAutoHidden && !toolbarPinned && !toolbarOverlayOpen
+        val toolbarAlpha by animateFloatAsState(
+            targetValue = if (toolbarHidden) 0f else 1f,
+            animationSpec = tween(if (toolbarHidden) 160 else 200),
+            label = "toolbar-alpha",
+        )
+        val hideDistance = if (toolbarHidden) 24.dp else 0.dp
+        val toolbarShiftX = when (toolbarEdge) {
+            EditorToolbarEdge.START -> -hideDistance
+            EditorToolbarEdge.END -> hideDistance
+            else -> 0.dp
+        }
+        val toolbarShiftY = when (toolbarEdge) {
+            EditorToolbarEdge.TOP -> -hideDistance
+            EditorToolbarEdge.BOTTOM -> hideDistance
+            else -> 0.dp
+        }
+        val toolbarShiftXPx = with(density) { toolbarShiftX.toPx() }
+        val toolbarShiftYPx = with(density) { toolbarShiftY.toPx() }
+
         AndroidView(
-            modifier = Modifier.fillMaxSize().padding(start = 12.dp, end = 12.dp, top = statusBarHeight + 76.dp, bottom = 12.dp),
+            modifier = Modifier.fillMaxSize(),
             factory = { ctx ->
                 InkSurfaceView(ctx).also { v ->
                     v.onSample = { sample = it }
+                    v.onDrawingActiveChanged = { drawingActive = it }
                     v.onStylusToolSwitch = ::handleStylusToolSwitch
                     v.onSelectionChanged = { hasSelection = it }
                     v.onSelectionBoundsChanged = { selectionBounds = it }
@@ -464,197 +614,470 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
             },
         )
 
-        Row(
-            Modifier.fillMaxWidth().background(toolbarColor).statusBarsPadding().height(76.dp).padding(horizontal = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            IconButton(onClick = onBack, modifier = Modifier.size(48.dp)) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = toolbarContentColor)
-            }
-            Row(
-                Modifier.weight(1f).fillMaxHeight().horizontalScroll(rememberScrollState()).clipToBounds().padding(horizontal = 2.dp),
-                horizontalArrangement = Arrangement.spacedBy(0.dp),
-                verticalAlignment = Alignment.Bottom,
-            ) {
-                listOf(PenType.BALLPOINT, PenType.PENCIL, PenType.FOUNTAIN, PenType.MARKER).forEach { type ->
-                    val settings = penSettings[type] ?: ToolBrushSettings(0xFF000000.toInt(), 2.5f, type.defaultOpacity())
-                    Box {
-                        ShelfCanvasItem(
-                            label = type.label,
-                            style = type.toShelfStyle(),
-                            selected = tool == InkTool.PEN && pen == type,
-                            color = settings.color,
-                            opacity = settings.opacity,
-                            onClick = { selectPen(type) },
-                        )
-                        DropdownMenu(
-                            expanded = penPopover == type,
-                            onDismissRequest = { penPopover = null },
-                            shape = RoundedCornerShape(22.dp),
-                            containerColor = MaterialTheme.colorScheme.surfaceContainer,
-                        ) {
-                            BrushSettingsPopover(
-                                title = type.label,
-                                color = settings.color,
-                                brushSize = settings.size,
-                                previewStrokeSize = settings.size * type.previewScale(),
-                                onSizeChange = { value -> updateActiveBrushSettings { it.copy(size = value) } },
-                                opacity = settings.opacity,
-                                onOpacityChange = { value -> updateActiveBrushSettings { it.copy(opacity = value) } },
-                                showOpacity = true,
-                            )
-                        }
-                    }
-                }
+        val shelfTools: @Composable () -> Unit = {
+            listOf(PenType.BALLPOINT, PenType.PENCIL, PenType.FOUNTAIN, PenType.MARKER).forEach { type ->
+                val settings = penSettings[type] ?: ToolBrushSettings(0xFF000000.toInt(), 2.5f, type.defaultOpacity())
                 Box {
                     ShelfCanvasItem(
-                        label = "Highlighter",
-                        style = ShelfDrawing.HIGHLIGHTER,
-                        selected = tool == InkTool.HIGHLIGHTER,
-                        color = highlighterSettings.color,
-                        opacity = highlighterSettings.opacity,
-                        onClick = { selectHighlighter() },
+                        label = type.label,
+                        style = type.toShelfStyle(),
+                        selected = tool == InkTool.PEN && pen == type,
+                        color = settings.color,
+                        opacity = settings.opacity,
+                        enabled = !toolbarHidden,
+                        vertical = verticalToolbar,
+                        edge = toolbarEdge,
+                        onClick = { selectPen(type) },
                     )
-                    DropdownMenu(
-                        expanded = highlighterPopover,
-                        onDismissRequest = { highlighterPopover = false },
-                        shape = RoundedCornerShape(22.dp),
-                        containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                    ToolbarPopover(
+                        expanded = penPopover == type,
+                        edge = toolbarEdge,
+                        onDismissRequest = { penPopover = null },
                     ) {
                         BrushSettingsPopover(
-                            title = "Highlighter",
-                            color = highlighterSettings.color,
-                            brushSize = highlighterSettings.size,
-                            previewStrokeSize = highlighterSettings.size * 4f,
+                            title = type.label,
+                            color = settings.color,
+                            brushSize = settings.size,
+                            previewStrokeSize = settings.size * type.previewScale(),
                             onSizeChange = { value -> updateActiveBrushSettings { it.copy(size = value) } },
-                            opacity = highlighterSettings.opacity,
+                            opacity = settings.opacity,
                             onOpacityChange = { value -> updateActiveBrushSettings { it.copy(opacity = value) } },
                             showOpacity = true,
-                            alwaysStraight = alwaysStraight,
-                            onAlwaysStraightChange = ::setAlwaysStraight,
                         )
                     }
                 }
-                val calligraphySettings = penSettings[PenType.CALLIGRAPHY] ?: ToolBrushSettings(0xFF000000.toInt(), 2.5f, PenType.CALLIGRAPHY.defaultOpacity())
-                Box {
-                    ShelfCanvasItem(
-                        label = PenType.CALLIGRAPHY.label,
-                        style = ShelfDrawing.CALLIGRAPHY,
-                        selected = tool == InkTool.PEN && pen == PenType.CALLIGRAPHY,
-                        color = calligraphySettings.color,
-                        opacity = calligraphySettings.opacity,
-                        onClick = { selectPen(PenType.CALLIGRAPHY) },
+            }
+            Box {
+                ShelfCanvasItem(
+                    label = "Highlighter",
+                    style = ShelfDrawing.HIGHLIGHTER,
+                    selected = tool == InkTool.HIGHLIGHTER,
+                    color = highlighterSettings.color,
+                    opacity = highlighterSettings.opacity,
+                    enabled = !toolbarHidden,
+                    vertical = verticalToolbar,
+                    edge = toolbarEdge,
+                    onClick = { selectHighlighter() },
+                )
+                ToolbarPopover(
+                    expanded = highlighterPopover,
+                    edge = toolbarEdge,
+                    onDismissRequest = { highlighterPopover = false },
+                ) {
+                    BrushSettingsPopover(
+                        title = "Highlighter",
+                        color = highlighterSettings.color,
+                        brushSize = highlighterSettings.size,
+                        previewStrokeSize = highlighterSettings.size * 4f,
+                        onSizeChange = { value -> updateActiveBrushSettings { it.copy(size = value) } },
+                        opacity = highlighterSettings.opacity,
+                        onOpacityChange = { value -> updateActiveBrushSettings { it.copy(opacity = value) } },
+                        showOpacity = true,
+                        alwaysStraight = alwaysStraight,
+                        onAlwaysStraightChange = ::setAlwaysStraight,
                     )
-                    DropdownMenu(
-                        expanded = penPopover == PenType.CALLIGRAPHY,
-                        onDismissRequest = { penPopover = null },
-                        shape = RoundedCornerShape(22.dp),
-                        containerColor = MaterialTheme.colorScheme.surfaceContainer,
-                    ) {
-                        BrushSettingsPopover(
+                }
+            }
+            val calligraphySettings = penSettings[PenType.CALLIGRAPHY]
+                ?: ToolBrushSettings(0xFF000000.toInt(), 2.5f, PenType.CALLIGRAPHY.defaultOpacity())
+            Box {
+                ShelfCanvasItem(
+                    label = PenType.CALLIGRAPHY.label,
+                    style = ShelfDrawing.CALLIGRAPHY,
+                    selected = tool == InkTool.PEN && pen == PenType.CALLIGRAPHY,
+                    color = calligraphySettings.color,
+                    opacity = calligraphySettings.opacity,
+                    enabled = !toolbarHidden,
+                    vertical = verticalToolbar,
+                    edge = toolbarEdge,
+                    onClick = { selectPen(PenType.CALLIGRAPHY) },
+                )
+                ToolbarPopover(
+                    expanded = penPopover == PenType.CALLIGRAPHY,
+                    edge = toolbarEdge,
+                    onDismissRequest = { penPopover = null },
+                ) {
+                    BrushSettingsPopover(
                         title = PenType.CALLIGRAPHY.label,
                         color = calligraphySettings.color,
                         brushSize = calligraphySettings.size,
                         previewStrokeSize = calligraphySettings.size * PenType.CALLIGRAPHY.previewScale(),
                         onSizeChange = { value -> updateActiveBrushSettings { it.copy(size = value) } },
-                            opacity = calligraphySettings.opacity,
-                            onOpacityChange = { value -> updateActiveBrushSettings { it.copy(opacity = value) } },
+                        opacity = calligraphySettings.opacity,
+                        onOpacityChange = { value -> updateActiveBrushSettings { it.copy(opacity = value) } },
                         showOpacity = true,
-                        )
-                    }
+                    )
                 }
-                ShelfCanvasItem("Eraser", ShelfDrawing.ERASER, tool == InkTool.ERASER, color, onClick = { selectTool(InkTool.ERASER) })
-                ShelfCanvasItem("Lasso", ShelfDrawing.LASSO, tool == InkTool.LASSO, color, onClick = { selectTool(InkTool.LASSO) })
-                ShelfCanvasItem("Text", ShelfDrawing.TEXT, tool == InkTool.TEXT, color, onClick = { selectTool(InkTool.TEXT) })
-                ShelfCanvasItem("Ruler", ShelfDrawing.RULER, rulerVisible, color, onClick = {
+            }
+            ShelfCanvasItem(
+                "Eraser", ShelfDrawing.ERASER, tool == InkTool.ERASER, color,
+                enabled = !toolbarHidden, vertical = verticalToolbar, edge = toolbarEdge,
+                onClick = { selectTool(InkTool.ERASER) },
+            )
+            ShelfCanvasItem(
+                "Lasso", ShelfDrawing.LASSO, tool == InkTool.LASSO, color,
+                enabled = !toolbarHidden, vertical = verticalToolbar, edge = toolbarEdge,
+                onClick = { selectTool(InkTool.LASSO) },
+            )
+            ShelfCanvasItem(
+                "Text", ShelfDrawing.TEXT, tool == InkTool.TEXT, color,
+                enabled = !toolbarHidden, vertical = verticalToolbar, edge = toolbarEdge,
+                onClick = { selectTool(InkTool.TEXT) },
+            )
+            ShelfCanvasItem(
+                "Ruler", ShelfDrawing.RULER, rulerVisible, color,
+                enabled = !toolbarHidden, vertical = verticalToolbar, edge = toolbarEdge,
+                onClick = {
                     rulerVisible = !rulerVisible
                     haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                })
-                ShelfCanvasItem("Laser", ShelfDrawing.LASER, tool == InkTool.LASER, color, onClick = { selectTool(InkTool.LASER) })
-                    Box(Modifier.padding(start = 7.dp)) {
-                        IconButton(onClick = { recolorSelectionMode = false; colorPop = true }, modifier = Modifier.size(44.dp)) {
+                },
+            )
+            ShelfCanvasItem(
+                "Laser", ShelfDrawing.LASER, tool == InkTool.LASER, color,
+                enabled = !toolbarHidden, vertical = verticalToolbar, edge = toolbarEdge,
+                onClick = { selectTool(InkTool.LASER) },
+            )
+        }
+        val colorControls: @Composable () -> Unit = {
+            if (verticalToolbar) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Box(Modifier.padding(top = 4.dp)) {
+                        IconButton(
+                            onClick = { recolorSelectionMode = false; colorPop = true },
+                            enabled = !toolbarHidden,
+                            modifier = Modifier.size(44.dp),
+                        ) {
                             ColorWheelButton(color)
                         }
-                    DropdownMenu(
-                        expanded = colorPop,
-                        onDismissRequest = { colorPop = false; recolorSelectionMode = false },
-                        shape = RoundedCornerShape(22.dp),
-                        containerColor = MaterialTheme.colorScheme.surfaceContainer,
-                    ) {
-                        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text(
-                                "Colour",
-                                Modifier.padding(4.dp),
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.Bold,
-                            )
-                            PALETTE.chunked(6).forEach { row ->
-                                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                    row.forEach { swatch ->
-                                        ColorDot(swatch, swatch == color, 36.dp) { chooseColor(swatch) }
+                        ToolbarPopover(
+                            expanded = colorPop,
+                            edge = toolbarEdge,
+                            onDismissRequest = { colorPop = false; recolorSelectionMode = false },
+                        ) {
+                            Surface(shape = RoundedCornerShape(22.dp), color = MaterialTheme.colorScheme.surfaceContainer, shadowElevation = 6.dp) {
+                                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    Text(
+                                        "Colour",
+                                        Modifier.padding(4.dp),
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.Bold,
+                                    )
+                                    PALETTE.chunked(6).forEach { row ->
+                                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                            row.forEach { swatch ->
+                                                ColorDot(swatch, swatch == color, 36.dp, enabled = !toolbarHidden) { chooseColor(swatch) }
+                                            }
+                                        }
                                     }
                                 }
                             }
                         }
                     }
-                }
-                displayedRecentColors.forEach { swatch ->
-                    ColorDot(swatch, false, 44.dp) { chooseColor(swatch) }
-                }
-            }
-            IconButton(enabled = canUndo, onClick = { surface?.undo() }, modifier = Modifier.size(44.dp)) {
-                HistoryArrow(redo = false, tint = toolbarContentColor.copy(alpha = if (canUndo) 1f else 0.38f))
-            }
-            IconButton(enabled = canRedo, onClick = { surface?.redo() }, modifier = Modifier.size(44.dp)) {
-                HistoryArrow(redo = true, tint = toolbarContentColor.copy(alpha = if (canRedo) 1f else 0.38f))
-            }
-            IconButton(
-                onClick = {
-                    scope.launch {
-                        runCatching { exporter.exportNotebook(notebookId, notebook?.title ?: "Notebook") }
-                            .onSuccess { exporter.share(it) }
-                            .onFailure { Toast.makeText(context, "Export failed: ${it.message}", Toast.LENGTH_LONG).show() }
+                    displayedRecentColors.forEach { swatch ->
+                        ColorDot(swatch, false, 44.dp, enabled = !toolbarHidden) { chooseColor(swatch) }
                     }
-                },
-                modifier = Modifier.size(44.dp),
-            ) {
-                Icon(Icons.Outlined.IosShare, "Share notebook as PDF", modifier = Modifier.size(28.dp), tint = toolbarContentColor)
-            }
-            Box {
-                IconButton(onClick = { morePop = true }, modifier = Modifier.size(44.dp)) {
-                    Icon(Icons.Default.MoreVert, "More", modifier = Modifier.size(28.dp), tint = toolbarContentColor)
                 }
-                DropdownMenu(
-                    expanded = morePop,
-                    onDismissRequest = { morePop = false },
-                    modifier = Modifier.width(320.dp),
-                    shape = RoundedCornerShape(22.dp),
-                    containerColor = MaterialTheme.colorScheme.surfaceContainer,
+            } else {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.padding(start = 7.dp)) {
+                        IconButton(
+                            onClick = { recolorSelectionMode = false; colorPop = true },
+                            enabled = !toolbarHidden,
+                            modifier = Modifier.size(44.dp),
+                        ) {
+                            ColorWheelButton(color)
+                        }
+                        ToolbarPopover(
+                            expanded = colorPop,
+                            edge = toolbarEdge,
+                            onDismissRequest = { colorPop = false; recolorSelectionMode = false },
+                        ) {
+                            Surface(shape = RoundedCornerShape(22.dp), color = MaterialTheme.colorScheme.surfaceContainer, shadowElevation = 6.dp) {
+                                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    Text(
+                                        "Colour",
+                                        Modifier.padding(4.dp),
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.Bold,
+                                    )
+                                    PALETTE.chunked(6).forEach { row ->
+                                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                            row.forEach { swatch ->
+                                                ColorDot(swatch, swatch == color, 36.dp, enabled = !toolbarHidden) { chooseColor(swatch) }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    displayedRecentColors.forEach { swatch ->
+                        ColorDot(swatch, false, 44.dp, enabled = !toolbarHidden) { chooseColor(swatch) }
+                    }
+                }
+            }
+        }
+        val historyControls: @Composable () -> Unit = {
+            if (verticalToolbar) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    IconButton(
+                        enabled = canUndo && !toolbarHidden,
+                        onClick = { surface?.undo() },
+                        modifier = Modifier.size(44.dp),
+                    ) {
+                        HistoryArrow(redo = false, tint = toolbarContentColor.copy(alpha = if (canUndo) 1f else 0.38f))
+                    }
+                    IconButton(
+                        enabled = canRedo && !toolbarHidden,
+                        onClick = { surface?.redo() },
+                        modifier = Modifier.size(44.dp),
+                    ) {
+                        HistoryArrow(redo = true, tint = toolbarContentColor.copy(alpha = if (canRedo) 1f else 0.38f))
+                    }
+                }
+            } else {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(
+                        enabled = canUndo && !toolbarHidden,
+                        onClick = { surface?.undo() },
+                        modifier = Modifier.size(44.dp),
+                    ) {
+                        HistoryArrow(redo = false, tint = toolbarContentColor.copy(alpha = if (canUndo) 1f else 0.38f))
+                    }
+                    IconButton(
+                        enabled = canRedo && !toolbarHidden,
+                        onClick = { surface?.redo() },
+                        modifier = Modifier.size(44.dp),
+                    ) {
+                        HistoryArrow(redo = true, tint = toolbarContentColor.copy(alpha = if (canRedo) 1f else 0.38f))
+                    }
+                }
+            }
+        }
+        val toolbarPanelModifier = Modifier
+            .offset {
+                if (toolbarDragging) toolbarDragPosition
+                else IntOffset(toolbarX.value.roundToInt(), toolbarY.value.roundToInt())
+            }
+            .width(toolbarWidth)
+            .then(if (verticalToolbar) Modifier.heightIn(max = toolbarSafeHeight) else Modifier.height(76.dp))
+            .onSizeChanged { if (toolbarSize != it) toolbarSize = it }
+            .graphicsLayer {
+                alpha = if (toolbarPositionReady) toolbarAlpha else 0f
+                translationX = toolbarShiftXPx
+                translationY = toolbarShiftYPx
+            }
+        Surface(
+            modifier = toolbarPanelModifier,
+            shape = RoundedCornerShape(20.dp),
+            color = MaterialTheme.colorScheme.surface,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            shadowElevation = 6.dp,
+        ) {
+            if (verticalToolbar) {
+                Column(
+                    Modifier.width(toolbarWidth)
+                        .heightIn(max = toolbarSafeHeight)
+                        .verticalScroll(rememberScrollState())
+                        .padding(vertical = 8.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
-                    if (tool == InkTool.LASSO && clipboardHasContent) {
-                        DropdownMenuItem(
-                            text = { Text("Paste") },
-                            leadingIcon = { Icon(Icons.Outlined.ContentCopy, null) },
-                            onClick = { surface?.paste(); morePop = false },
+                    EditorToolbarGrip(
+                        enabled = toolbarPositionReady && !toolbarHidden,
+                        modifier = Modifier.padding(vertical = 4.dp),
+                        onDragStart = {
+                            toolbarDragPosition = IntOffset(toolbarX.value.roundToInt(), toolbarY.value.roundToInt())
+                            toolbarDragging = true
+                        },
+                        onDrag = { delta ->
+                            val maxX = (containerWidthPx - toolbarSize.width).coerceAtLeast(0)
+                            val maxY = (containerHeightPx - toolbarSize.height).coerceAtLeast(0)
+                            toolbarDragPosition = IntOffset(
+                                (toolbarDragPosition.x + delta.x).roundToInt().coerceIn(0, maxX),
+                                (toolbarDragPosition.y + delta.y).roundToInt().coerceIn(0, maxY),
+                            )
+                        },
+                        onDragEnd = {
+                            val position = toolbarDragPosition
+                            scope.launch {
+                                toolbarX.snapTo(position.x.toFloat())
+                                toolbarY.snapTo(position.y.toFloat())
+                                toolbarEdge = nearestToolbarEdge(position)
+                                toolbarDragging = false
+                            }
+                        },
+                    )
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) { shelfTools() }
+                    Box(
+                        Modifier.padding(vertical = 8.dp).fillMaxWidth(0.4f).height(1.dp)
+                            .background(MaterialTheme.colorScheme.outlineVariant),
+                    )
+                    colorControls()
+                    Box(
+                        Modifier.padding(vertical = 8.dp).fillMaxWidth(0.4f).height(1.dp)
+                            .background(MaterialTheme.colorScheme.outlineVariant),
+                    )
+                    historyControls()
+                }
+            } else {
+                Row(
+                    Modifier.width(toolbarWidth).height(76.dp).padding(horizontal = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    EditorToolbarGrip(
+                        enabled = toolbarPositionReady && !toolbarHidden,
+                        modifier = Modifier.padding(horizontal = 4.dp),
+                        onDragStart = {
+                            toolbarDragPosition = IntOffset(toolbarX.value.roundToInt(), toolbarY.value.roundToInt())
+                            toolbarDragging = true
+                        },
+                        onDrag = { delta ->
+                            val maxX = (containerWidthPx - toolbarSize.width).coerceAtLeast(0)
+                            val minY = dockSafeTopPx.coerceAtMost((containerHeightPx - toolbarSize.height).coerceAtLeast(0))
+                            val maxY = (containerHeightPx - navigationBarPx - toolbarGapPx - toolbarSize.height)
+                                .coerceAtLeast(minY)
+                            toolbarDragPosition = IntOffset(
+                                (toolbarDragPosition.x + delta.x).roundToInt().coerceIn(0, maxX),
+                                (toolbarDragPosition.y + delta.y).roundToInt().coerceIn(minY, maxY),
+                            )
+                        },
+                        onDragEnd = {
+                            val position = toolbarDragPosition
+                            scope.launch {
+                                toolbarX.snapTo(position.x.toFloat())
+                                toolbarY.snapTo(position.y.toFloat())
+                                toolbarEdge = nearestToolbarEdge(position)
+                                toolbarDragging = false
+                            }
+                        },
+                    )
+                    if (narrowToolbar) {
+                        Row(
+                            Modifier.weight(1f).fillMaxHeight().horizontalScroll(rememberScrollState()).clipToBounds(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            shelfTools()
+                            Box(
+                                Modifier.padding(horizontal = 8.dp).fillMaxHeight(0.4f).width(1.dp)
+                                    .background(MaterialTheme.colorScheme.outlineVariant),
+                            )
+                            colorControls()
+                            Box(
+                                Modifier.padding(horizontal = 8.dp).fillMaxHeight(0.4f).width(1.dp)
+                                    .background(MaterialTheme.colorScheme.outlineVariant),
+                            )
+                            historyControls()
+                        }
+                    } else {
+                        Row(
+                            Modifier.weight(1f).fillMaxHeight().horizontalScroll(rememberScrollState()).clipToBounds(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) { shelfTools() }
+                        Box(
+                            Modifier.padding(horizontal = 8.dp).fillMaxHeight(0.4f).width(1.dp)
+                                .background(MaterialTheme.colorScheme.outlineVariant),
                         )
+                        colorControls()
+                        Box(
+                            Modifier.padding(horizontal = 8.dp).fillMaxHeight(0.4f).width(1.dp)
+                                .background(MaterialTheme.colorScheme.outlineVariant),
+                        )
+                        historyControls()
                     }
-                    ToggleItem(
-                        "Shape straightening",
-                        "Hold to straighten pen shapes",
-                        Icons.Outlined.Category,
-                        shapeStraightening,
-                        ::setShapeStraightening,
-                    )
-                    ToggleItem("Zoom box", "Magnified line for small writing", Icons.Outlined.ZoomIn, zoomBox) { zoomBox = it }
-                    ToggleItem("Finger draws", "Otherwise finger pans and zooms", Icons.Outlined.TouchApp, fingerDraws) { fingerDraws = it }
-                    ToggleItem("Pen diagnostics", "Pressure, tilt and latency", Icons.Outlined.Speed, showLab) { showLab = it }
-                    DropdownMenuItem(
-                        text = { Text("Pen buttons") },
-                        leadingIcon = { Icon(Icons.Outlined.Edit, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
-                        trailingIcon = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
-                        onClick = { morePop = false; showPenButtonSettings = true },
-                    )
-                    ToggleItem("Pixel eraser", "Erase pixels, not strokes", Icons.Outlined.AutoFixNormal, pixelEraser) { pixelEraser = it }
+                }
+            }
+        }
+
+        Surface(
+            modifier = Modifier.offset { IntOffset(with(density) { 12.dp.roundToPx() }, safeTopPx) }
+                .graphicsLayer {
+                    alpha = toolbarAlpha
+                    translationX = toolbarShiftXPx
+                    translationY = toolbarShiftYPx
+                },
+            shape = CircleShape,
+            color = MaterialTheme.colorScheme.surface,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            shadowElevation = 6.dp,
+        ) {
+            IconButton(
+                onClick = onBack,
+                enabled = !toolbarHidden,
+                modifier = Modifier.size(40.dp),
+            ) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = toolbarContentColor, modifier = Modifier.size(22.dp))
+            }
+        }
+        Surface(
+            modifier = Modifier.offset {
+                IntOffset((containerWidthPx - with(density) { 92.dp.roundToPx() }).coerceAtLeast(0), safeTopPx)
+            }.graphicsLayer {
+                alpha = toolbarAlpha
+                translationX = toolbarShiftXPx
+                translationY = toolbarShiftYPx
+            },
+            shape = RoundedCornerShape(20.dp),
+            color = MaterialTheme.colorScheme.surface,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            shadowElevation = 6.dp,
+        ) {
+            Row(Modifier.height(40.dp), verticalAlignment = Alignment.CenterVertically) {
+                IconButton(
+                    onClick = {
+                        scope.launch {
+                            runCatching { exporter.exportNotebook(notebookId, notebook?.title ?: "Notebook") }
+                                .onSuccess { exporter.share(it) }
+                                .onFailure { Toast.makeText(context, "Export failed: ${it.message}", Toast.LENGTH_LONG).show() }
+                        }
+                    },
+                    enabled = !toolbarHidden,
+                    modifier = Modifier.size(40.dp),
+                ) {
+                    Icon(Icons.Outlined.IosShare, "Share notebook as PDF", modifier = Modifier.size(22.dp), tint = toolbarContentColor)
+                }
+                Box {
+                    IconButton(
+                        onClick = { morePop = true },
+                        enabled = !toolbarHidden,
+                        modifier = Modifier.size(40.dp),
+                    ) {
+                        Icon(Icons.Default.MoreVert, "More", modifier = Modifier.size(24.dp), tint = toolbarContentColor)
+                    }
+                    DropdownMenu(
+                        expanded = morePop,
+                        onDismissRequest = { morePop = false },
+                        modifier = Modifier.width(320.dp),
+                        shape = RoundedCornerShape(22.dp),
+                        containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                    ) {
+                        if (tool == InkTool.LASSO && clipboardHasContent) {
+                            DropdownMenuItem(
+                                text = { Text("Paste") },
+                                leadingIcon = { Icon(Icons.Outlined.ContentCopy, null) },
+                                onClick = { surface?.paste(); morePop = false },
+                            )
+                        }
+                        ToggleItem(
+                            "Shape straightening",
+                            "Hold to straighten pen shapes",
+                            Icons.Outlined.Category,
+                            shapeStraightening,
+                            ::setShapeStraightening,
+                        )
+                        ToggleItem("Pin toolbar", "Keep the toolbar visible while writing", Icons.Outlined.PushPin, toolbarPinned) {
+                            toolbarPinned = it
+                        }
+                        ToggleItem("Zoom box", "Magnified line for small writing", Icons.Outlined.ZoomIn, zoomBox) { zoomBox = it }
+                        ToggleItem("Finger draws", "Otherwise finger pans and zooms", Icons.Outlined.TouchApp, fingerDraws) { fingerDraws = it }
+                        ToggleItem("Pen diagnostics", "Pressure, tilt and latency", Icons.Outlined.Speed, showLab) { showLab = it }
+                        DropdownMenuItem(
+                            text = { Text("Pen buttons") },
+                            leadingIcon = { Icon(Icons.Outlined.Edit, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+                            trailingIcon = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+                            onClick = { morePop = false; showPenButtonSettings = true },
+                        )
+                        ToggleItem("Pixel eraser", "Erase pixels, not strokes", Icons.Outlined.AutoFixNormal, pixelEraser) { pixelEraser = it }
+                    }
                 }
             }
         }
@@ -669,7 +1092,7 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
                     .coerceIn(8.dp, (maxWidth - barWidth - 8.dp).coerceAtLeast(8.dp))
             }
             val top = with(density) {
-                (bounds.top.toDp() + statusBarHeight + 76.dp - barHeight - 8.dp)
+                (bounds.top.toDp() - barHeight - 8.dp)
                     .coerceIn(8.dp, (maxHeight - barHeight - 8.dp).coerceAtLeast(8.dp))
             }
             Surface(
@@ -778,6 +1201,103 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
 }
 
 @Composable
+private fun EditorToolbarGrip(
+    enabled: Boolean,
+    modifier: Modifier = Modifier,
+    onDragStart: () -> Unit,
+    onDrag: (Offset) -> Unit,
+    onDragEnd: () -> Unit,
+) {
+    val gripColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.78f)
+    Box(
+        Modifier.size(32.dp).then(modifier)
+            .pointerInput(enabled) {
+                if (enabled) {
+                    detectDragGestures(
+                        onDragStart = { onDragStart() },
+                        onDragEnd = onDragEnd,
+                        onDragCancel = onDragEnd,
+                        onDrag = { change, dragAmount ->
+                            change.consume()
+                            onDrag(dragAmount)
+                        },
+                    )
+                }
+            }
+            .semantics { contentDescription = "Drag toolbar" },
+        contentAlignment = Alignment.Center,
+    ) {
+        Canvas(Modifier.size(24.dp)) {
+            val radius = 1.35.dp.toPx()
+            val horizontalGap = 5.5.dp.toPx()
+            val verticalGap = 5.5.dp.toPx()
+            for (row in 0..1) {
+                for (column in 0..2) {
+                    drawCircle(
+                        gripColor,
+                        radius,
+                        Offset(
+                            center.x + (column - 1) * horizontalGap,
+                            center.y + (row - 0.5f) * verticalGap,
+                        ),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ToolbarPopover(
+    expanded: Boolean,
+    edge: EditorToolbarEdge,
+    onDismissRequest: () -> Unit,
+    content: @Composable () -> Unit,
+) {
+    if (expanded) {
+        val density = androidx.compose.ui.platform.LocalDensity.current
+        Popup(
+            popupPositionProvider = remember(edge, density) {
+                EditorToolbarPopupPositionProvider(edge, density)
+            },
+            onDismissRequest = onDismissRequest,
+            properties = PopupProperties(focusable = true),
+            content = content,
+        )
+    }
+}
+
+private class EditorToolbarPopupPositionProvider(
+    private val edge: EditorToolbarEdge,
+    private val density: androidx.compose.ui.unit.Density,
+) : PopupPositionProvider {
+    override fun calculatePosition(
+        anchorBounds: IntRect,
+        windowSize: IntSize,
+        layoutDirection: androidx.compose.ui.unit.LayoutDirection,
+        popupContentSize: IntSize,
+    ): IntOffset {
+        val gap = with(density) { 12.dp.roundToPx() }
+        val preferredX = when (edge) {
+            EditorToolbarEdge.TOP, EditorToolbarEdge.BOTTOM ->
+                (anchorBounds.left + anchorBounds.right - popupContentSize.width) / 2
+            EditorToolbarEdge.START -> anchorBounds.right + gap
+            EditorToolbarEdge.END -> anchorBounds.left - popupContentSize.width - gap
+        }
+        val preferredY = when (edge) {
+            EditorToolbarEdge.TOP -> anchorBounds.bottom + gap
+            EditorToolbarEdge.BOTTOM -> anchorBounds.top - popupContentSize.height - gap
+            EditorToolbarEdge.START, EditorToolbarEdge.END ->
+                (anchorBounds.top + anchorBounds.bottom - popupContentSize.height) / 2
+        }
+        return IntOffset(
+            preferredX.coerceIn(0, (windowSize.width - popupContentSize.width).coerceAtLeast(0)),
+            preferredY.coerceIn(0, (windowSize.height - popupContentSize.height).coerceAtLeast(0)),
+        )
+    }
+}
+
+@Composable
 private fun SelectionAction(
     icon: ImageVector,
     label: String,
@@ -866,6 +1386,9 @@ private fun ShelfCanvasItem(
     selected: Boolean,
     color: Int,
     opacity: Float = 1f,
+    enabled: Boolean = true,
+    vertical: Boolean = false,
+    edge: EditorToolbarEdge = EditorToolbarEdge.TOP,
     onClick: () -> Unit,
 ) {
     val lift by animateDpAsState(
@@ -876,21 +1399,51 @@ private fun ShelfCanvasItem(
     val dark = MaterialTheme.colorScheme.isDark
     val wide = style == ShelfDrawing.ERASER || style == ShelfDrawing.RULER
     Box(
-        Modifier.width(if (wide) 50.dp else 40.dp).fillMaxHeight().clipToBounds()
-            .clickable(interactionSource = null, indication = null, onClickLabel = label, role = Role.Button, onClick = onClick),
+        Modifier.width(if (vertical) 76.dp else if (wide) 50.dp else 40.dp)
+            .height(if (vertical) if (wide) 50.dp else 40.dp else 76.dp)
+            .clipToBounds()
+            .clickable(
+                enabled = enabled,
+                interactionSource = null,
+                indication = null,
+                onClickLabel = label,
+                role = Role.Button,
+                onClick = onClick,
+            ),
     ) {
         Canvas(Modifier.fillMaxSize()) {
             val ink = Color(color)
-            ShelfPainter(this, dark, ink, ink.copy(alpha = opacity.coerceIn(0.2f, 1f)))
-                .draw(style, top = 7.dp.toPx() + lift.toPx())
+            val translucentInk = ink.copy(alpha = opacity.coerceIn(0.2f, 1f))
+            if (vertical) {
+                val logicalWidth = (if (wide) 50.dp else 40.dp).toPx()
+                val logicalHeight = 76.dp.toPx()
+                withTransform({
+                    translate(size.width / 2f, size.height / 2f)
+                    rotate(if (edge == EditorToolbarEdge.START) 90f else -90f, pivot = Offset.Zero)
+                    translate(-logicalWidth / 2f, -logicalHeight / 2f)
+                }) {
+                    ShelfPainter(this, dark, ink, translucentInk, logicalWidth, logicalHeight)
+                        .draw(style, top = 7.dp.toPx() + lift.toPx())
+                }
+            } else {
+                ShelfPainter(this, dark, ink, translucentInk)
+                    .draw(style, top = 7.dp.toPx() + lift.toPx())
+            }
         }
     }
 }
 
-private class ShelfPainter(val scope: DrawScope, val dark: Boolean, val ink: Color, val translucentInk: Color) {
+private class ShelfPainter(
+    val scope: DrawScope,
+    val dark: Boolean,
+    val ink: Color,
+    val translucentInk: Color,
+    canvasWidth: Float = scope.size.width,
+    canvasHeight: Float = scope.size.height,
+) {
     private val u = with(scope) { 1.dp.toPx() }
-    private val cx = scope.size.width / 2f
-    private val bottom = scope.size.height + 2f * u
+    private val cx = canvasWidth / 2f
+    private val bottom = canvasHeight + 2f * u
 
     private val edge = if (dark) Color(0xFF141416) else Color(0xFFD6D9DE)
     private val mid = if (dark) Color(0xFF45464B) else Color.White
@@ -1353,12 +1906,18 @@ private fun ToggleItem(title: String, subtitle: String, leadingIcon: ImageVector
 }
 
 @Composable
-private fun ColorDot(argb: Int, selected: Boolean, dotSize: Dp = 32.dp, onClick: () -> Unit) {
+private fun ColorDot(
+    argb: Int,
+    selected: Boolean,
+    dotSize: Dp = 32.dp,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
     val ring by animateFloatAsState(if (selected) 1f else 0f, label = "ring")
     val hairline = android.graphics.Color.luminance(argb) > 0.78f
     val ringColor = MaterialTheme.colorScheme.onSurface
     val hairlineColor = MaterialTheme.colorScheme.outlineVariant
-    Canvas(Modifier.size(dotSize).clip(CircleShape).clickable(onClick = onClick)) {
+    Canvas(Modifier.size(dotSize).clip(CircleShape).clickable(enabled = enabled, onClick = onClick)) {
         val radius = size.minDimension / 2f
         val dotRadius = radius * 0.72f
         if (ring > 0f) drawCircle(ringColor.copy(alpha = ring), radius - 1.dp.toPx(), style = DrawStroke(width = 2.dp.toPx()))
