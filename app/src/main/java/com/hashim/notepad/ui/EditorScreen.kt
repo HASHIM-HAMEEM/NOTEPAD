@@ -88,6 +88,7 @@ import com.hashim.notepad.recognition.InkRecognizer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.withContext
 import java.io.File
 
@@ -139,9 +140,16 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
     val notebooks by repo.notebooks().collectAsState(initial = emptyList())
     val notebook = notebooks.firstOrNull { it.id == notebookId }
     val language = notebook?.language ?: "ar"
-    val pages by repo.pages(notebookId).collectAsState(initial = emptyList())
+    val pageList by produceState<List<Page>?>(null, repo, notebookId) {
+        repo.pages(notebookId).collect { value = it }
+    }
+    val pages = pageList.orEmpty()
     val page = pages.firstOrNull { it.id == pageId }
     val index = pages.indexOfFirst { it.id == pageId }
+    LaunchedEffect(pageList, pageId) {
+        val currentPages = pageList ?: return@LaunchedEffect
+        if (currentPages.none { it.id == pageId }) onBack()
+    }
 
     var tool by rememberSaveableTool()
     val preferences = remember(context) { context.getSharedPreferences("notepad", 0) }

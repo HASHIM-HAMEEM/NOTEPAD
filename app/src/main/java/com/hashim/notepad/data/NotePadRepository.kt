@@ -12,6 +12,21 @@ import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.withContext
 import java.util.UUID
 
+private data class StoredStrokeBatch(
+    val layer: Int,
+    val revision: Int,
+    val strokeCount: Int,
+    val data: ByteArray,
+)
+
+private data class StoredTextBlock(
+    val x: Float,
+    val y: Float,
+    val width: Float,
+    val direction: String,
+    val content: String,
+)
+
 class NotePadRepository(context: Context) {
     internal val helper = NotePadDb(context.applicationContext)
     internal fun changed() = notifyChanged()
@@ -193,19 +208,189 @@ class NotePadRepository(context: Context) {
         mark("notebooks", id); notifyChanged()
     }
 
+    suspend fun deletePage(pageId: String) = withContext(Dispatchers.IO) {
+        val db = helper.writableDatabase
+        val now = System.currentTimeMillis()
+        db.beginTransaction()
+        try {
+            val notebookId = db.rawQuery(
+                "select notebook_id from pages where id = ? and deleted_at is null",
+                arrayOf(pageId),
+            ).use { if (it.moveToFirst()) it.getString(0) else null }
+            val parentId = notebookId ?: return@withContext
+
+            db.update("pages", ContentValues().apply { put("deleted_at", now); put("updated_at", now) }, "id = ?", arrayOf(pageId))
+            mark("pages", pageId)
+
+            val textBlockIds = db.rawQuery(
+                "select id from text_blocks where page_id = ? and deleted_at is null",
+                arrayOf(pageId),
+            ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
+            db.update("text_blocks", ContentValues().apply { put("deleted_at", now); put("updated_at", now) }, "page_id = ? and deleted_at is null", arrayOf(pageId))
+            textBlockIds.forEach { mark("text_blocks", it) }
+
+            db.delete("stroke_batches", "page_id = ?", arrayOf(pageId))
+            mark("stroke_batches", pageId)
+            db.delete("recognition", "page_id = ?", arrayOf(pageId))
+            mark("recognition", pageId)
+
+            touchNotebook(parentId, now)
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        notifyChanged()
+    }
+
+    suspend fun duplicatePage(pageId: String): String = withContext(Dispatchers.IO) {
+        val db = helper.writableDatabase
+        val now = System.currentTimeMillis()
+        val newId = UUID.randomUUID().toString()
+        db.beginTransaction()
+        try {
+            val pages = loadPagesForPage(pageId)
+            val sourceIndex = pages.indexOfFirst { it.id == pageId }
+            require(sourceIndex >= 0) { "Page does not exist" }
+            val source = pages[sourceIndex]
+            val insertPlan = PageSortKeyPlanner.insertAfter(pages.map { it.sortKey }, sourceIndex)
+            insertPlan.renumberedKeys?.let { keys -> rekeyPages(pages, keys, now) }
+
+            db.insertOrThrow("pages", null, ContentValues().apply {
+                put("id", newId); put("notebook_id", source.notebookId); put("sort_key", insertPlan.sortKey)
+                put("kind", source.kind.db); put("asset_id", source.assetId); put("pdf_page_index", source.pdfPageIndex)
+                put("width_pt", source.widthPt); put("height_pt", source.heightPt)
+                put("created_at", now); put("updated_at", now)
+            })
+            mark("pages", newId)
+
+            val batches = db.rawQuery(
+                "select layer, revision, stroke_count, data from stroke_batches where page_id = ?",
+                arrayOf(pageId),
+            ).use { c ->
+                buildList {
+                    while (c.moveToNext()) add(StoredStrokeBatch(c.getInt(0), c.getInt(1), c.getInt(2), c.getBlob(3)))
+                }
+            }
+            batches.forEach { batch ->
+                db.insertOrThrow("stroke_batches", null, ContentValues().apply {
+                    put("id", UUID.randomUUID().toString()); put("page_id", newId)
+                    put("layer", batch.layer); put("revision", batch.revision); put("stroke_count", batch.strokeCount)
+                    put("data", batch.data); put("updated_at", now)
+                })
+            }
+            if (batches.isNotEmpty()) mark("stroke_batches", newId)
+
+            val blocks = db.rawQuery(
+                "select x_pt, y_pt, w_pt, direction, content from text_blocks where page_id = ? and deleted_at is null",
+                arrayOf(pageId),
+            ).use { c ->
+                buildList {
+                    while (c.moveToNext()) add(StoredTextBlock(c.getFloat(0), c.getFloat(1), c.getFloat(2), c.getString(3), c.getString(4)))
+                }
+            }
+            blocks.forEach { block ->
+                val id = UUID.randomUUID().toString()
+                db.insertOrThrow("text_blocks", null, ContentValues().apply {
+                    put("id", id); put("page_id", newId); put("x_pt", block.x); put("y_pt", block.y)
+                    put("w_pt", block.width); put("direction", block.direction); put("content", block.content)
+                    put("updated_at", now)
+                })
+                mark("text_blocks", id)
+            }
+
+            db.rawQuery(
+                "select source, language, text from recognition where page_id = ? and source <> 'text'",
+                arrayOf(pageId),
+            ).use { c ->
+                while (c.moveToNext()) {
+                    db.insertOrThrow("recognition", null, ContentValues().apply {
+                        put("id", UUID.randomUUID().toString()); put("page_id", newId); put("source", c.getString(0))
+                        put("language", c.getStringOrNull(1)); put("text", c.getString(2)); put("updated_at", now)
+                    })
+                }
+            }
+            indexTextBlocks(newId)
+            touchNotebook(source.notebookId, now)
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        notifyChanged()
+        newId
+    }
+
+    suspend fun movePage(pageId: String, toIndex: Int) = withContext(Dispatchers.IO) {
+        val db = helper.writableDatabase
+        val now = System.currentTimeMillis()
+        var changed = false
+        db.beginTransaction()
+        try {
+            val pages = loadPagesForPage(pageId)
+            val fromIndex = pages.indexOfFirst { it.id == pageId }
+            if (fromIndex < 0) return@withContext
+            val plan = PageSortKeyPlanner.move(pages.map { it.sortKey }, fromIndex, toIndex.coerceIn(0, pages.lastIndex))
+            if (plan.order.indices.all { pages[plan.order[it]].sortKey == plan.sortKeys[it] }) return@withContext
+
+            if (plan.renumbered) {
+                plan.order.forEachIndexed { index, originalIndex ->
+                    updatePageSortKey(pages[originalIndex], plan.sortKeys[index], now)
+                }
+            } else {
+                val position = plan.order.indexOf(fromIndex)
+                updatePageSortKey(pages[fromIndex], plan.sortKeys[position], now)
+            }
+            touchNotebook(pages[fromIndex].notebookId, now)
+            db.setTransactionSuccessful()
+            changed = true
+        } finally {
+            db.endTransaction()
+        }
+        if (changed) notifyChanged()
+    }
+
+    suspend fun setPageKind(pageId: String, kind: PageKind) = withContext(Dispatchers.IO) {
+        require(kind != PageKind.PDF) { "PDF pages can only be created by importing a PDF" }
+        val db = helper.writableDatabase
+        val page = db.rawQuery(
+            "select notebook_id, kind from pages where id = ? and deleted_at is null",
+            arrayOf(pageId),
+        ).use { c ->
+            if (c.moveToFirst()) c.getString(0) to PageKind.from(c.getString(1)) else null
+        } ?: throw IllegalArgumentException("Page does not exist")
+        check(page.second != PageKind.PDF) { "PDF pages cannot change templates" }
+        if (page.second == kind) return@withContext
+
+        val now = System.currentTimeMillis()
+        db.update("pages", ContentValues().apply { put("kind", kind.db); put("updated_at", now) }, "id = ?", arrayOf(pageId))
+        mark("pages", pageId)
+        touchNotebook(page.first, now)
+        notifyChanged()
+    }
+
     suspend fun addPage(notebookId: String, kind: PageKind, afterSortKey: Double? = null, widthPt: Float = 595f, heightPt: Float = 842f,
                         assetId: String? = null, pdfPageIndex: Int? = null): String = withContext(Dispatchers.IO) {
         val db = helper.writableDatabase
-        val sortKey = afterSortKey?.plus(1.0) ?: (maxSortKey(notebookId) + 1.0)
         val id = UUID.randomUUID().toString()
         val now = System.currentTimeMillis()
-        db.insertOrThrow("pages", null, ContentValues().apply {
-            put("id", id); put("notebook_id", notebookId); put("sort_key", sortKey); put("kind", kind.db)
-            put("asset_id", assetId); put("pdf_page_index", pdfPageIndex); put("width_pt", widthPt); put("height_pt", heightPt)
-            put("created_at", now); put("updated_at", now)
-        })
-        touchNotebook(notebookId, now)
-        mark("pages", id); notifyChanged(); id
+        db.beginTransaction()
+        try {
+            val pages = loadPages(notebookId)
+            val afterIndex = afterSortKey?.let { sortKey -> pages.indexOfLast { it.sortKey == sortKey } } ?: pages.lastIndex
+            val insertPlan = PageSortKeyPlanner.insertAfter(pages.map { it.sortKey }, afterIndex)
+            insertPlan.renumberedKeys?.let { keys -> rekeyPages(pages, keys, now) }
+            db.insertOrThrow("pages", null, ContentValues().apply {
+                put("id", id); put("notebook_id", notebookId); put("sort_key", insertPlan.sortKey); put("kind", kind.db)
+                put("asset_id", assetId); put("pdf_page_index", pdfPageIndex); put("width_pt", widthPt); put("height_pt", heightPt)
+                put("created_at", now); put("updated_at", now)
+            })
+            touchNotebook(notebookId, now)
+            mark("pages", id)
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        notifyChanged()
+        id
     }
 
     /** Imports a PDF as one page per PDF page. */
@@ -264,6 +449,27 @@ class NotePadRepository(context: Context) {
 
     private fun maxSortKey(notebookId: String): Double =
         helper.readableDatabase.rawQuery("select coalesce(max(sort_key), 0) from pages where notebook_id = ?", arrayOf(notebookId)).use { c -> if (c.moveToFirst()) c.getDouble(0) else 0.0 }
+
+    private fun loadPagesForPage(pageId: String): List<Page> {
+        val notebookId = helper.readableDatabase.rawQuery(
+            "select notebook_id from pages where id = ? and deleted_at is null",
+            arrayOf(pageId),
+        ).use { if (it.moveToFirst()) it.getString(0) else return emptyList() }
+        return loadPages(notebookId)
+    }
+
+    private fun rekeyPages(pages: List<Page>, sortKeys: List<Double>, now: Long) {
+        pages.forEachIndexed { index, page ->
+            if (page.sortKey != sortKeys[index]) updatePageSortKey(page, sortKeys[index], now)
+        }
+    }
+
+    private fun updatePageSortKey(page: Page, sortKey: Double, now: Long) {
+        helper.writableDatabase.update("pages", ContentValues().apply {
+            put("sort_key", sortKey); put("updated_at", now)
+        }, "id = ?", arrayOf(page.id))
+        mark("pages", page.id)
+    }
 
     private fun touchNotebook(id: String, now: Long) {
         helper.writableDatabase.execSQL("update notebooks set updated_at = ? where id = ?", arrayOf<Any?>(now, id))

@@ -65,4 +65,7 @@ dependencies {
     implementation(libs.kotlinx.coroutines.play.services)
     implementation(libs.androidx.documentfile)
     implementation(libs.androidx.work.runtime)
+    implementation(libs.reorderable)
+
+    testImplementation(libs.junit)
 }
