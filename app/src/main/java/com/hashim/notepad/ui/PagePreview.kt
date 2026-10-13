@@ -68,7 +68,6 @@ fun PagePreview(
     renderEnabled: Boolean = true,
     cropScale: Float = 1f,
     cropToContent: Boolean = false,
-    contentOnRight: Boolean = false,
 ) {
     val context = LocalContext.current
     var targetWidthPx by remember { mutableIntStateOf(0) }
@@ -142,7 +141,7 @@ fun PagePreview(
     val bookmarkColor = MaterialTheme.colorScheme.primary.toArgbInt()
     Canvas(modifier.onSizeChanged { if (it.width > 0) targetWidthPx = it.width }.background(paperColor)) {
         val p = page ?: return@Canvas
-        val crop = contentBounds?.let { fitCropToAspect(it, p.widthPt, p.heightPt, size.width / size.height, contentOnRight) }
+        val crop = contentBounds?.let { fitCropToAspect(it, p.widthPt, p.heightPt, size.width / size.height) }
         val fitWholePage = cropToContent && crop == null
         val scale = when {
             crop != null -> minOf(size.width / crop.width, size.height / crop.height)
@@ -254,20 +253,18 @@ private fun pageContentBounds(page: Page, bitmap: Bitmap?, strokes: List<Stroke>
     return result
 }
 
-private fun fitCropToAspect(bounds: PreviewBounds, pageWidth: Float, pageHeight: Float, aspect: Float, contentOnRight: Boolean): PreviewBounds? {
+private fun fitCropToAspect(bounds: PreviewBounds, pageWidth: Float, pageHeight: Float, aspect: Float): PreviewBounds? {
     if (bounds.width <= 0f || bounds.height <= 0f || aspect <= 0f) return null
     val marginX = maxOf(12f, bounds.width * 0.12f)
     val marginY = maxOf(12f, bounds.height * 0.18f)
     val maxWidth = minOf(pageWidth, pageHeight * aspect)
-    var height = (bounds.height + marginY * 2f).coerceAtMost(pageHeight)
-    var width = (height * aspect).coerceAtMost(maxWidth)
+    var width = maxOf(bounds.width + marginX * 2f, (bounds.height + marginY * 2f) * aspect).coerceAtMost(maxWidth)
+    var height = width / aspect
     if (height > pageHeight) {
         height = pageHeight
         width = height * aspect
     }
-    height = width / aspect
-    val anchorX = if (contentOnRight) bounds.right else bounds.left
-    val left = (if (contentOnRight) anchorX - width + marginX else anchorX - marginX).coerceIn(0f, pageWidth - width)
+    val left = ((bounds.left + bounds.right - width) / 2f).coerceIn(0f, pageWidth - width)
     val top = ((bounds.top + bounds.bottom - height) / 2f).coerceIn(0f, pageHeight - height)
     return PreviewBounds(left, top, left + width, top + height)
 }

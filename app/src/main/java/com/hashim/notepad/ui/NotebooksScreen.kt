@@ -999,7 +999,6 @@ private fun ContinueReadingCard(
                     renderEnabled = renderThumbnail,
                     cropScale = 3.5f,
                     cropToContent = true,
-                    contentOnRight = notebook.language.substringBefore('-') in setOf("ar", "fa", "ur"),
                 )
                 Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.035f)))
             }
