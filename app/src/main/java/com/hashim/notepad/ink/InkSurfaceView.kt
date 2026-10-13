@@ -44,6 +44,7 @@ import kotlin.math.cos
 import kotlin.math.roundToInt
 import kotlin.math.sin
 import android.view.HapticFeedbackConstants
+import com.hashim.notepad.pdf.PdfInvert
 
 private const val HIGHLIGHTER_STRAIGHTEN_DELAY_MS = 450L
 private const val POINT_STROKE_UNIT_LENGTH_CM = 2.54f / 72f
@@ -519,7 +520,12 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         placeRulerIfNeeded()
     }
 
-    fun setPaperColor(argb: Int) { paperPaint.color = argb; templatePaint.color = if (argb == 0xFF1F1F22.toInt()) 0xFF3A3A40.toInt() else 0xFFC9CDD6.toInt(); strokeLayer.invalidate() }
+    fun setPaperColor(argb: Int) {
+        paperPaint.color = argb
+        bitmapPaint.colorFilter = if (android.graphics.Color.luminance(argb) < 0.5f) PdfInvert.darkPaperFilter else null
+        templatePaint.color = if (argb == 0xFF1F1F22.toInt()) 0xFF3A3A40.toInt() else 0xFFC9CDD6.toInt()
+        strokeLayer.invalidate()
+    }
     fun setDeskColor(argb: Int) { deskColor = argb; strokeLayer.invalidate() }
 
     fun setRulerVisible(visible: Boolean) {
