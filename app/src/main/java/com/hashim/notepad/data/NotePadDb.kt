@@ -36,14 +36,29 @@ class NotePadDb(context: Context) : SQLiteOpenHelper(context, "notepad.db", null
             db.execSQL("insert or ignore into outbox(table_name, row_id) select 'stroke_batches', page_id from stroke_batches")
             db.execSQL("insert or ignore into outbox(table_name, row_id) select distinct 'recognition', page_id from recognition")
         }
+        if (oldVersion < 4) {
+            db.execSQL(PAGE_IMAGES)
+            db.execSQL("create index if not exists page_images_page_idx on page_images(page_id)")
+        }
     }
 
     companion object {
-        const val VERSION = 3
+        const val VERSION = 4
 
         /** Rows changed locally and not yet pushed. row_id is the page id for stroke_batches and recognition. */
         const val OUTBOX = "create table if not exists outbox (table_name text not null, row_id text not null, primary key (table_name, row_id))"
         const val SYNC_META = "create table if not exists sync_meta (key text primary key, value text not null)"
+        private const val PAGE_IMAGES = """create table if not exists page_images (
+              id text primary key,
+              page_id text not null references pages(id) on delete cascade,
+              asset_id text not null references assets(id),
+              x_pt real not null,
+              y_pt real not null,
+              w_pt real not null,
+              h_pt real not null,
+              updated_at integer not null,
+              deleted_at integer
+            )"""
 
         private val SCHEMA = """
             create table notebooks (
@@ -101,6 +116,8 @@ class NotePadDb(context: Context) : SQLiteOpenHelper(context, "notepad.db", null
               name text,
               created_at integer not null
             );
+            $PAGE_IMAGES;
+            create index page_images_page_idx on page_images(page_id);
             create table recognition (
               id text primary key,
               page_id text not null references pages(id) on delete cascade,

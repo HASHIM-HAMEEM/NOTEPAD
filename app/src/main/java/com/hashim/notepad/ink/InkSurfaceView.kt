@@ -5,6 +5,7 @@ import android.animation.Animator
 import android.animation.AnimatorListenerAdapter
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Matrix
 import android.graphics.Paint
@@ -31,6 +32,7 @@ import android.graphics.RectF
 import android.graphics.Region
 import androidx.input.motionprediction.MotionEventPredictor
 import com.hashim.notepad.data.PageKind
+import com.hashim.notepad.data.PageImage
 import com.hashim.notepad.data.TextBlock
 import androidx.ink.brush.Brush
 import androidx.ink.brush.ExperimentalInkCustomBrushApi
@@ -79,6 +81,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     var onSample: ((PointerSample) -> Unit)? = null
     var onDrawingActiveChanged: ((Boolean) -> Unit)? = null
     var onStrokesChanged: ((List<Stroke>) -> Unit)? = null
+    var onPageImagesChanged: ((List<PageImage>) -> Unit)? = null
     var onUndoRedoChanged: ((Boolean, Boolean) -> Unit)? = null
     var onZoomChanged: ((Int) -> Unit)? = null
     var onStylusToolSwitch: ((StylusButtonAction) -> Unit)? = null
@@ -131,13 +134,14 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     private var rulerSnapEndY = 0f
 
     private val strokes = ArrayList<Stroke>()
-    private val history = ArrayList<List<Stroke>>()
-    private val future = ArrayList<List<Stroke>>()
+    private data class Snapshot(val strokes: List<Stroke>, val images: List<PageImage>)
+    private val history = ArrayList<Snapshot>()
+    private val future = ArrayList<Snapshot>()
     private var eraseDirty = false
 
     /** Call before any mutation of [strokes]; keeps the last 100 states. */
     private fun snapshot() {
-        history.add(ArrayList(strokes))
+        history.add(Snapshot(ArrayList(strokes), ArrayList(pageImages)))
         if (history.size > 100) history.removeAt(0)
         future.clear()
         notifyUndoRedoChanged()
@@ -230,6 +234,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
             val m = Matrix(zoomToView); m.preScale(pageWidthPt / bmp.width, pageHeightPt / bmp.height); canvas.drawBitmap(bmp, m, bitmapPaint)
         }
         canvas.save(); canvas.concat(zoomToView)
+        drawPageImages(canvas)
         drawStrokes(
             canvas,
             strokes,
@@ -250,6 +255,10 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     private var panY = 0f
     private var lastReportedZoomPercent = Int.MIN_VALUE
     private var pageBitmap: Bitmap? = null
+    private var imagePageId: String? = null
+    private var pageImages = emptyList<PageImage>()
+    private val imageBitmaps = HashMap<String, Bitmap>()
+    private val imagePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
     private var currentStrokeId: InProgressStrokeId? = null
     private data class ShapeStrokeContext(val enabled: Boolean, val pageToInput: Matrix)
     private val shapeStrokeContexts = HashMap<InProgressStrokeId, ShapeStrokeContext>()
@@ -295,12 +304,15 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     private val lassoPoints = ArrayList<Float>()
     private var lassoActive = false
     private val selected = LinkedHashSet<Stroke>()
+    private var selectedPageImageId: String? = null
     private var selectionBounds: RectF? = null
     private var movingSelection = false
     private var resizingSelection = false
     private var resizeHandle = -1
     private var resizeAnchor = FloatArray(2)
     private var resizeStartBounds: RectF? = null
+    private var resizeStartImage: PageImage? = null
+    private var imageGestureMoved = false
     private var resizeStartStrokes: List<Stroke> = emptyList()
     private var resizeStrokeIndices: List<Int> = emptyList()
     private var moveLastX = 0f
@@ -394,6 +406,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
                 canvas.drawBitmap(bmp, m, bitmapPaint)
             }
             canvas.save(); canvas.concat(pageToView)
+            drawPageImages(canvas)
             drawStrokes(
                 canvas,
                 strokes,
@@ -706,6 +719,53 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
 
     fun setPage(bitmap: Bitmap?) { pageBitmap = bitmap; strokeLayer.invalidate() }
 
+    fun setPageImages(pageId: String, images: List<PageImage>) {
+        if (imagePageId != pageId) {
+            imageBitmaps.values.forEach { it.recycle() }
+            imageBitmaps.clear()
+            imagePageId = pageId
+        }
+        pageImages = images
+        clearSelection()
+        images.forEach { image ->
+            if (image.assetId !in imageBitmaps) {
+                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeFile(image.localPath, bounds)
+                val target = max(image.wPt * scale, image.hPt * scale).roundToInt().coerceAtLeast(1)
+                var sample = 1
+                while (max(bounds.outWidth, bounds.outHeight) / sample > target * 2) sample *= 2
+                BitmapFactory.decodeFile(image.localPath, BitmapFactory.Options().apply { inSampleSize = sample })
+                    ?.let { imageBitmaps[image.assetId] = it }
+            }
+        }
+        strokeLayer.invalidate()
+    }
+
+    fun imagePlacement(widthPx: Int, heightPx: Int): RectF {
+        val center = floatArrayOf(width / 2f, height / 2f)
+        viewToPage.mapPoints(center)
+        val w = min(pageWidthPt * 0.6f, width / scale * 0.6f).coerceAtLeast(1f)
+        val h = w * heightPx / widthPx.coerceAtLeast(1)
+        return RectF(center[0] - w / 2f, center[1] - h / 2f, center[0] + w / 2f, center[1] + h / 2f)
+    }
+
+    fun addPageImage(image: PageImage) {
+        snapshot()
+        pageImages = pageImages + image
+        setPageImages(image.pageId, pageImages)
+        selectPageImage(image)
+        strokeLayer.invalidate()
+        notifyPageImagesChanged()
+    }
+
+    private fun drawPageImages(canvas: Canvas) {
+        pageImages.forEach { image ->
+            imageBitmaps[image.assetId]?.let {
+                canvas.drawBitmap(it, null, RectF(image.xPt, image.yPt, image.xPt + image.wPt, image.yPt + image.hPt), imagePaint)
+            }
+        }
+    }
+
     fun setStrokes(list: List<Stroke>) {
         strokes.clear(); strokes.addAll(list); history.clear(); future.clear()
         strokeLayer.invalidate(); notifyUndoRedoChanged(); notifyChanged()
@@ -715,20 +775,32 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     fun canRedo() = future.isNotEmpty()
     fun undo() {
         if (history.isEmpty()) return
-        future.add(ArrayList(strokes)); strokes.clear(); strokes.addAll(history.removeAt(history.size - 1))
-        clearSelection(); strokeLayer.invalidate(); notifyUndoRedoChanged(); notifyChanged()
+        future.add(Snapshot(ArrayList(strokes), ArrayList(pageImages)))
+        restoreSnapshot(history.removeAt(history.size - 1))
     }
     fun redo() {
         if (future.isEmpty()) return
-        history.add(ArrayList(strokes)); strokes.clear(); strokes.addAll(future.removeAt(future.size - 1))
-        clearSelection(); strokeLayer.invalidate(); notifyUndoRedoChanged(); notifyChanged()
+        history.add(Snapshot(ArrayList(strokes), ArrayList(pageImages)))
+        restoreSnapshot(future.removeAt(future.size - 1))
+    }
+    private fun restoreSnapshot(snapshot: Snapshot) {
+        strokes.clear(); strokes.addAll(snapshot.strokes)
+        pageImages = snapshot.images
+        imagePageId?.let { setPageImages(it, pageImages) }
+        clearSelection()
+        strokeLayer.invalidate()
+        notifyUndoRedoChanged()
+        notifyChanged()
+        notifyPageImagesChanged()
     }
     fun clear() { if (strokes.isEmpty()) return; snapshot(); strokes.clear(); clearSelection(); strokeLayer.invalidate(); notifyChanged() }
 
-    fun hasSelection() = selected.isNotEmpty()
+    fun hasSelection() = selected.isNotEmpty() || selectedPageImageId != null
+    fun hasImageSelection() = selectedPageImageId != null
 
     fun clearSelection() {
         selected.clear()
+        selectedPageImageId = null
         selectionBounds = null
         strokeLayer.invalidate()
         onSelectionChanged?.invoke(false)
@@ -740,6 +812,16 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     }
 
     fun duplicateSelection() {
+        selectedPageImageId?.let { id ->
+            val image = pageImages.firstOrNull { it.id == id } ?: return
+            snapshot()
+            val copy = image.copy(id = java.util.UUID.randomUUID().toString(), xPt = image.xPt + 24f, yPt = image.yPt + 24f)
+            pageImages = pageImages + copy
+            selectPageImage(copy)
+            strokeLayer.invalidate()
+            notifyPageImagesChanged()
+            return
+        }
         if (selected.isEmpty()) return
         snapshot()
         val copies = selected.map { transformStroke(it, 1f, 24f, 24f) }
@@ -787,6 +869,14 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     }
 
     fun deleteSelection() {
+        if (selectedPageImageId != null) {
+            snapshot()
+            pageImages = pageImages.filterNot { it.id == selectedPageImageId }
+            clearSelection()
+            strokeLayer.invalidate()
+            notifyPageImagesChanged()
+            return
+        }
         if (selected.isEmpty()) return
         snapshot(); strokes.removeAll(selected); clearSelection(); notifyChanged()
     }
@@ -811,6 +901,16 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         onSelectionBoundsChanged?.invoke(selectionBounds?.let { RectF(it).also(pageToView::mapRect) })
         onSelectionChanged?.invoke(selected.isNotEmpty())
     }
+
+    private fun selectPageImage(image: PageImage) {
+        selected.clear()
+        selectedPageImageId = image.id
+        selectionBounds = RectF(image.xPt, image.yPt, image.xPt + image.wPt, image.yPt + image.hPt)
+        onSelectionBoundsChanged?.invoke(RectF(selectionBounds!!).also(pageToView::mapRect))
+        onSelectionChanged?.invoke(true)
+    }
+
+    private fun notifyPageImagesChanged() { onPageImagesChanged?.invoke(pageImages.toList()) }
 
     private fun strokeBounds(strokeList: Collection<Stroke>): RectF? {
         var bounds: RectF? = null
@@ -846,7 +946,17 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
                 val handle = hitSelectionHandle(event.getX(idx), event.getY(idx))
                 val b = selectionBounds
-                if (handle >= 0 && b != null) {
+                val imageHit = pageImages.firstOrNull { pt[0] in it.xPt..(it.xPt + it.wPt) && pt[1] in it.yPt..(it.yPt + it.hPt) }
+                if (handle >= 0 && b != null && selectedPageImageId != null) {
+                    resizeStartImage = pageImages.firstOrNull { it.id == selectedPageImageId }
+                    resizingSelection = true
+                    resizeHandle = handle
+                    resizeStartBounds = RectF(b)
+                    val anchors = arrayOf(floatArrayOf(b.right, b.bottom), floatArrayOf(b.left, b.bottom), floatArrayOf(b.right, b.top), floatArrayOf(b.left, b.top))
+                    resizeAnchor = anchors[handle]
+                    imageGestureMoved = false
+                    moveLastX = pt[0]; moveLastY = pt[1]
+                } else if (handle >= 0 && b != null) {
                     snapshot()
                     resizingSelection = true
                     resizeHandle = handle
@@ -858,22 +968,45 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
                         floatArrayOf(b.right, b.top), floatArrayOf(b.left, b.top),
                     )
                     resizeAnchor = anchors[handle]
+                } else if (imageHit != null) {
+                    selectPageImage(imageHit)
+                    movingSelection = true
+                    imageGestureMoved = false
+                    moveLastX = pt[0]; moveLastY = pt[1]
                 } else if (b != null && b.contains(pt[0], pt[1])) { snapshot(); movingSelection = true; moveLastX = pt[0]; moveLastY = pt[1] }
                 else { clearSelection(); lassoActive = true; lassoPath.reset(); lassoPath.moveTo(pt[0], pt[1]); lassoPoints.clear(); lassoPoints.add(pt[0]); lassoPoints.add(pt[1]) }
             }
             MotionEvent.ACTION_MOVE -> {
-                if (resizingSelection) resizeSelection(pt[0], pt[1])
-                else if (movingSelection) { moveSelection(pt[0] - moveLastX, pt[1] - moveLastY); moveLastX = pt[0]; moveLastY = pt[1] }
+                if (resizingSelection) {
+                    if (resizeStartImage != null) {
+                        if (!imageGestureMoved && hypot(pt[0] - moveLastX, pt[1] - moveLastY) > 1f) { snapshot(); imageGestureMoved = true }
+                        if (imageGestureMoved) resizeSelection(pt[0], pt[1])
+                    } else resizeSelection(pt[0], pt[1])
+                }
+                else if (movingSelection) {
+                    if (selectedPageImageId != null) {
+                        if (!imageGestureMoved && hypot(pt[0] - moveLastX, pt[1] - moveLastY) > 1f) { snapshot(); imageGestureMoved = true }
+                        if (imageGestureMoved) moveSelection(pt[0] - moveLastX, pt[1] - moveLastY)
+                    } else moveSelection(pt[0] - moveLastX, pt[1] - moveLastY)
+                    moveLastX = pt[0]; moveLastY = pt[1]
+                }
                 else if (lassoActive) { lassoPath.lineTo(pt[0], pt[1]); lassoPoints.add(pt[0]); lassoPoints.add(pt[1]); strokeLayer.invalidate() }
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP, MotionEvent.ACTION_CANCEL -> {
                 if (resizingSelection) {
                     resizingSelection = false
                     resizeStartBounds = null
+                    if (resizeStartImage != null && imageGestureMoved) notifyPageImagesChanged()
+                    resizeStartImage = null
+                    imageGestureMoved = false
                     resizeStartStrokes = emptyList()
                     resizeStrokeIndices = emptyList()
                     notifyChanged()
-                } else if (movingSelection) { movingSelection = false; notifyChanged() }
+                } else if (movingSelection) {
+                    movingSelection = false
+                    if (selectedPageImageId != null) { if (imageGestureMoved) notifyPageImagesChanged(); imageGestureMoved = false }
+                    else notifyChanged()
+                }
                 else if (lassoActive) { lassoActive = false; lassoPath.close(); selectInside(); strokeLayer.invalidate() }
             }
         }
@@ -904,6 +1037,19 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
 
     private fun resizeSelection(pointerX: Float, pointerY: Float) {
         val start = resizeStartBounds ?: return
+        resizeStartImage?.let { image ->
+            val factor = max(abs(pointerX - resizeAnchor[0]) / image.wPt.coerceAtLeast(1f), abs(pointerY - resizeAnchor[1]) / image.hPt.coerceAtLeast(1f)).coerceIn(0.1f, 20f)
+            val w = image.wPt * factor
+            val h = image.hPt * factor
+            val left = if (resizeHandle == 0 || resizeHandle == 2) resizeAnchor[0] - w else resizeAnchor[0]
+            val top = if (resizeHandle == 0 || resizeHandle == 1) resizeAnchor[1] - h else resizeAnchor[1]
+            val updated = image.copy(xPt = left, yPt = top, wPt = w, hPt = h)
+            pageImages = pageImages.map { if (it.id == image.id) updated else it }
+            selectionBounds = RectF(left, top, left + w, top + h)
+            onSelectionBoundsChanged?.invoke(RectF(selectionBounds!!).also(pageToView::mapRect))
+            strokeLayer.invalidate()
+            return
+        }
         val handle = when (resizeHandle) {
             0 -> floatArrayOf(start.left, start.top)
             1 -> floatArrayOf(start.right, start.top)
@@ -928,6 +1074,13 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     }
 
     private fun moveSelection(dx: Float, dy: Float) {
+        selectedPageImageId?.let { id ->
+            pageImages = pageImages.map { if (it.id == id) it.copy(xPt = it.xPt + dx, yPt = it.yPt + dy) else it }
+            selectionBounds?.offset(dx, dy)
+            onSelectionBoundsChanged?.invoke(selectionBounds?.let { RectF(it).also(pageToView::mapRect) })
+            strokeLayer.invalidate()
+            return
+        }
         if (selected.isEmpty()) return
         val moved = LinkedHashSet<Stroke>()
         for (s in selected) {

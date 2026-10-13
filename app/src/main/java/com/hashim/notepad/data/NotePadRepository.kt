@@ -3,6 +3,7 @@ package com.hashim.notepad.data
 import android.content.ContentValues
 import android.content.Context
 import android.database.Cursor
+import android.database.sqlite.SQLiteDatabase
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -111,6 +112,25 @@ class NotePadRepository(context: Context) {
         emit(loadTextBlocks(pageId))
         changes.collect { emit(loadTextBlocks(pageId)) }
     }.flowOn(Dispatchers.IO)
+
+    fun pageImages(pageId: String): Flow<List<PageImage>> = flow {
+        emit(loadPageImages(pageId))
+        changes.collect { emit(loadPageImages(pageId)) }
+    }.flowOn(Dispatchers.IO)
+
+    private fun loadPageImages(pageId: String): List<PageImage> = helper.readableDatabase.rawQuery(
+        """select i.id, i.page_id, i.asset_id, i.x_pt, i.y_pt, i.w_pt, i.h_pt, i.updated_at, a.local_path
+           from page_images i join assets a on a.id = i.asset_id
+           where i.page_id = ? and i.deleted_at is null order by i.updated_at, i.id""",
+        arrayOf(pageId),
+    ).use { c ->
+        buildList {
+            while (c.moveToNext()) add(
+                PageImage(c.getString(0), c.getString(1), c.getString(2), c.getFloat(3), c.getFloat(4),
+                    c.getFloat(5), c.getFloat(6), c.getLong(7), c.getString(8))
+            )
+        }
+    }
 
     private fun loadTextBlocks(pageId: String): List<TextBlock> = helper.readableDatabase.rawQuery(
         "select id, page_id, x_pt, y_pt, w_pt, direction, content, updated_at from text_blocks where page_id = ? and deleted_at is null order by y_pt", arrayOf(pageId)
@@ -233,6 +253,12 @@ class NotePadRepository(context: Context) {
             mark("stroke_batches", pageId)
             db.delete("recognition", "page_id = ?", arrayOf(pageId))
             mark("recognition", pageId)
+            db.update(
+                "page_images",
+                ContentValues().apply { put("deleted_at", now); put("updated_at", now) },
+                "page_id = ? and deleted_at is null",
+                arrayOf(pageId),
+            )
 
             touchNotebook(parentId, now)
             db.setTransactionSuccessful()
@@ -296,6 +322,24 @@ class NotePadRepository(context: Context) {
                     put("updated_at", now)
                 })
                 mark("text_blocks", id)
+            }
+
+            val images = db.rawQuery(
+                "select asset_id, x_pt, y_pt, w_pt, h_pt from page_images where page_id = ? and deleted_at is null",
+                arrayOf(pageId),
+            ).use { c ->
+                buildList {
+                    while (c.moveToNext()) add(
+                        listOf(c.getString(0), c.getFloat(1), c.getFloat(2), c.getFloat(3), c.getFloat(4))
+                    )
+                }
+            }
+            images.forEach { image ->
+                db.insertOrThrow("page_images", null, ContentValues().apply {
+                    put("id", UUID.randomUUID().toString()); put("page_id", newId); put("asset_id", image[0] as String)
+                    put("x_pt", image[1] as Float); put("y_pt", image[2] as Float)
+                    put("w_pt", image[3] as Float); put("h_pt", image[4] as Float); put("updated_at", now)
+                })
             }
 
             db.rawQuery(
@@ -425,6 +469,70 @@ class NotePadRepository(context: Context) {
         helper.readableDatabase.rawQuery("select id, kind, local_path, byte_size, sha256, page_count, name from assets where id = ?", arrayOf(id)).use { c ->
             if (!c.moveToFirst()) null else Asset(c.getString(0), c.getString(1), c.getString(2), c.getLong(3), c.getString(4), if (c.isNull(5)) null else c.getInt(5), c.getStringOrNull(6))
         }
+    }
+
+    suspend fun addPageImage(pageId: String, asset: Asset, xPt: Float, yPt: Float, wPt: Float, hPt: Float): PageImage =
+        withContext(Dispatchers.IO) {
+            val db = helper.writableDatabase
+            val now = System.currentTimeMillis()
+            val imageId = UUID.randomUUID().toString()
+            val notebookId = db.rawQuery(
+                "select notebook_id from pages where id = ? and deleted_at is null",
+                arrayOf(pageId),
+            ).use { if (it.moveToFirst()) it.getString(0) else throw IllegalArgumentException("Page does not exist") }
+            db.beginTransaction()
+            try {
+                db.insertWithOnConflict("assets", null, ContentValues().apply {
+                    put("id", asset.id); put("kind", asset.kind); put("local_path", asset.localPath)
+                    put("byte_size", asset.byteSize); put("sha256", asset.sha256); putNull("page_count")
+                    put("name", asset.name); put("created_at", now)
+                }, SQLiteDatabase.CONFLICT_IGNORE)
+                mark("assets", asset.id)
+                db.insertOrThrow("page_images", null, ContentValues().apply {
+                    put("id", imageId); put("page_id", pageId); put("asset_id", asset.id)
+                    put("x_pt", xPt); put("y_pt", yPt); put("w_pt", wPt); put("h_pt", hPt); put("updated_at", now)
+                })
+                db.update("pages", ContentValues().apply { put("updated_at", now) }, "id = ?", arrayOf(pageId))
+                touchNotebook(notebookId, now)
+                db.setTransactionSuccessful()
+            } finally {
+                db.endTransaction()
+            }
+            notifyChanged()
+            PageImage(imageId, pageId, asset.id, xPt, yPt, wPt, hPt, now, asset.localPath)
+        }
+
+    suspend fun savePageImages(pageId: String, images: List<PageImage>) = withContext(Dispatchers.IO) {
+        val db = helper.writableDatabase
+        val now = System.currentTimeMillis()
+        val notebookId = db.rawQuery(
+            "select notebook_id from pages where id = ? and deleted_at is null",
+            arrayOf(pageId),
+        ).use { if (it.moveToFirst()) it.getString(0) else return@withContext }
+        val saved = images.filter { it.pageId == pageId }
+        val savedIds = saved.mapTo(HashSet()) { it.id }
+        db.beginTransaction()
+        try {
+            db.rawQuery("select id from page_images where page_id = ? and deleted_at is null", arrayOf(pageId)).use { c ->
+                val removed = buildList { while (c.moveToNext()) if (c.getString(0) !in savedIds) add(c.getString(0)) }
+                removed.forEach { id ->
+                    db.update("page_images", ContentValues().apply { put("deleted_at", now); put("updated_at", now) }, "id = ?", arrayOf(id))
+                }
+            }
+            saved.forEach { image ->
+                db.insertWithOnConflict("page_images", null, ContentValues().apply {
+                    put("id", image.id); put("page_id", pageId); put("asset_id", image.assetId)
+                    put("x_pt", image.xPt); put("y_pt", image.yPt); put("w_pt", image.wPt); put("h_pt", image.hPt)
+                    put("updated_at", now); putNull("deleted_at")
+                }, SQLiteDatabase.CONFLICT_REPLACE)
+            }
+            db.update("pages", ContentValues().apply { put("updated_at", now) }, "id = ?", arrayOf(pageId))
+            touchNotebook(notebookId, now)
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        notifyChanged()
     }
 
     suspend fun loadStrokes(pageId: String, layer: Int = 0): ByteArray? = withContext(Dispatchers.IO) {

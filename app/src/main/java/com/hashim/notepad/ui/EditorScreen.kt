@@ -4,6 +4,9 @@ import android.graphics.Bitmap
 import android.util.Log
 import android.view.KeyEvent
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateDpAsState
@@ -39,6 +42,7 @@ import androidx.compose.material.icons.outlined.Speed
 import androidx.compose.material.icons.outlined.TouchApp
 import androidx.compose.material.icons.outlined.ZoomIn
 import androidx.compose.material.icons.outlined.PushPin
+import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -91,6 +95,7 @@ import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
 import androidx.ink.strokes.Stroke
 import com.hashim.notepad.data.NotePadRepository
+import com.hashim.notepad.data.PageImage
 import com.hashim.notepad.data.Page
 import com.hashim.notepad.data.PageKind
 import com.hashim.notepad.data.TextBlock
@@ -106,12 +111,14 @@ import com.hashim.notepad.ink.StylusInputDiagnostics
 import com.hashim.notepad.ink.StrokeStore
 import com.hashim.notepad.ink.StylusDetector
 import com.hashim.notepad.pdf.PdfPageSource
+import com.hashim.notepad.pdf.PageImageImporter
 import com.hashim.notepad.recognition.InkRecognizer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import java.io.File
 import kotlin.math.roundToInt
@@ -286,11 +293,23 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
     var surfaceWidth by remember { mutableIntStateOf(0) }
     var loadedFor by remember { mutableStateOf<String?>(null) }
     var dirtyStrokes by remember { mutableStateOf<List<Stroke>?>(null) }
+    var dirtyPageImages by remember { mutableStateOf<Pair<String, List<PageImage>>?>(null) }
     var pageBitmap by remember { mutableStateOf<Bitmap?>(null) }
     val textBlocks by repo.textBlocks(pageId).collectAsState(initial = emptyList())
     var editingBlock by remember { mutableStateOf<TextBlock?>(null) }
     var newBlockAt by remember { mutableStateOf<Pair<Float, Float>?>(null) }
     val scope = rememberCoroutineScope()
+    val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) scope.launch {
+            runCatching {
+                val imported = PageImageImporter(context).import(uri)
+                val target = surface ?: return@runCatching
+                val bounds = target.imagePlacement(imported.widthPx, imported.heightPx)
+                val row = repo.addPageImage(pageId, imported.asset, bounds.left, bounds.top, bounds.width(), bounds.height())
+                target.addPageImage(row)
+            }.onFailure { Toast.makeText(context, "Could not insert image: ${it.message}", Toast.LENGTH_LONG).show() }
+        }
+    }
     LaunchedEffect(textBlocks, surface) { surface?.textBlocks = textBlocks }
 
     val spec = BrushSpec(tool, color, size, pen, activeBrushSettings.opacity)
@@ -330,6 +349,8 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
         s.onStrokesChanged = null
         s.setStrokes(strokes)
         s.onStrokesChanged = { dirtyStrokes = it }
+        s.onPageImagesChanged = { dirtyPageImages = p.id to it }
+        s.setPageImages(p.id, repo.pageImages(p.id).first())
         loadedFor = p.id
     }
 
@@ -360,11 +381,20 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
                 .onFailure { Log.w("NotePad", "recognition", it) }
         }
     }
+    LaunchedEffect(dirtyPageImages) {
+        val (id, images) = dirtyPageImages ?: return@LaunchedEffect
+        delay(250)
+        repo.savePageImages(id, images)
+    }
     DisposableEffect(Unit) {
         onDispose {
             val strokes = dirtyStrokes; val p = page
             if (strokes != null && p != null) {
                 kotlinx.coroutines.GlobalScope.launch(Dispatchers.IO) { repo.saveStrokes(p.id, StrokeStore.encode(strokes), strokes.size) }
+            }
+            val images = dirtyPageImages
+            if (images != null) {
+                kotlinx.coroutines.GlobalScope.launch(Dispatchers.IO) { repo.savePageImages(images.first, images.second) }
             }
         }
     }
@@ -1088,6 +1118,14 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
                                 onClick = { surface?.paste(); morePop = false },
                             )
                         }
+                        DropdownMenuItem(
+                            text = { Text("Insert image") },
+                            leadingIcon = { Icon(Icons.Outlined.Image, null) },
+                            onClick = {
+                                morePop = false
+                                imagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                            },
+                        )
                         ToggleItem(
                             "Shape straightening",
                             "Hold to straighten pen shapes",
@@ -1137,16 +1175,19 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
                     Modifier.width(barWidth).height(barHeight).padding(horizontal = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
+                    val imageSelected = surface?.hasImageSelection() == true
                     SelectionAction(Icons.Outlined.ControlPointDuplicate, "Duplicate", Modifier.weight(1f)) {
                         surface?.duplicateSelection()
                     }
-                    SelectionAction(Icons.Outlined.ContentCopy, "Copy", Modifier.weight(1f)) {
-                        surface?.copySelection()
-                        clipboardHasContent = !SelectionClipboard.isEmpty
-                    }
-                    SelectionAction(Icons.Outlined.Palette, "Recolour", Modifier.weight(1f)) {
-                        recolorSelectionMode = true
-                        colorPop = true
+                    if (!imageSelected) {
+                        SelectionAction(Icons.Outlined.ContentCopy, "Copy", Modifier.weight(1f)) {
+                            surface?.copySelection()
+                            clipboardHasContent = !SelectionClipboard.isEmpty
+                        }
+                        SelectionAction(Icons.Outlined.Palette, "Recolour", Modifier.weight(1f)) {
+                            recolorSelectionMode = true
+                            colorPop = true
+                        }
                     }
                     SelectionAction(
                         Icons.Default.DeleteOutline,

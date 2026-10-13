@@ -34,8 +34,18 @@ class BundleCodec(private val context: Context, private val repo: NotePadReposit
             root.put("notebook", rows(db, "select * from notebooks where id = ?", arrayOf(notebookId)).optJSONObject(0))
             root.put("pages", rows(db, "select * from pages where notebook_id = ? and deleted_at is null", arrayOf(notebookId)))
             root.put("text_blocks", rows(db, "select t.* from text_blocks t join pages p on p.id = t.page_id where p.notebook_id = ? and t.deleted_at is null", arrayOf(notebookId)))
+            root.put("page_images", rows(db, "select i.* from page_images i join pages p on p.id = i.page_id where p.notebook_id = ? and p.deleted_at is null and i.deleted_at is null", arrayOf(notebookId)))
             root.put("recognition", rows(db, "select r.* from recognition r join pages p on p.id = r.page_id where p.notebook_id = ?", arrayOf(notebookId)))
-            val assets = rows(db, "select distinct a.* from assets a join pages p on p.asset_id = a.id where p.notebook_id = ?", arrayOf(notebookId))
+            val assets = rows(
+                db,
+                """select distinct a.* from assets a where a.id in (
+                    select asset_id from pages where notebook_id = ? and deleted_at is null
+                    union
+                    select i.asset_id from page_images i join pages p on p.id = i.page_id
+                    where p.notebook_id = ? and p.deleted_at is null and i.deleted_at is null
+                )""",
+                arrayOf(notebookId, notebookId),
+            )
             root.put("assets", assets)
             zip.put("notebook.json", root.toString().toByteArray())
             db.rawQuery("select s.page_id, s.data from stroke_batches s join pages p on p.id = s.page_id where p.notebook_id = ? and s.layer = 0", arrayOf(notebookId)).use { c ->
@@ -84,6 +94,9 @@ class BundleCodec(private val context: Context, private val repo: NotePadReposit
             }
             json.getJSONArray("pages").forEachObject { p -> db.insertWithOnConflict("pages", null, p.toValues(), SQLiteDatabase.CONFLICT_REPLACE) }
             json.getJSONArray("text_blocks").forEachObject { t -> db.insertWithOnConflict("text_blocks", null, t.toValues(), SQLiteDatabase.CONFLICT_REPLACE) }
+            json.optJSONArray("page_images")?.forEachObject { i ->
+                db.insertWithOnConflict("page_images", null, i.toValues(), SQLiteDatabase.CONFLICT_REPLACE)
+            }
             json.getJSONArray("recognition").forEachObject { r ->
                 db.delete("recognition", "page_id = ? and source = ?", arrayOf(r.getString("page_id"), r.getString("source")))
                 db.insertWithOnConflict("recognition", null, r.toValues(), SQLiteDatabase.CONFLICT_REPLACE)

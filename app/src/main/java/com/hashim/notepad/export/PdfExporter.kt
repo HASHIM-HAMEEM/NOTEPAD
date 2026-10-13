@@ -4,8 +4,10 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import android.graphics.Paint
+import android.graphics.RectF
 import android.graphics.pdf.PdfDocument
 import androidx.core.content.FileProvider
 import androidx.ink.rendering.android.canvas.CanvasStrokeRenderer
@@ -40,6 +42,11 @@ class PdfExporter(private val context: Context, private val repo: NotePadReposit
                 val canvas = pdfPage.canvas
                 canvas.drawColor(paperArgb)
                 drawBackground(canvas, page, sources, paperArgb)
+                repo.pageImages(page.id).first().forEach { image ->
+                    val bitmap = BitmapFactory.decodeFile(image.localPath) ?: return@forEach
+                    canvas.drawBitmap(bitmap, null, RectF(image.xPt, image.yPt, image.xPt + image.wPt, image.yPt + image.hPt), Paint(Paint.FILTER_BITMAP_FLAG))
+                    bitmap.recycle()
+                }
                 repo.loadStrokes(page.id)?.let { bytes ->
                     val strokes = runCatching { StrokeStore.decode(bytes) }.getOrDefault(emptyList())
                     drawStrokes(canvas, strokes, renderer, Matrix(), paperArgb)

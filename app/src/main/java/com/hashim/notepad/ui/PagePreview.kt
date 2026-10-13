@@ -1,8 +1,10 @@
 package com.hashim.notepad.ui
 
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import android.graphics.Paint
+import android.graphics.RectF
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffColorFilter
 import android.util.LruCache
@@ -23,6 +25,7 @@ import androidx.ink.rendering.android.canvas.CanvasStrokeRenderer
 import androidx.ink.strokes.Stroke
 import com.hashim.notepad.data.NotePadRepository
 import com.hashim.notepad.data.Page
+import com.hashim.notepad.data.PageImage
 import com.hashim.notepad.data.PageKind
 import com.hashim.notepad.ink.InkTextures
 import com.hashim.notepad.ink.PaperTexture
@@ -32,6 +35,7 @@ import com.hashim.notepad.ink.drawStrokes
 import com.hashim.notepad.pdf.PdfInvert
 import com.hashim.notepad.pdf.PdfPageSource
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import java.io.File
 
@@ -51,10 +55,25 @@ fun PagePreview(repo: NotePadRepository, page: Page?, paperColor: Color, modifie
     val context = LocalContext.current
     var bitmap by remember(page?.id) { mutableStateOf<Bitmap?>(page?.let { PreviewCache.bitmaps.get(it.id) }) }
     var strokes by remember(page?.id, page?.updatedAt) { mutableStateOf<List<Stroke>>(page?.let { PreviewCache.strokes.get("${it.id}:${it.updatedAt}") } ?: emptyList()) }
+    var pageImages by remember(page?.id, page?.updatedAt) { mutableStateOf(emptyList<PageImage>()) }
+    var imageBitmaps by remember(page?.id, page?.updatedAt) { mutableStateOf(emptyMap<String, Bitmap>()) }
 
     LaunchedEffect(page?.id, page?.updatedAt) {
         val p = page ?: return@LaunchedEffect
         val key = "${p.id}:${p.updatedAt}"
+        val imageRows = repo.pageImages(p.id).first()
+        val decodedImages = withContext(Dispatchers.Default) {
+            imageRows.associate { image ->
+                val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeFile(image.localPath, options)
+                var sample = 1
+                while (maxOf(options.outWidth, options.outHeight) / sample > 420) sample *= 2
+                image.assetId to (BitmapFactory.decodeFile(image.localPath, BitmapFactory.Options().apply { inSampleSize = sample })
+                    ?: Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888))
+            }
+        }
+        pageImages = imageRows
+        imageBitmaps = decodedImages
         if (PreviewCache.strokes.get(key) == null) {
             val list = withContext(Dispatchers.Default) {
                 repo.loadStrokes(p.id)?.let { runCatching { StrokeStore.decode(it) }.getOrNull() } ?: emptyList()
@@ -94,6 +113,11 @@ fun PagePreview(repo: NotePadRepository, page: Page?, paperColor: Color, modifie
                     if (paperColor.luminance() < 0.5f) colorFilter = PdfInvert.darkPaperFilter
                 }
                 n.drawBitmap(b, m, bitmapPaint)
+            }
+            pageImages.forEach { image ->
+                imageBitmaps[image.assetId]?.let {
+                    n.drawBitmap(it, null, RectF(image.xPt, image.yPt, image.xPt + image.wPt, image.yPt + image.hPt), Paint(Paint.FILTER_BITMAP_FLAG))
+                }
             }
             val toScreen = Matrix().apply { setScale(scale, scale) }
             drawStrokes(n, strokes, PreviewCache.renderer, toScreen, paperColor.toArgbInt())
