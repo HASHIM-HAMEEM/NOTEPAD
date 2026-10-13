@@ -72,6 +72,16 @@ class SyncManager private constructor(private val context: Context) {
         msg
     }
 
+    suspend fun resendSignUpConfirmation(email: String) = withContext(Dispatchers.IO) {
+        auth.resendSignUpConfirmation(email)
+    }
+
+    suspend fun completeEmailConfirmation(accessToken: String, refreshToken: String, expiresIn: Long) = withContext(Dispatchers.IO) {
+        val previous = prefs.getString("uid", null)
+        auth.completeEmailConfirmation(accessToken, refreshToken, expiresIn)
+        onSignedIn(previous)
+    }
+
     private fun onSignedIn(previousUid: String?) {
         val uid = auth.session.value?.userId
         if (uid != previousUid) {

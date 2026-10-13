@@ -8,11 +8,14 @@ import org.json.JSONObject
 
 data class Session(val userId: String, val email: String, val accessToken: String, val refreshToken: String, val expiresAt: Long)
 
+private const val PENDING_CONFIRMATION_EMAIL = "pending_confirmation_email"
+
 /** Supabase GoTrue email/password sessions, persisted so the app works offline and refreshes silently when online. */
 class AuthManager(context: Context) {
     private val prefs = context.getSharedPreferences("notepad.auth", Context.MODE_PRIVATE)
     private val _session = MutableStateFlow(load())
     val session: StateFlow<Session?> = _session
+    val pendingConfirmationEmail: String? get() = prefs.getString(PENDING_CONFIRMATION_EMAIL, null)
     private val lock = Any()
 
     private fun load(): Session? {
@@ -47,11 +50,51 @@ class AuthManager(context: Context) {
 
     /** Returns null on success, or a user-facing message when email confirmation is pending. */
     fun signUp(email: String, password: String): String? {
-        val r = SupabaseHttp.json("POST", "/auth/v1/signup", null, body(email, password)).orThrow()
+        val cleanEmail = email.trim()
+        val r = SupabaseHttp.json(
+            "POST",
+            "/auth/v1/signup?redirect_to=notepad%3A%2F%2Fauth-callback",
+            null,
+            body(cleanEmail, password),
+        ).orThrow()
         val o = JSONObject(r.text)
-        if (!o.has("access_token")) return "Check your email to confirm the account, then sign in."
-        store(parse(r.text, email))
+        if (!o.has("access_token")) {
+            prefs.edit().putString(PENDING_CONFIRMATION_EMAIL, cleanEmail).apply()
+            return "Check your email and tap the link — it opens NotePad"
+        }
+        store(parse(r.text, cleanEmail))
+        prefs.edit().remove(PENDING_CONFIRMATION_EMAIL).apply()
         return null
+    }
+
+    fun resendSignUpConfirmation(email: String) {
+        val cleanEmail = email.trim()
+        val json = JSONObject().put("type", "signup").put("email", cleanEmail).toString()
+        SupabaseHttp.json(
+            "POST",
+            "/auth/v1/resend?redirect_to=notepad%3A%2F%2Fauth-callback",
+            null,
+            json,
+        ).orThrow()
+        prefs.edit().putString(PENDING_CONFIRMATION_EMAIL, cleanEmail).apply()
+    }
+
+    fun completeEmailConfirmation(accessToken: String, refreshToken: String, expiresIn: Long) {
+        val user = JSONObject(SupabaseHttp.json("GET", "/auth/v1/user", accessToken).orThrow().text)
+        val userId = user.optString("id").takeIf { it.isNotBlank() }
+            ?: throw IllegalStateException("The confirmation link did not return a user")
+        val email = user.optString("email").takeIf { it.isNotBlank() }
+            ?: pendingConfirmationEmail.orEmpty()
+        store(
+            Session(
+                userId = userId,
+                email = email,
+                accessToken = accessToken,
+                refreshToken = refreshToken,
+                expiresAt = System.currentTimeMillis() + expiresIn.coerceAtLeast(0) * 1000,
+            ),
+        )
+        prefs.edit().remove(PENDING_CONFIRMATION_EMAIL).apply()
     }
 
     fun signIn(email: String, password: String) {
@@ -61,6 +104,7 @@ class AuthManager(context: Context) {
             throw HttpException(r.code, msg?.ifEmpty { null } ?: r.text.take(200))
         }
         store(parse(r.text, email))
+        prefs.edit().remove(PENDING_CONFIRMATION_EMAIL).apply()
     }
 
     fun signOut() {

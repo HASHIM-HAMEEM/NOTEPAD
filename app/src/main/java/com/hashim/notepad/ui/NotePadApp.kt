@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Box
 import com.hashim.notepad.data.NotePadRepository
 import com.hashim.notepad.pdf.PdfImporter
+import com.hashim.notepad.sync.SyncManager
 
 sealed interface Screen {
     data object Notebooks : Screen
@@ -24,7 +25,14 @@ sealed interface Screen {
 }
 
 @Composable
-fun NotePadApp(initialPdf: Uri?, themeMode: ThemeMode, dynamicColor: Boolean, onThemeChange: (ThemeMode) -> Unit, onDynamicChange: (Boolean) -> Unit) {
+fun NotePadApp(
+    initialPdf: Uri?,
+    initialAuthCallback: Uri?,
+    themeMode: ThemeMode,
+    dynamicColor: Boolean,
+    onThemeChange: (ThemeMode) -> Unit,
+    onDynamicChange: (Boolean) -> Unit,
+) {
     val context = LocalContext.current
     val repo = remember { NotePadRepository.get(context) }
     val importer = remember { PdfImporter(context, repo) }
@@ -41,6 +49,29 @@ fun NotePadApp(initialPdf: Uri?, themeMode: ThemeMode, dynamicColor: Boolean, on
             .onSuccess { screen = Screen.Pages(it) }
             .onFailure { android.util.Log.e("NotePad", "PDF import failed", it); Toast.makeText(context, "Could not import PDF: ${it.message}", Toast.LENGTH_LONG).show() }
         importing = false
+    }
+
+    LaunchedEffect(initialAuthCallback) {
+        val callback = initialAuthCallback ?: return@LaunchedEffect
+        screen = Screen.Account
+        val parameters = parseAuthCallback(callback.encodedFragment.orEmpty())
+        val error = parameters["error_description"] ?: parameters["error"]
+        if (!error.isNullOrBlank()) {
+            Toast.makeText(context, error, Toast.LENGTH_LONG).show()
+            return@LaunchedEffect
+        }
+        val accessToken = parameters["access_token"]
+        val refreshToken = parameters["refresh_token"]
+        if (accessToken.isNullOrBlank() || refreshToken.isNullOrBlank()) {
+            Toast.makeText(context, "The confirmation link is missing session details", Toast.LENGTH_LONG).show()
+            return@LaunchedEffect
+        }
+        val expiresIn = parameters["expires_in"]?.toLongOrNull() ?: 3600L
+        runCatching {
+            SyncManager.get(context).completeEmailConfirmation(accessToken, refreshToken, expiresIn)
+        }.onFailure {
+            Toast.makeText(context, it.message ?: "Could not confirm the account", Toast.LENGTH_LONG).show()
+        }
     }
 
     BackHandler(enabled = screen != Screen.Notebooks) {
@@ -112,3 +143,12 @@ fun NotePadApp(initialPdf: Uri?, themeMode: ThemeMode, dynamicColor: Boolean, on
 }
 
 private fun depth(s: Screen) = when (s) { Screen.Notebooks -> 0; Screen.Search, Screen.Account -> 1; is Screen.Pages -> 1; is Screen.Editor -> 2 }
+
+private fun parseAuthCallback(fragment: String): Map<String, String> =
+    fragment.split('&').mapNotNull { parameter ->
+        val separator = parameter.indexOf('=')
+        if (separator < 0) return@mapNotNull null
+        val key = Uri.decode(parameter.substring(0, separator).replace("+", "%20"))
+        val value = Uri.decode(parameter.substring(separator + 1).replace("+", "%20"))
+        key to value
+    }.toMap()

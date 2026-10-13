@@ -60,12 +60,13 @@ fun AccountScreen(onBack: () -> Unit) {
     val status by sync.status.collectAsState()
     val session by sync.auth.session.collectAsState()
     val scope = rememberCoroutineScope()
-    var email by remember { mutableStateOf("") }
+    var email by remember { mutableStateOf(sync.auth.pendingConfirmationEmail.orEmpty()) }
     var password by remember { mutableStateOf("") }
     var passphrase by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var info by remember { mutableStateOf<String?>(null) }
+    var confirmationEmail by remember { mutableStateOf(sync.auth.pendingConfirmationEmail.orEmpty()) }
 
     fun run(block: suspend () -> String?) {
         busy = true; error = null; info = null
@@ -127,7 +128,26 @@ fun AccountScreen(onBack: () -> Unit) {
                             visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password))
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Button(onClick = { run { sync.signIn(email, password); null } }, enabled = !busy && email.isNotBlank() && password.isNotBlank()) { Text("Sign in") }
-                            OutlinedButton(onClick = { run { sync.signUp(email, password) } }, enabled = !busy && email.isNotBlank() && password.length >= 6) { Text("Create account") }
+                            OutlinedButton(
+                                onClick = {
+                                    run {
+                                        val result = sync.signUp(email, password)
+                                        if (result != null) confirmationEmail = sync.auth.pendingConfirmationEmail.orEmpty()
+                                        result
+                                    }
+                                },
+                                enabled = !busy && email.isNotBlank() && password.length >= 6,
+                            ) { Text("Create account") }
+                        }
+                        if (confirmationEmail.isNotBlank()) {
+                            Text("Check your email and tap the link — it opens NotePad", style = MaterialTheme.typography.bodyMedium)
+                            OutlinedButton(
+                                onClick = {
+                                    val address = confirmationEmail
+                                    run { sync.resendSignUpConfirmation(address); "Confirmation email sent" }
+                                },
+                                enabled = !busy,
+                            ) { Text("Resend") }
                         }
                     }
                     SyncState.NEEDS_KEY -> {
