@@ -5,52 +5,89 @@ import android.graphics.Bitmap
 import android.os.ParcelFileDescriptor
 import io.legere.pdfiumandroid.PdfDocument
 import io.legere.pdfiumandroid.PdfiumCore
+import kotlinx.coroutines.Dispatchers
 import java.io.Closeable
 import java.io.File
+import kotlin.math.sqrt
 
 /** Opens a PDF with PDFium and renders single pages to bitmaps sized to a target width. */
 class PdfPageSource(context: Context, file: File, password: String? = null) : Closeable {
-    private val core = PdfiumCore(context)
+    private val core = synchronized(pdfiumLock) { PdfiumCore(context) }
     private val pfd = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
-    private val document: PdfDocument = try {
-        if (password.isNullOrEmpty()) core.newDocument(pfd) else core.newDocument(pfd, password)
-    } catch (error: Throwable) {
-        pfd.close()
-        throw error
+    private val document: PdfDocument = synchronized(pdfiumLock) {
+        try {
+            if (password.isNullOrEmpty()) core.newDocument(pfd) else core.newDocument(pfd, password)
+        } catch (error: Throwable) {
+            pfd.close()
+            throw error
+        }
     }
 
-    val pageCount: Int get() = document.getPageCount()
+    val pageCount: Int get() = synchronized(pdfiumLock) { document.getPageCount() }
 
     /** Page sizes in PDF points, one entry per page. */
-    fun pageSizesPt(): List<Pair<Float, Float>> = List(pageCount) { i ->
-        val page = document.openPage(i) ?: return@List 595f to 842f
-        page.use { it.getPageWidthPoint().toFloat() to it.getPageHeightPoint().toFloat() }
+    fun pageSizesPt(): List<Pair<Float, Float>> = synchronized(pdfiumLock) {
+        List(document.getPageCount()) { i ->
+            val page = document.openPage(i) ?: return@List 595f to 842f
+            page.use { it.getPageWidthPoint().toFloat() to it.getPageHeightPoint().toFloat() }
+        }
     }
 
-    fun render(pageIndex: Int, targetWidthPx: Int): Bitmap {
+    fun render(pageIndex: Int, targetWidthPx: Int): Bitmap = synchronized(pdfiumLock) {
         val page = document.openPage(pageIndex) ?: throw IllegalStateException("Cannot open page $pageIndex")
         page.use {
             val wPt = it.getPageWidthPoint().coerceAtLeast(1)
             val hPt = it.getPageHeightPoint().coerceAtLeast(1)
-            val w = targetWidthPx.coerceIn(64, 4096)
-            val h = (w.toLong() * hPt / wPt).toInt().coerceIn(64, 8192)
+            val (w, h) = pdfBitmapSize(targetWidthPx, wPt, hPt)
             val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
             bitmap.eraseColor(0xFFFFFFFF.toInt())
             it.renderPageBitmap(bitmap, 0, 0, w, h, true, false)
-            return bitmap
+            bitmap
         }
     }
 
     /** Text layer of a page ("" for scanned pages). */
-    fun text(pageIndex: Int): String {
-        val page = document.openPage(pageIndex) ?: return ""
-        return page.use { pg ->
-            pg.openTextPage().use { tp ->
-                val n = tp.textPageCountChars()
-                if (n <= 0) "" else (tp.textPageGetText(0, n) ?: "")
+    fun text(pageIndex: Int): String = synchronized(pdfiumLock) {
+        val page = document.openPage(pageIndex)
+        if (page == null) {
+            ""
+        } else {
+            page.use { pg ->
+                pg.openTextPage().use { tp ->
+                    val n = tp.textPageCountChars()
+                    if (n <= 0) "" else (tp.textPageGetText(0, n) ?: "")
+                }
             }
         }
     }
 
-    override fun close() { document.close(); pfd.close() }
+    override fun close() = synchronized(pdfiumLock) {
+        document.close()
+        pfd.close()
+    }
+
+    companion object {
+        private val pdfiumLock = Any()
+        private const val MAX_BITMAP_PIXELS = 16_777_216L
+
+        internal fun pdfBitmapSize(targetWidthPx: Int, pageWidthPt: Int, pageHeightPt: Int): Pair<Int, Int> {
+            var width = targetWidthPx.coerceIn(64, 4096)
+            var height = (width.toLong() * pageHeightPt.coerceAtLeast(1) / pageWidthPt.coerceAtLeast(1))
+                .toInt().coerceIn(64, 8192)
+            val pixelCount = width.toLong() * height
+            if (pixelCount > MAX_BITMAP_PIXELS) {
+                val scale = sqrt(MAX_BITMAP_PIXELS.toDouble() / pixelCount)
+                width = (width * scale).toInt().coerceAtLeast(64)
+                height = (height * scale).toInt().coerceAtLeast(64)
+                while (width.toLong() * height > MAX_BITMAP_PIXELS) {
+                    if (width >= height) width-- else height--
+                }
+            }
+            return width to height
+        }
+    }
+}
+
+object PdfiumDispatcher {
+    val dispatcher = Dispatchers.IO.limitedParallelism(1)
 }

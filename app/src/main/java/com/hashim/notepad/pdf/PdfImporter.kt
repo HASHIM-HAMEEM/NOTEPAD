@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import com.hashim.notepad.data.NotePadRepository
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -29,8 +30,11 @@ class PdfImporter(private val context: Context, private val repo: NotePadReposit
         try {
             validatePdf(staged.temporaryFile)
             val sizes = try {
-                PdfPageSource(context, staged.temporaryFile, password).use { it.pageSizesPt() }
+                withContext(PdfiumDispatcher.dispatcher) {
+                    PdfPageSource(context, staged.temporaryFile, password).use { it.pageSizesPt() }
+                }
             } catch (error: Throwable) {
+                if (error is CancellationException) throw error
                 if (password.isNullOrEmpty() && hasEncryptionDictionary(staged.temporaryFile)) throw PdfPasswordRequiredException()
                 if (!password.isNullOrEmpty()) throw PdfPasswordIncorrectException()
                 throw InvalidPdfException("This PDF is damaged or unsupported")
@@ -86,15 +90,17 @@ class PdfImporter(private val context: Context, private val repo: NotePadReposit
     private suspend fun indexTextLayer(notebookId: String, file: File, filename: String, progress: (ImportProgress) -> Unit) {
         val pages = repo.pages(notebookId).first()
         val annotations = runCatching { PdfAnnotations.scan(file) }.getOrDefault(emptyMap())
-        PdfPageSource(context, file, PdfPasswordVault(context).read(file.name.substringBefore('.'))).use { source ->
-            for ((index, page) in pages.withIndex()) {
-                currentCoroutineContext().ensureActive()
-                val sourceIndex = page.pdfPageIndex ?: continue
-                val text = runCatching { source.text(sourceIndex) }.getOrDefault("").trim()
-                if (text.isNotEmpty()) repo.saveRecognition(page.id, "pdf", null, text)
-                val notes = annotations[sourceIndex]?.joinToString("\n").orEmpty()
-                if (notes.isNotEmpty()) repo.saveRecognition(page.id, "pdf_annot", null, notes)
-                progress(ImportProgress(filename, 70 + (index + 1) * 29 / pages.size.coerceAtLeast(1)))
+        withContext(PdfiumDispatcher.dispatcher) {
+            PdfPageSource(context, file, PdfPasswordVault(context).read(file.name.substringBefore('.'))).use { source ->
+                for ((index, page) in pages.withIndex()) {
+                    currentCoroutineContext().ensureActive()
+                    val sourceIndex = page.pdfPageIndex ?: continue
+                    val text = runCatching { source.text(sourceIndex) }.getOrDefault("").trim()
+                    if (text.isNotEmpty()) repo.saveRecognition(page.id, "pdf", null, text)
+                    val notes = annotations[sourceIndex]?.joinToString("\n").orEmpty()
+                    if (notes.isNotEmpty()) repo.saveRecognition(page.id, "pdf_annot", null, notes)
+                    progress(ImportProgress(filename, 70 + (index + 1) * 29 / pages.size.coerceAtLeast(1)))
+                }
             }
         }
     }

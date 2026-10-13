@@ -115,6 +115,7 @@ import com.hashim.notepad.ink.StylusInputDiagnostics
 import com.hashim.notepad.ink.StrokeStore
 import com.hashim.notepad.ink.StylusDetector
 import com.hashim.notepad.pdf.PdfPageSource
+import com.hashim.notepad.pdf.PdfiumDispatcher
 import com.hashim.notepad.pdf.PageImageImporter
 import com.hashim.notepad.recognition.InkRecognizer
 import com.hashim.notepad.recognition.InkPoint
@@ -530,7 +531,7 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
         val p = page ?: return@LaunchedEffect
         if (p.kind != PageKind.PDF || p.assetId == null || surfaceWidth == 0) { pageBitmap = null; surface?.setPage(null); return@LaunchedEffect }
         val asset = repo.asset(p.assetId) ?: return@LaunchedEffect
-        val bmp = withContext(Dispatchers.Default) {
+        val bmp = withContext(PdfiumDispatcher.dispatcher) {
             runCatching { PdfPageSource(context, File(asset.localPath), com.hashim.notepad.pdf.PdfPasswordVault(context).read(asset.id)).use { it.render(p.pdfPageIndex ?: 0, (surfaceWidth * 1.5f).toInt()) } }
                 .onFailure { Log.e("NotePad", "render failed", it) }.getOrNull()
         }

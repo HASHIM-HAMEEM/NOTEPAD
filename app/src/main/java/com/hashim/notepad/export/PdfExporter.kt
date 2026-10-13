@@ -20,7 +20,9 @@ import com.hashim.notepad.ink.StrokeStore
 import com.hashim.notepad.ink.TextBlockPainter
 import com.hashim.notepad.ink.drawStrokes
 import com.hashim.notepad.pdf.PdfPageSource
+import com.hashim.notepad.pdf.PdfiumDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -61,7 +63,9 @@ class PdfExporter(private val context: Context, private val repo: NotePadReposit
             out
         } finally {
             doc.close()
-            sources.values.forEach { it.close() }
+            withContext(NonCancellable + PdfiumDispatcher.dispatcher) {
+                sources.values.forEach { it.close() }
+            }
         }
     }
 
@@ -69,10 +73,13 @@ class PdfExporter(private val context: Context, private val repo: NotePadReposit
         when (page.kind) {
             PageKind.PDF -> {
                 val asset = page.assetId?.let { repo.asset(it) } ?: return
-                val src = sources.getOrPut(asset.id) {
+                val src = sources[asset.id] ?: withContext(PdfiumDispatcher.dispatcher) {
                     PdfPageSource(context, File(asset.localPath), com.hashim.notepad.pdf.PdfPasswordVault(context).read(asset.id))
+                        .also { sources[asset.id] = it }
                 }
-                val bmp = src.render(page.pdfPageIndex ?: 0, (page.widthPt * 2).toInt())
+                val bmp = withContext(PdfiumDispatcher.dispatcher) {
+                    src.render(page.pdfPageIndex ?: 0, (page.widthPt * 2).toInt())
+                }
                 val m = Matrix().apply { setScale(page.widthPt / bmp.width, page.heightPt / bmp.height) }
                 canvas.drawBitmap(bmp, m, Paint(Paint.FILTER_BITMAP_FLAG))
                 bmp.recycle()

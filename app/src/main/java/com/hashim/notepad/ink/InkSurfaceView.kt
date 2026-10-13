@@ -759,7 +759,6 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
 
     fun setPageImages(pageId: String, images: List<PageImage>) {
         if (imagePageId != pageId) {
-            imageBitmaps.values.forEach { it.recycle() }
             imageBitmaps.clear()
             imagePageId = pageId
         }

@@ -48,6 +48,9 @@ sealed interface Screen {
     data object Account : Screen
 }
 
+internal fun screenContentKey(screen: Screen): Any =
+    if (screen is Screen.Editor) "editor:${screen.notebookId}" else screen
+
 @Composable
 @OptIn(ExperimentalSharedTransitionApi::class)
 fun NotePadApp(
@@ -128,6 +131,7 @@ fun NotePadApp(
             val sharedScope = this
             androidx.compose.animation.AnimatedContent(
                 targetState = screen,
+                contentKey = ::screenContentKey,
                 transitionSpec = {
                     val forward = depth(targetState) >= depth(initialState)
                     val openingNotebook = (targetState is Screen.Pages || targetState is Screen.Editor) && initialState is Screen.Notebooks

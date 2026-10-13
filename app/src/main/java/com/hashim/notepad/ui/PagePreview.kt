@@ -38,6 +38,7 @@ import com.hashim.notepad.ink.StrokeStore
 import com.hashim.notepad.ink.drawStrokes
 import com.hashim.notepad.pdf.PdfInvert
 import com.hashim.notepad.pdf.PdfPageSource
+import com.hashim.notepad.pdf.PdfiumDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
@@ -112,8 +113,10 @@ fun PagePreview(
                     val file = previewFile(context, p.assetId, p.pdfPageIndex ?: 0, renderWidth)
                     val cached = if (file.exists()) BitmapFactory.decodeFile(file.absolutePath) else null
                     cached ?: run {
-                        val rendered = PdfPageSource(context, File(asset.localPath), com.hashim.notepad.pdf.PdfPasswordVault(context).read(asset.id))
-                            .use { it.render(p.pdfPageIndex ?: 0, renderWidth) }
+                        val rendered = withContext(PdfiumDispatcher.dispatcher) {
+                            PdfPageSource(context, File(asset.localPath), com.hashim.notepad.pdf.PdfPasswordVault(context).read(asset.id))
+                                .use { it.render(p.pdfPageIndex ?: 0, renderWidth) }
+                        }
                         file.parentFile?.mkdirs()
                         val temporary = File(file.parentFile, "${file.name}.part")
                         FileOutputStream(temporary).use { output ->
