@@ -36,6 +36,7 @@ import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.ControlPointDuplicate
 import androidx.compose.material.icons.outlined.Category
 import androidx.compose.material.icons.outlined.Palette
+import androidx.compose.material.icons.outlined.Spellcheck
 import androidx.compose.material.icons.outlined.AutoFixNormal
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Speed
@@ -113,6 +114,7 @@ import com.hashim.notepad.ink.StylusDetector
 import com.hashim.notepad.pdf.PdfPageSource
 import com.hashim.notepad.pdf.PageImageImporter
 import com.hashim.notepad.recognition.InkRecognizer
+import com.hashim.notepad.recognition.TextBlockGeometry
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -350,6 +352,7 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
         s.setStrokes(strokes)
         s.onStrokesChanged = { dirtyStrokes = it }
         s.onPageImagesChanged = { dirtyPageImages = p.id to it }
+        s.onTextBlocksChanged = { blocks -> scope.launch { repo.replacePageTextBlocks(p.id, blocks) } }
         s.setPageImages(p.id, repo.pageImages(p.id).first())
         loadedFor = p.id
     }
@@ -1154,7 +1157,7 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
         if (hasSelection && selectionBounds != null) {
             val bounds = requireNotNull(selectionBounds)
             val density = androidx.compose.ui.platform.LocalDensity.current
-            val barWidth = 264.dp
+            val barWidth = 320.dp
             val barHeight = 56.dp
             val left = with(density) {
                 (bounds.centerX().toDp() + 12.dp - barWidth / 2)
@@ -1180,6 +1183,50 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
                         surface?.duplicateSelection()
                     }
                     if (!imageSelected) {
+                        if (surface?.selectedStrokes()?.isNotEmpty() == true) {
+                            SelectionAction(Icons.Outlined.Spellcheck, "Text", Modifier.weight(1f)) {
+                                val target = surface
+                                val currentPage = page
+                                val selected = target?.selectedStrokes().orEmpty()
+                                if (target != null && currentPage != null && selected.isNotEmpty()) {
+                                    scope.launch {
+                                        runCatching {
+                                            recognizer.ensureModel(language)
+                                            recognizer.recognize(selected, language, currentPage.widthPt, currentPage.heightPt)
+                                        }.onSuccess { recognized ->
+                                            if (recognized.isBlank()) {
+                                                Toast.makeText(context, "No handwriting recognized", Toast.LENGTH_SHORT).show()
+                                            } else {
+                                                val bounds = selected.flatMap { stroke ->
+                                                    val inputs = stroke.inputs
+                                                    (0 until inputs.size).map { inputs[it] }
+                                                }
+                                                val left = bounds.minOf { it.x }
+                                                val top = bounds.minOf { it.y }
+                                                val right = bounds.maxOf { it.x }
+                                                val bottom = bounds.maxOf { it.y }
+                                                val geometry = TextBlockGeometry.fromBounds(left, top, right, bottom)
+                                                target.convertSelectionToText(
+                                                    TextBlock(
+                                                        id = java.util.UUID.randomUUID().toString(),
+                                                        pageId = currentPage.id,
+                                                        xPt = geometry.xPt,
+                                                        yPt = geometry.yPt,
+                                                        wPt = geometry.widthPt,
+                                                        direction = "auto",
+                                                        content = recognized,
+                                                        updatedAt = System.currentTimeMillis(),
+                                                        fontSizePt = geometry.fontSizePt,
+                                                    ),
+                                                )
+                                            }
+                                        }.onFailure {
+                                            Toast.makeText(context, "Handwriting recognition failed: ${it.message ?: "model unavailable"}", Toast.LENGTH_LONG).show()
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         SelectionAction(Icons.Outlined.ContentCopy, "Copy", Modifier.weight(1f)) {
                             surface?.copySelection()
                             clipboardHasContent = !SelectionClipboard.isEmpty

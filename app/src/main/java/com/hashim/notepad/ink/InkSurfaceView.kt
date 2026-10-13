@@ -82,6 +82,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     var onDrawingActiveChanged: ((Boolean) -> Unit)? = null
     var onStrokesChanged: ((List<Stroke>) -> Unit)? = null
     var onPageImagesChanged: ((List<PageImage>) -> Unit)? = null
+    var onTextBlocksChanged: ((List<TextBlock>) -> Unit)? = null
     var onUndoRedoChanged: ((Boolean, Boolean) -> Unit)? = null
     var onZoomChanged: ((Int) -> Unit)? = null
     var onStylusToolSwitch: ((StylusButtonAction) -> Unit)? = null
@@ -134,14 +135,14 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     private var rulerSnapEndY = 0f
 
     private val strokes = ArrayList<Stroke>()
-    private data class Snapshot(val strokes: List<Stroke>, val images: List<PageImage>)
+    private data class Snapshot(val strokes: List<Stroke>, val images: List<PageImage>, val textBlocks: List<TextBlock>)
     private val history = ArrayList<Snapshot>()
     private val future = ArrayList<Snapshot>()
     private var eraseDirty = false
 
     /** Call before any mutation of [strokes]; keeps the last 100 states. */
     private fun snapshot() {
-        history.add(Snapshot(ArrayList(strokes), ArrayList(pageImages)))
+        history.add(Snapshot(ArrayList(strokes), ArrayList(pageImages), ArrayList(textBlocks)))
         if (history.size > 100) history.removeAt(0)
         future.clear()
         notifyUndoRedoChanged()
@@ -775,28 +776,47 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     fun canRedo() = future.isNotEmpty()
     fun undo() {
         if (history.isEmpty()) return
-        future.add(Snapshot(ArrayList(strokes), ArrayList(pageImages)))
+        future.add(Snapshot(ArrayList(strokes), ArrayList(pageImages), ArrayList(textBlocks)))
         restoreSnapshot(history.removeAt(history.size - 1))
     }
     fun redo() {
         if (future.isEmpty()) return
-        history.add(Snapshot(ArrayList(strokes), ArrayList(pageImages)))
+        history.add(Snapshot(ArrayList(strokes), ArrayList(pageImages), ArrayList(textBlocks)))
         restoreSnapshot(future.removeAt(future.size - 1))
     }
     private fun restoreSnapshot(snapshot: Snapshot) {
         strokes.clear(); strokes.addAll(snapshot.strokes)
         pageImages = snapshot.images
+        textBlocks = snapshot.textBlocks
         imagePageId?.let { setPageImages(it, pageImages) }
         clearSelection()
         strokeLayer.invalidate()
         notifyUndoRedoChanged()
         notifyChanged()
         notifyPageImagesChanged()
+        onTextBlocksChanged?.invoke(textBlocks)
     }
     fun clear() { if (strokes.isEmpty()) return; snapshot(); strokes.clear(); clearSelection(); strokeLayer.invalidate(); notifyChanged() }
 
     fun hasSelection() = selected.isNotEmpty() || selectedPageImageId != null
     fun hasImageSelection() = selectedPageImageId != null
+    fun selectedStrokes(): List<Stroke> = selected.toList()
+
+    fun convertSelectionToText(block: TextBlock) {
+        if (selected.isEmpty()) return
+        snapshot()
+        strokes.removeAll(selected)
+        selected.clear()
+        selectedPageImageId = null
+        selectionBounds = null
+        textBlocks = textBlocks + block
+        onSelectionChanged?.invoke(false)
+        onSelectionBoundsChanged?.invoke(null)
+        onTextBlocksChanged?.invoke(textBlocks)
+        strokeLayer.invalidate()
+        notifyChanged()
+        notifyUndoRedoChanged()
+    }
 
     fun clearSelection() {
         selected.clear()

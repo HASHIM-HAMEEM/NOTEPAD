@@ -320,15 +320,45 @@ class NotePadRepository(context: Context) {
     }
 
     private fun loadTextBlocks(pageId: String): List<TextBlock> = helper.readableDatabase.rawQuery(
-        "select id, page_id, x_pt, y_pt, w_pt, direction, content, updated_at from text_blocks where page_id = ? and deleted_at is null order by y_pt", arrayOf(pageId)
-    ).use { c -> buildList { while (c.moveToNext()) add(TextBlock(c.getString(0), c.getString(1), c.getFloat(2), c.getFloat(3), c.getFloat(4), c.getString(5), c.getString(6), c.getLong(7))) } }
+        "select id, page_id, x_pt, y_pt, w_pt, direction, content, updated_at, font_size_pt from text_blocks where page_id = ? and deleted_at is null order by y_pt", arrayOf(pageId)
+    ).use { c -> buildList { while (c.moveToNext()) add(TextBlock(c.getString(0), c.getString(1), c.getFloat(2), c.getFloat(3), c.getFloat(4), c.getString(5), c.getString(6), c.getLong(7), c.getFloat(8))) } }
 
-    suspend fun addTextBlock(pageId: String, xPt: Float, yPt: Float, wPt: Float, content: String): String = withContext(Dispatchers.IO) {
+    suspend fun addTextBlock(pageId: String, xPt: Float, yPt: Float, wPt: Float, content: String, fontSizePt: Float = 12f): String = withContext(Dispatchers.IO) {
         val id = UUID.randomUUID().toString()
         helper.writableDatabase.insertOrThrow("text_blocks", null, ContentValues().apply {
-            put("id", id); put("page_id", pageId); put("x_pt", xPt); put("y_pt", yPt); put("w_pt", wPt); put("direction", "auto"); put("content", content); put("updated_at", System.currentTimeMillis())
+            put("id", id); put("page_id", pageId); put("x_pt", xPt); put("y_pt", yPt); put("w_pt", wPt); put("direction", "auto"); put("content", content); put("font_size_pt", fontSizePt); put("updated_at", System.currentTimeMillis())
         })
         mark("text_blocks", id); indexTextBlocks(pageId); notifyChanged(); id
+    }
+
+    suspend fun replacePageTextBlocks(pageId: String, blocks: List<TextBlock>) = withContext(Dispatchers.IO) {
+        val db = helper.writableDatabase
+        val now = System.currentTimeMillis()
+        val retainedIds = blocks.mapTo(hashSetOf()) { it.id }
+        db.beginTransaction()
+        try {
+            val removedIds = db.rawQuery(
+                "select id from text_blocks where page_id = ? and deleted_at is null",
+                arrayOf(pageId),
+            ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) }.filterNot(retainedIds::contains) }
+            removedIds.forEach { id ->
+                db.update("text_blocks", ContentValues().apply { put("deleted_at", now); put("updated_at", now) }, "id = ?", arrayOf(id))
+                mark("text_blocks", id)
+            }
+            blocks.forEach { block ->
+                db.insertWithOnConflict("text_blocks", null, ContentValues().apply {
+                    put("id", block.id); put("page_id", pageId); put("x_pt", block.xPt); put("y_pt", block.yPt)
+                    put("w_pt", block.wPt); put("direction", block.direction); put("content", block.content)
+                    put("font_size_pt", block.fontSizePt); putNull("deleted_at"); put("updated_at", now)
+                }, SQLiteDatabase.CONFLICT_REPLACE)
+                mark("text_blocks", block.id)
+            }
+            indexTextBlocks(pageId)
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        notifyChanged()
     }
 
     suspend fun updateTextBlock(id: String, pageId: String, content: String? = null, xPt: Float? = null, yPt: Float? = null) = withContext(Dispatchers.IO) {

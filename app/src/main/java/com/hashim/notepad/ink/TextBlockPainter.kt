@@ -11,15 +11,17 @@ import com.hashim.notepad.data.TextBlock
 
 /** Draws typed text blocks in page-point space. Direction is per paragraph (first-strong), so Arabic/Urdu stay RTL inside an English UI. */
 object TextBlockPainter {
-    private val paint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK; textSize = 12f }
+    private val paint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK }
     private val selection = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x331E5EFF; style = Paint.Style.FILL }
 
-    fun layout(block: TextBlock): StaticLayout =
-        StaticLayout.Builder.obtain(block.content, 0, block.content.length, paint, block.wPt.toInt().coerceAtLeast(40))
+    fun layout(block: TextBlock): StaticLayout {
+        paint.textSize = block.fontSizePt
+        return StaticLayout.Builder.obtain(block.content, 0, block.content.length, paint, block.wPt.toInt().coerceAtLeast(40))
             .setTextDirection(TextDirectionHeuristics.FIRSTSTRONG_LTR)
             .setAlignment(Layout.Alignment.ALIGN_NORMAL)
             .setLineSpacing(0f, 1.35f)
             .build()
+    }
 
     fun draw(canvas: Canvas, block: TextBlock, selected: Boolean) {
         val l = layout(block)
