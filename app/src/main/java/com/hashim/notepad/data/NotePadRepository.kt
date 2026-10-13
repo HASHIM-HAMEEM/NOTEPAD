@@ -55,6 +55,21 @@ class NotePadRepository(context: Context) {
         changes.collect { emit(loadNotebooks()) }
     }.flowOn(Dispatchers.IO)
 
+    fun folders(): Flow<List<Folder>> = flow {
+        emit(loadFolders())
+        changes.collect { emit(loadFolders()) }
+    }.flowOn(Dispatchers.IO)
+
+    fun tags(): Flow<List<Tag>> = flow {
+        emit(loadTags())
+        changes.collect { emit(loadTags()) }
+    }.flowOn(Dispatchers.IO)
+
+    fun tagsForNotebook(notebookId: String): Flow<List<Tag>> = flow {
+        emit(loadTagsForNotebook(notebookId))
+        changes.collect { emit(loadTagsForNotebook(notebookId)) }
+    }.flowOn(Dispatchers.IO)
+
     fun pages(notebookId: String): Flow<List<Page>> = flow {
         emit(loadPages(notebookId))
         changes.collect { emit(loadPages(notebookId)) }
@@ -62,14 +77,44 @@ class NotePadRepository(context: Context) {
 
     private fun loadNotebooks(): List<Notebook> = helper.readableDatabase.rawQuery(
         """select n.id, n.title, n.cover_color, n.sort_order, n.created_at, n.updated_at, n.language,
-                  (select count(*) from pages p where p.notebook_id = n.id and p.deleted_at is null) as page_count
+                  (select count(*) from pages p where p.notebook_id = n.id and p.deleted_at is null) as page_count,
+                  n.folder_id,
+                  (select group_concat(nt.tag_id, ',') from notebook_tags nt where nt.notebook_id = n.id and nt.deleted_at is null) as tag_ids
            from notebooks n where n.deleted_at is null order by n.updated_at desc""", null
     ).use { c ->
         buildList {
             while (c.moveToNext()) add(
-                Notebook(c.getString(0), c.getString(1), c.getStringOrNull(2), c.getString(6), c.getInt(3), c.getLong(4), c.getLong(5), c.getInt(7))
+                Notebook(
+                    c.getString(0), c.getString(1), c.getStringOrNull(2), c.getString(6), c.getInt(3),
+                    c.getLong(4), c.getLong(5), c.getInt(7), c.getStringOrNull(8),
+                    c.getStringOrNull(9)?.split(',')?.filter(String::isNotBlank)?.toSet().orEmpty(),
+                )
             )
         }
+    }
+
+    private fun loadFolders(): List<Folder> = helper.readableDatabase.rawQuery(
+        "select id, name, color, sort_order, created_at, updated_at from folders where deleted_at is null order by sort_order, created_at, name collate nocase",
+        null,
+    ).use { c ->
+        buildList { while (c.moveToNext()) add(Folder(c.getString(0), c.getString(1), c.getStringOrNull(2), c.getInt(3), c.getLong(4), c.getLong(5))) }
+    }
+
+    private fun loadTags(): List<Tag> = helper.readableDatabase.rawQuery(
+        "select id, name, color, created_at, updated_at from tags where deleted_at is null order by name collate nocase",
+        null,
+    ).use { c ->
+        buildList { while (c.moveToNext()) add(Tag(c.getString(0), c.getString(1), c.getStringOrNull(2), c.getLong(3), c.getLong(4))) }
+    }
+
+    private fun loadTagsForNotebook(notebookId: String): List<Tag> = helper.readableDatabase.rawQuery(
+        """select t.id, t.name, t.color, t.created_at, t.updated_at from tags t
+           join notebook_tags nt on nt.tag_id = t.id
+           where nt.notebook_id = ? and nt.deleted_at is null and t.deleted_at is null
+           order by t.name collate nocase""",
+        arrayOf(notebookId),
+    ).use { c ->
+        buildList { while (c.moveToNext()) add(Tag(c.getString(0), c.getString(1), c.getStringOrNull(2), c.getLong(3), c.getLong(4))) }
     }
 
     private fun loadPages(notebookId: String): List<Page> = helper.readableDatabase.rawQuery(
@@ -106,6 +151,148 @@ class NotePadRepository(context: Context) {
             put("created_at", now); put("updated_at", now)
         })
         mark("notebooks", id); notifyChanged(); id
+    }
+
+    suspend fun createFolder(name: String): String = withContext(Dispatchers.IO) {
+        val cleanName = name.trim()
+        require(cleanName.isNotEmpty()) { "Folder name cannot be empty" }
+        val id = UUID.randomUUID().toString()
+        val now = System.currentTimeMillis()
+        helper.writableDatabase.insertOrThrow("folders", null, ContentValues().apply {
+            put("id", id); put("name", cleanName); putNull("color"); put("sort_order", 0)
+            put("created_at", now); put("updated_at", now)
+        })
+        mark("folders", id); notifyChanged(); id
+    }
+
+    suspend fun renameFolder(id: String, name: String) = withContext(Dispatchers.IO) {
+        val cleanName = name.trim()
+        require(cleanName.isNotEmpty()) { "Folder name cannot be empty" }
+        val now = System.currentTimeMillis()
+        helper.writableDatabase.update("folders", ContentValues().apply { put("name", cleanName); put("updated_at", now) }, "id = ? and deleted_at is null", arrayOf(id))
+        mark("folders", id); notifyChanged()
+    }
+
+    suspend fun deleteFolder(id: String) = withContext(Dispatchers.IO) {
+        val db = helper.writableDatabase
+        val now = System.currentTimeMillis()
+        db.beginTransaction()
+        try {
+            val notebooks = db.rawQuery("select id from notebooks where folder_id = ?", arrayOf(id)).use { c ->
+                buildList { while (c.moveToNext()) add(c.getString(0)) }
+            }
+            db.update("notebooks", ContentValues().apply { putNull("folder_id"); put("updated_at", now) }, "folder_id = ?", arrayOf(id))
+            notebooks.forEach { mark("notebooks", it) }
+            db.update("folders", ContentValues().apply { put("deleted_at", now); put("updated_at", now) }, "id = ?", arrayOf(id))
+            mark("folders", id)
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        notifyChanged()
+    }
+
+    suspend fun moveNotebookToFolder(notebookId: String, folderId: String?) = withContext(Dispatchers.IO) {
+        val db = helper.writableDatabase
+        if (folderId != null) {
+            val active = db.rawQuery("select 1 from folders where id = ? and deleted_at is null", arrayOf(folderId)).use { it.moveToFirst() }
+            require(active) { "Folder does not exist" }
+        }
+        val now = System.currentTimeMillis()
+        db.update("notebooks", ContentValues().apply {
+            if (folderId == null) putNull("folder_id") else put("folder_id", folderId)
+            put("updated_at", now)
+        }, "id = ?", arrayOf(notebookId))
+        mark("notebooks", notebookId); notifyChanged()
+    }
+
+    suspend fun createTag(name: String): String = withContext(Dispatchers.IO) {
+        val cleanName = name.trim()
+        require(cleanName.isNotEmpty()) { "Tag name cannot be empty" }
+        val db = helper.writableDatabase
+        db.beginTransaction()
+        val id = try {
+            val existing = db.rawQuery(
+                "select id from tags where name = ? collate nocase and deleted_at is null limit 1",
+                arrayOf(cleanName),
+            ).use { if (it.moveToFirst()) it.getString(0) else null }
+            if (existing != null) {
+                db.setTransactionSuccessful()
+                return@withContext existing
+            }
+            val id = UUID.randomUUID().toString()
+            val now = System.currentTimeMillis()
+            db.insertOrThrow("tags", null, ContentValues().apply {
+                put("id", id); put("name", cleanName); putNull("color"); put("created_at", now); put("updated_at", now)
+            })
+            mark("tags", id)
+            db.setTransactionSuccessful()
+            id
+        } finally {
+            db.endTransaction()
+        }
+        notifyChanged()
+        id
+    }
+
+    suspend fun deleteTag(id: String) = withContext(Dispatchers.IO) {
+        val db = helper.writableDatabase
+        val now = System.currentTimeMillis()
+        db.beginTransaction()
+        try {
+            val links = db.rawQuery("select id from notebook_tags where tag_id = ? and deleted_at is null", arrayOf(id)).use { c ->
+                buildList { while (c.moveToNext()) add(c.getString(0)) }
+            }
+            db.update("notebook_tags", ContentValues().apply { put("deleted_at", now); put("updated_at", now) }, "tag_id = ? and deleted_at is null", arrayOf(id))
+            links.forEach { mark("notebook_tags", it) }
+            db.update("tags", ContentValues().apply { put("deleted_at", now); put("updated_at", now) }, "id = ?", arrayOf(id))
+            mark("tags", id)
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        notifyChanged()
+    }
+
+    suspend fun setNotebookTags(notebookId: String, tagIds: Set<String>) = withContext(Dispatchers.IO) {
+        val db = helper.writableDatabase
+        db.beginTransaction()
+        try {
+            val activeTags = db.rawQuery("select id from tags where deleted_at is null", null).use { c ->
+                buildSet { while (c.moveToNext()) add(c.getString(0)) }
+            }
+            require(activeTags.containsAll(tagIds)) { "A selected tag no longer exists" }
+            data class Link(val id: String, val tagId: String, val deleted: Boolean)
+            val links = db.rawQuery(
+                "select id, tag_id, deleted_at from notebook_tags where notebook_id = ?",
+                arrayOf(notebookId),
+            ).use { c ->
+                buildList { while (c.moveToNext()) add(Link(c.getString(0), c.getString(1), !c.isNull(2))) }
+            }
+            val now = System.currentTimeMillis()
+            links.filter { !it.deleted && it.tagId !in tagIds }.forEach { link ->
+                db.update("notebook_tags", ContentValues().apply { put("deleted_at", now); put("updated_at", now) }, "id = ?", arrayOf(link.id))
+                mark("notebook_tags", link.id)
+            }
+            tagIds.forEach { tagId ->
+                val link = links.firstOrNull { it.tagId == tagId }
+                if (link == null) {
+                    val id = UUID.randomUUID().toString()
+                    db.insertOrThrow("notebook_tags", null, ContentValues().apply {
+                        put("id", id); put("notebook_id", notebookId); put("tag_id", tagId)
+                        put("updated_at", now); putNull("deleted_at")
+                    })
+                    mark("notebook_tags", id)
+                } else if (link.deleted) {
+                    db.update("notebook_tags", ContentValues().apply { putNull("deleted_at"); put("updated_at", now) }, "id = ?", arrayOf(link.id))
+                    mark("notebook_tags", link.id)
+                }
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        notifyChanged()
     }
 
     fun textBlocks(pageId: String): Flow<List<TextBlock>> = flow {

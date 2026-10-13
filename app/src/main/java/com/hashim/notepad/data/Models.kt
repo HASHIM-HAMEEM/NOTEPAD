@@ -15,6 +15,25 @@ data class Notebook(
     val createdAt: Long,
     val updatedAt: Long,
     val pageCount: Int = 0,
+    val folderId: String? = null,
+    val tagIds: Set<String> = emptySet(),
+)
+
+data class Folder(
+    val id: String,
+    val name: String,
+    val color: String?,
+    val sortOrder: Int,
+    val createdAt: Long,
+    val updatedAt: Long,
+)
+
+data class Tag(
+    val id: String,
+    val name: String,
+    val color: String?,
+    val createdAt: Long,
+    val updatedAt: Long,
 )
 
 data class Page(

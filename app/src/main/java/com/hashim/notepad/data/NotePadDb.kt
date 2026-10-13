@@ -40,14 +40,50 @@ class NotePadDb(context: Context) : SQLiteOpenHelper(context, "notepad.db", null
             db.execSQL(PAGE_IMAGES)
             db.execSQL("create index if not exists page_images_page_idx on page_images(page_id)")
         }
+        if (oldVersion < 5) {
+            db.execSQL("alter table notebooks add column folder_id text")
+            db.execSQL(FOLDERS)
+            db.execSQL(TAGS)
+            db.execSQL(NOTEBOOK_TAGS)
+            db.execSQL("create index if not exists folders_active_name_idx on folders(name collate nocase) where deleted_at is null")
+            db.execSQL("create unique index if not exists tags_active_name_idx on tags(name collate nocase) where deleted_at is null")
+            db.execSQL("create unique index if not exists notebook_tags_pair_idx on notebook_tags(notebook_id, tag_id)")
+            db.execSQL("create index if not exists notebook_tags_tag_idx on notebook_tags(tag_id)")
+            db.execSQL("insert or ignore into outbox(table_name, row_id) select 'page_images', id from page_images")
+        }
     }
 
     companion object {
-        const val VERSION = 4
+        const val VERSION = 5
 
         /** Rows changed locally and not yet pushed. row_id is the page id for stroke_batches and recognition. */
         const val OUTBOX = "create table if not exists outbox (table_name text not null, row_id text not null, primary key (table_name, row_id))"
         const val SYNC_META = "create table if not exists sync_meta (key text primary key, value text not null)"
+        private const val FOLDERS = """create table if not exists folders (
+              id text primary key,
+              name text not null,
+              color text,
+              sort_order integer not null default 0,
+              deleted_at integer,
+              created_at integer not null,
+              updated_at integer not null
+            )"""
+        private const val TAGS = """create table if not exists tags (
+              id text primary key,
+              name text not null,
+              color text,
+              deleted_at integer,
+              created_at integer not null,
+              updated_at integer not null
+            )"""
+        private const val NOTEBOOK_TAGS = """create table if not exists notebook_tags (
+              id text primary key,
+              notebook_id text not null references notebooks(id) on delete cascade,
+              tag_id text not null references tags(id) on delete cascade,
+              deleted_at integer,
+              updated_at integer not null,
+              unique (notebook_id, tag_id)
+            )"""
         private const val PAGE_IMAGES = """create table if not exists page_images (
               id text primary key,
               page_id text not null references pages(id) on delete cascade,
@@ -64,6 +100,7 @@ class NotePadDb(context: Context) : SQLiteOpenHelper(context, "notepad.db", null
             create table notebooks (
               id text primary key,
               title text not null,
+              folder_id text,
               cover_color text,
               language text not null default 'ar',
               sort_order integer not null default 0,
@@ -85,6 +122,13 @@ class NotePadDb(context: Context) : SQLiteOpenHelper(context, "notepad.db", null
               updated_at integer not null
             );
             create index pages_notebook_idx on pages(notebook_id, sort_key);
+            $FOLDERS;
+            create index folders_active_name_idx on folders(name collate nocase) where deleted_at is null;
+            $TAGS;
+            create unique index tags_active_name_idx on tags(name collate nocase) where deleted_at is null;
+            $NOTEBOOK_TAGS;
+            create unique index notebook_tags_pair_idx on notebook_tags(notebook_id, tag_id);
+            create index notebook_tags_tag_idx on notebook_tags(tag_id);
             create table stroke_batches (
               id text primary key,
               page_id text not null references pages(id) on delete cascade,

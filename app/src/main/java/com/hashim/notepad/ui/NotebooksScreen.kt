@@ -20,6 +20,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -46,16 +47,23 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.hashim.notepad.data.Folder
 import com.hashim.notepad.data.Notebook
 import com.hashim.notepad.data.NotePadRepository
 import com.hashim.notepad.data.PageKind
+import com.hashim.notepad.data.Tag
 import com.hashim.notepad.export.BundleCodec
 import com.hashim.notepad.export.PdfExporter
 import com.hashim.notepad.pdf.PdfImporter
 import com.hashim.notepad.recognition.InkRecognizer
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import java.text.DateFormat
 import java.util.Date
+
+private const val ALL_FOLDERS = "all"
+
+private data class FolderSnapshot(val value: List<Folder>?)
 
 /** The library: every notebook as a true miniature of its first page. */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
@@ -82,12 +90,42 @@ fun NotebooksScreen(
     val scope = rememberCoroutineScope()
     val haptics = LocalHapticFeedback.current
     val notebooks by repo.notebooks().collectAsState(initial = emptyList())
+    val foldersFlow = remember(repo) { repo.folders().map(::FolderSnapshot) }
+    val folderSnapshot by foldersFlow.collectAsState(initial = FolderSnapshot(null))
+    val folders = folderSnapshot.value.orEmpty()
+    val tags by repo.tags().collectAsState(initial = emptyList())
+    val libraryPrefs = remember(context) { context.getSharedPreferences("notepad", 0) }
+    var selectedFolderId by remember { mutableStateOf(libraryPrefs.getString("library_folder", ALL_FOLDERS) ?: ALL_FOLDERS) }
+    var selectedTagId by remember { mutableStateOf<String?>(null) }
     var showAppearance by remember { mutableStateOf(false) }
     var showNew by remember { mutableStateOf(false) }
     var showCreate by remember { mutableStateOf(false) }
     var actionsFor by remember { mutableStateOf<Notebook?>(null) }
     var renameFor by remember { mutableStateOf<Notebook?>(null) }
     var deleteFor by remember { mutableStateOf<Notebook?>(null) }
+    var showCreateFolder by remember { mutableStateOf(false) }
+    var newFolderForNotebook by remember { mutableStateOf<Notebook?>(null) }
+    var folderActionsFor by remember { mutableStateOf<Folder?>(null) }
+    var renameFolderFor by remember { mutableStateOf<Folder?>(null) }
+    var deleteFolderFor by remember { mutableStateOf<Folder?>(null) }
+    var moveNotebookFor by remember { mutableStateOf<Notebook?>(null) }
+    var tagsForNotebook by remember { mutableStateOf<Notebook?>(null) }
+    var selectedTagIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var newTagName by remember { mutableStateOf("") }
+    LaunchedEffect(selectedFolderId) { libraryPrefs.edit().putString("library_folder", selectedFolderId).apply() }
+    LaunchedEffect(folderSnapshot, selectedFolderId) {
+        val loadedFolders = folderSnapshot.value ?: return@LaunchedEffect
+        if (selectedFolderId != ALL_FOLDERS && loadedFolders.none { it.id == selectedFolderId }) selectedFolderId = ALL_FOLDERS
+    }
+    LaunchedEffect(tags, selectedTagId) {
+        if (selectedTagId != null && tags.none { it.id == selectedTagId }) selectedTagId = null
+    }
+    val visibleNotebooks = remember(notebooks, selectedFolderId, selectedTagId) {
+        notebooks.filter { notebook ->
+            (selectedFolderId == ALL_FOLDERS || notebook.folderId == selectedFolderId) &&
+                (selectedTagId == null || selectedTagId in notebook.tagIds)
+        }
+    }
 
     val pickPdf = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri ?: return@rememberLauncherForActivityResult
@@ -132,13 +170,16 @@ fun NotebooksScreen(
         ) {
             item(span = { GridItemSpan(maxLineSpan) }) {
                 LibraryHeader(
-                    count = notebooks.size, compact = compact, importing = importing, showAccountButton = showAccountButton,
+                    count = visibleNotebooks.size, compact = compact, importing = importing, showAccountButton = showAccountButton,
                     onSearch = onSearch, onAccount = onAccount, onAppearance = { showAppearance = true },
                     onNew = { showNew = true },
+                    folders = folders, tags = tags, selectedFolderId = selectedFolderId, selectedTagId = selectedTagId,
+                    onSelectFolder = { selectedFolderId = it }, onSelectTag = { selectedTagId = if (selectedTagId == it) null else it },
+                    onAddFolder = { showCreateFolder = true }, onFolderLongPress = { folderActionsFor = it },
                 )
             }
-            if (notebooks.size >= 4) {
-                val recent = notebooks.sortedByDescending { it.updatedAt }.take(3)
+            if (visibleNotebooks.size >= 4) {
+                val recent = visibleNotebooks.sortedByDescending { it.updatedAt }.take(3)
                 item(span = { GridItemSpan(maxLineSpan) }) {
                     Column {
                         Text("Recent", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
@@ -149,7 +190,7 @@ fun NotebooksScreen(
                         ) {
                             recent.forEach { nb ->
                                 NotebookCard(
-                                    repo, nb, nb.id == selectedId, compact, Modifier.width(208.dp),
+                                    repo, nb, tags, nb.id == selectedId, compact, Modifier.width(208.dp),
                                     onOpen = { onOpen(nb.id) },
                                     onMore = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); actionsFor = nb },
                                 )
@@ -164,9 +205,12 @@ fun NotebooksScreen(
             if (notebooks.isEmpty() && !importing) item(span = { GridItemSpan(maxLineSpan) }) {
                 EmptyLibrary(onNew = { showNew = true }, onImport = { pickPdf.launch(arrayOf("application/pdf")) })
             }
-            items(notebooks, key = { it.id }) { nb ->
+            if (notebooks.isNotEmpty() && visibleNotebooks.isEmpty()) item(span = { GridItemSpan(maxLineSpan) }) {
+                Text("No notebooks match these filters.", modifier = Modifier.padding(vertical = 24.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            items(visibleNotebooks, key = { it.id }) { nb ->
                 NotebookCard(
-                    repo = repo, notebook = nb, selected = nb.id == selectedId, compact = compact,
+                    repo = repo, notebook = nb, tags = tags, selected = nb.id == selectedId, compact = compact,
                     modifier = Modifier.animateItem(),
                     onOpen = { onOpen(nb.id) },
                     onMore = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); actionsFor = nb },
@@ -188,11 +232,25 @@ fun NotebooksScreen(
         val pages by repo.pages(nb.id).collectAsState(initial = emptyList())
         ModalBottomSheet(onDismissRequest = { actionsFor = null }, shape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp), containerColor = MaterialTheme.colorScheme.surfaceContainer) {
             Row(Modifier.padding(horizontal = 24.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                BookCover(nb.title, bookCoverColor(nb), pages.any { it.kind == PageKind.PDF }, Modifier.width(44.dp).aspectRatio(0.72f).clip(RoundedCornerShape(6.dp)))
+                BookCover(
+                    nb.title, bookCoverColor(nb), pages.any { it.kind == PageKind.PDF },
+                    Modifier.width(44.dp).aspectRatio(0.72f).clip(RoundedCornerShape(6.dp)),
+                    tags.filter { it.id in nb.tagIds }.take(2).map { it.name },
+                )
                 Spacer(Modifier.width(16.dp))
                 Column { Text(nb.title, style = MaterialTheme.typography.titleLarge.copy(fontFamily = titleFontFamily(nb.title)), maxLines = 1, overflow = TextOverflow.Ellipsis); Text(meta(nb), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
             }
             HorizontalDivider(Modifier.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.outlineVariant)
+            SheetRow(Icons.Outlined.FolderOpen, "Move to folder", "Choose a folder or create one") {
+                actionsFor = null
+                moveNotebookFor = nb
+            }
+            SheetRow(Icons.Outlined.Tag, "Tags", "Add or remove notebook tags") {
+                actionsFor = null
+                selectedTagIds = nb.tagIds
+                newTagName = ""
+                tagsForNotebook = nb
+            }
             SheetRow(Icons.Outlined.DriveFileRenameOutline, "Rename") { actionsFor = null; renameFor = nb }
             PaperRow(nb.coverColor) { hex -> scope.launch { repo.setNotebookPaper(nb.id, hex) } }
             LanguageRow(nb.language) { tag -> scope.launch { repo.setNotebookLanguage(nb.id, tag) } }
@@ -222,6 +280,150 @@ fun NotebooksScreen(
 
     if (showCreate) NameDialog(title = "New notebook", initial = "", confirm = "Create", onDismiss = { showCreate = false }) { name ->
         scope.launch { val id = repo.createNotebook(name, null); repo.addPage(id, PageKind.BLANK); showCreate = false; onOpen(id) }
+    }
+    if (showCreateFolder) NameDialog(
+        title = "New folder",
+        initial = "",
+        confirm = "Create",
+        onDismiss = { showCreateFolder = false; newFolderForNotebook = null },
+    ) { name ->
+        scope.launch {
+            val id = repo.createFolder(name)
+            val notebook = newFolderForNotebook
+            if (notebook == null) {
+                selectedFolderId = id
+            } else {
+                repo.moveNotebookToFolder(notebook.id, id)
+            }
+            newFolderForNotebook = null
+            showCreateFolder = false
+        }
+    }
+    folderActionsFor?.let { folder ->
+        AlertDialog(
+            onDismissRequest = { folderActionsFor = null },
+            title = { Text(folder.name) },
+            text = { Text("Folder actions") },
+            confirmButton = {
+                TextButton(onClick = { renameFolderFor = folder; folderActionsFor = null }) { Text("Rename") }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = { deleteFolderFor = folder; folderActionsFor = null }, colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)) { Text("Delete") }
+                    TextButton(onClick = { folderActionsFor = null }) { Text("Cancel") }
+                }
+            },
+        )
+    }
+    renameFolderFor?.let { folder ->
+        NameDialog(title = "Rename folder", initial = folder.name, confirm = "Save", onDismiss = { renameFolderFor = null }) { name ->
+            scope.launch { repo.renameFolder(folder.id, name) }
+            renameFolderFor = null
+        }
+    }
+    deleteFolderFor?.let { folder ->
+        AlertDialog(
+            onDismissRequest = { deleteFolderFor = null },
+            title = { Text("Delete “${folder.name}”?") },
+            text = { Text("The notebooks in this folder will be kept and moved to All.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        scope.launch { repo.deleteFolder(folder.id) }
+                        if (selectedFolderId == folder.id) selectedFolderId = ALL_FOLDERS
+                        deleteFolderFor = null
+                    },
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                ) { Text("Delete") }
+            },
+            dismissButton = { TextButton(onClick = { deleteFolderFor = null }) { Text("Cancel") } },
+        )
+    }
+    moveNotebookFor?.let { notebook ->
+        AlertDialog(
+            onDismissRequest = { moveNotebookFor = null },
+            title = { Text("Move to folder") },
+            text = {
+                Column(Modifier.fillMaxWidth().heightIn(max = 400.dp).verticalScroll(rememberScrollState())) {
+                    TextButton(
+                        onClick = {
+                            scope.launch { repo.moveNotebookToFolder(notebook.id, null) }
+                            moveNotebookFor = null
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("No folder", Modifier.fillMaxWidth()) }
+                    folders.forEach { folder ->
+                        TextButton(
+                            onClick = {
+                                scope.launch { repo.moveNotebookToFolder(notebook.id, folder.id) }
+                                moveNotebookFor = null
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text(folder.name, Modifier.fillMaxWidth()) }
+                    }
+                    TextButton(
+                        onClick = {
+                            moveNotebookFor = null
+                            newFolderForNotebook = notebook
+                            showCreateFolder = true
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("New folder…", Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.primary) }
+                }
+            },
+            confirmButton = { TextButton(onClick = { moveNotebookFor = null }) { Text("Cancel") } },
+        )
+    }
+    tagsForNotebook?.let { notebook ->
+        AlertDialog(
+            onDismissRequest = { tagsForNotebook = null },
+            title = { Text("Tags") },
+            text = {
+                Column(Modifier.fillMaxWidth().heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
+                    if (tags.isEmpty()) {
+                        Text("No tags yet. Add one below.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    tags.forEach { tag ->
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(
+                                checked = tag.id in selectedTagIds,
+                                onCheckedChange = { checked ->
+                                    selectedTagIds = if (checked) selectedTagIds + tag.id else selectedTagIds - tag.id
+                                },
+                            )
+                            Text(tag.name, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedTextField(
+                            value = newTagName,
+                            onValueChange = { newTagName = it },
+                            singleLine = true,
+                            label = { Text("New tag") },
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(
+                            onClick = {
+                                val name = newTagName.trim()
+                                if (name.isNotEmpty()) scope.launch {
+                                    val id = repo.createTag(name)
+                                    selectedTagIds = selectedTagIds + id
+                                    newTagName = ""
+                                }
+                            },
+                            enabled = newTagName.isNotBlank(),
+                        ) { Text("Add") }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    scope.launch { repo.setNotebookTags(notebook.id, selectedTagIds) }
+                    tagsForNotebook = null
+                }) { Text("Save") }
+            },
+            dismissButton = { TextButton(onClick = { tagsForNotebook = null }) { Text("Cancel") } },
+        )
     }
     renameFor?.let { nb ->
         NameDialog(title = "Rename notebook", initial = nb.title, confirm = "Save", onDismiss = { renameFor = null }) { name -> scope.launch { repo.renameNotebook(nb.id, name) }; renameFor = null }
@@ -267,7 +469,25 @@ fun NotebooksScreen(
 /* ---------------------------------------------------------------- pieces */
 
 @Composable
-private fun LibraryHeader(count: Int, compact: Boolean, importing: Boolean, showAccountButton: Boolean, onSearch: () -> Unit, onAccount: () -> Unit, onAppearance: () -> Unit, onNew: () -> Unit) {
+@OptIn(ExperimentalFoundationApi::class)
+private fun LibraryHeader(
+    count: Int,
+    compact: Boolean,
+    importing: Boolean,
+    showAccountButton: Boolean,
+    onSearch: () -> Unit,
+    onAccount: () -> Unit,
+    onAppearance: () -> Unit,
+    onNew: () -> Unit,
+    folders: List<Folder>,
+    tags: List<Tag>,
+    selectedFolderId: String,
+    selectedTagId: String?,
+    onSelectFolder: (String) -> Unit,
+    onSelectTag: (String) -> Unit,
+    onAddFolder: () -> Unit,
+    onFolderLongPress: (Folder) -> Unit,
+) {
     Column(Modifier.statusBarsPadding().padding(top = 12.dp, bottom = 4.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
@@ -280,6 +500,61 @@ private fun LibraryHeader(count: Int, compact: Boolean, importing: Boolean, show
             if (compact) IconButton(onClick = onNew) { Icon(Icons.Default.Add, "New") }
             IconButton(onClick = onAppearance) { Icon(Icons.Outlined.Palette, "Appearance") }
             if (showAccountButton) IconButton(onClick = onAccount) { Icon(Icons.Outlined.AccountCircle, "Sync & account") }
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            FilterChip(
+                selected = selectedFolderId == ALL_FOLDERS,
+                onClick = { onSelectFolder(ALL_FOLDERS) },
+                label = { Text("All") },
+                shape = CircleShape,
+            )
+            folders.forEach { folder ->
+                val selected = selectedFolderId == folder.id
+                Surface(
+                    shape = CircleShape,
+                    color = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh,
+                    border = if (selected) BorderStroke(1.dp, MaterialTheme.colorScheme.primary) else null,
+                    modifier = Modifier.combinedClickable(
+                        onClick = { onSelectFolder(folder.id) },
+                        onLongClick = { onFolderLongPress(folder) },
+                    ),
+                ) {
+                    Text(
+                        folder.name,
+                        Modifier.padding(horizontal = 16.dp, vertical = 9.dp),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = if (selected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                    )
+                }
+            }
+            FilterChip(
+                selected = false,
+                onClick = onAddFolder,
+                label = { Icon(Icons.Default.Add, contentDescription = "New folder", modifier = Modifier.size(18.dp)) },
+                shape = CircleShape,
+            )
+        }
+        if (tags.isNotEmpty()) {
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                tags.forEach { tag ->
+                    FilterChip(
+                        selected = selectedTagId == tag.id,
+                        onClick = { onSelectTag(tag.id) },
+                        label = { Text("#${tag.name}", maxLines = 1) },
+                        shape = CircleShape,
+                    )
+                }
+            }
         }
         Spacer(Modifier.height(12.dp))
         Surface(
@@ -298,12 +573,22 @@ private fun LibraryHeader(count: Int, compact: Boolean, importing: Boolean, show
 }
 
 @Composable
-private fun NotebookCard(repo: NotePadRepository, notebook: Notebook, selected: Boolean, compact: Boolean, modifier: Modifier, onOpen: () -> Unit, onMore: () -> Unit) {
+private fun NotebookCard(
+    repo: NotePadRepository,
+    notebook: Notebook,
+    tags: List<Tag>,
+    selected: Boolean,
+    compact: Boolean,
+    modifier: Modifier,
+    onOpen: () -> Unit,
+    onMore: () -> Unit,
+) {
     val pages by repo.pages(notebook.id).collectAsState(initial = emptyList())
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val scale by animateFloatAsState(if (pressed) 0.96f else 1f, spring(stiffness = Spring.StiffnessMediumLow), label = "press")
     val cover = remember(notebook.id, notebook.coverColor) { bookCoverColor(notebook) }
+    val tagNames = remember(tags, notebook.tagIds) { tags.filter { it.id in notebook.tagIds }.take(2).map { it.name } }
     val radius = RoundedCornerShape(topStart = 4.dp, bottomStart = 4.dp, topEnd = 10.dp, bottomEnd = 10.dp)
     Column(modifier.graphicsLayer { scaleX = scale; scaleY = scale }) {
         Box(
@@ -313,7 +598,7 @@ private fun NotebookCard(repo: NotePadRepository, notebook: Notebook, selected: 
                 .then(if (selected) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, radius) else Modifier)
                 .combinedClickable(interactionSource = interaction, indication = null, onClick = onOpen, onLongClick = onMore),
         ) {
-            BookCover(notebook.title, cover, pages.any { it.kind == PageKind.PDF }, Modifier.fillMaxSize())
+            BookCover(notebook.title, cover, pages.any { it.kind == PageKind.PDF }, Modifier.fillMaxSize(), tagNames)
         }
         Spacer(Modifier.height(10.dp))
         Row(verticalAlignment = Alignment.Top) {
@@ -327,7 +612,7 @@ private fun NotebookCard(repo: NotePadRepository, notebook: Notebook, selected: 
 }
 
 @Composable
-private fun BookCover(title: String, color: Color, isPdf: Boolean, modifier: Modifier = Modifier) {
+private fun BookCover(title: String, color: Color, isPdf: Boolean, modifier: Modifier = Modifier, tagNames: List<String> = emptyList()) {
     val spine = Color(color.red * 0.62f, color.green * 0.62f, color.blue * 0.62f)
     val titleColor = if (android.graphics.Color.luminance(color.toArgb()) < 0.55f) {
         Color.White.copy(alpha = 0.95f)
@@ -349,6 +634,16 @@ private fun BookCover(title: String, color: Color, isPdf: Boolean, modifier: Mod
             maxLines = 3,
             overflow = TextOverflow.Ellipsis,
         )
+        if (tagNames.isNotEmpty()) {
+            Text(
+                tagNames.joinToString("  ") { "#$it" },
+                Modifier.align(Alignment.BottomStart).padding(start = 20.dp, end = 8.dp, bottom = 12.dp),
+                color = titleColor.copy(alpha = 0.82f),
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
         if (isPdf) {
             Surface(
                 Modifier.align(Alignment.TopEnd).padding(8.dp),
