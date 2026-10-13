@@ -92,6 +92,7 @@ fun PagePreview(repo: NotePadRepository, page: Page?, paperColor: Color, modifie
     }
 
     val ruling = lineColor ?: if (paperColor.luminance() < 0.5f) Color(0xFF3A3A40) else Color(0xFFCDD1D8)
+    val bookmarkColor = MaterialTheme.colorScheme.primary.toArgbInt()
     Canvas(modifier.background(paperColor)) {
         val p = page ?: return@Canvas
         val scale = size.width / p.widthPt
@@ -121,6 +122,17 @@ fun PagePreview(repo: NotePadRepository, page: Page?, paperColor: Color, modifie
             }
             val toScreen = Matrix().apply { setScale(scale, scale) }
             drawStrokes(n, strokes, PreviewCache.renderer, toScreen, paperColor.toArgbInt())
+            if (p.bookmarked) {
+                val ribbonWidth = p.widthPt * 0.13f
+                val ribbonHeight = p.heightPt * 0.12f
+                val path = android.graphics.Path().apply {
+                    moveTo(p.widthPt, 0f)
+                    lineTo(p.widthPt - ribbonWidth, 0f)
+                    lineTo(p.widthPt, ribbonHeight)
+                    close()
+                }
+                n.drawPath(path, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = bookmarkColor })
+            }
             n.restore()
         }
     }

@@ -43,6 +43,7 @@ create table if not exists page_images (
 );
 
 alter table notebooks add column if not exists folder_id uuid references folders(id) on delete set null;
+alter table pages add column if not exists bookmarked boolean not null default false;
 
 create index if not exists folders_user_updated_idx on folders(user_id, updated_at);
 create index if not exists tags_user_updated_idx on tags(user_id, updated_at);

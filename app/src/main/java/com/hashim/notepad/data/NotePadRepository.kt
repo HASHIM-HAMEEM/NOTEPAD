@@ -118,14 +118,14 @@ class NotePadRepository(context: Context) {
     }
 
     private fun loadPages(notebookId: String): List<Page> = helper.readableDatabase.rawQuery(
-        """select id, notebook_id, sort_key, kind, asset_id, pdf_page_index, width_pt, height_pt, created_at, updated_at
+        """select id, notebook_id, sort_key, kind, asset_id, pdf_page_index, width_pt, height_pt, created_at, updated_at, bookmarked
            from pages where notebook_id = ? and deleted_at is null order by sort_key""", arrayOf(notebookId)
     ).use { c ->
         buildList {
             while (c.moveToNext()) add(
                 Page(
                     c.getString(0), c.getString(1), c.getDouble(2), PageKind.from(c.getString(3)), c.getStringOrNull(4),
-                    if (c.isNull(5)) null else c.getInt(5), c.getFloat(6), c.getFloat(7), c.getLong(8), c.getLong(9)
+                    if (c.isNull(5)) null else c.getInt(5), c.getFloat(6), c.getFloat(7), c.getLong(8), c.getLong(9), c.getInt(10) != 0
                 )
             )
         }
@@ -133,14 +133,26 @@ class NotePadRepository(context: Context) {
 
     suspend fun page(pageId: String): Page? = withContext(Dispatchers.IO) {
         helper.readableDatabase.rawQuery(
-            """select id, notebook_id, sort_key, kind, asset_id, pdf_page_index, width_pt, height_pt, created_at, updated_at
+            """select id, notebook_id, sort_key, kind, asset_id, pdf_page_index, width_pt, height_pt, created_at, updated_at, bookmarked
                from pages where id = ?""", arrayOf(pageId)
         ).use { c ->
             if (!c.moveToFirst()) null else Page(
                 c.getString(0), c.getString(1), c.getDouble(2), PageKind.from(c.getString(3)), c.getStringOrNull(4),
-                if (c.isNull(5)) null else c.getInt(5), c.getFloat(6), c.getFloat(7), c.getLong(8), c.getLong(9)
+                if (c.isNull(5)) null else c.getInt(5), c.getFloat(6), c.getFloat(7), c.getLong(8), c.getLong(9), c.getInt(10) != 0
             )
         }
+    }
+
+    suspend fun setPageBookmarked(pageId: String, bookmarked: Boolean) = withContext(Dispatchers.IO) {
+        val now = System.currentTimeMillis()
+        helper.writableDatabase.update(
+            "pages",
+            ContentValues().apply { put("bookmarked", if (bookmarked) 1 else 0); put("updated_at", now) },
+            "id = ? and deleted_at is null",
+            arrayOf(pageId),
+        )
+        mark("pages", pageId)
+        notifyChanged()
     }
 
     suspend fun createNotebook(title: String, coverColor: String?): String = withContext(Dispatchers.IO) {
@@ -506,7 +518,7 @@ class NotePadRepository(context: Context) {
             db.insertOrThrow("pages", null, ContentValues().apply {
                 put("id", newId); put("notebook_id", source.notebookId); put("sort_key", insertPlan.sortKey)
                 put("kind", source.kind.db); put("asset_id", source.assetId); put("pdf_page_index", source.pdfPageIndex)
-                put("width_pt", source.widthPt); put("height_pt", source.heightPt)
+                put("width_pt", source.widthPt); put("height_pt", source.heightPt); put("bookmarked", if (source.bookmarked) 1 else 0)
                 put("created_at", now); put("updated_at", now)
             })
             mark("pages", newId)

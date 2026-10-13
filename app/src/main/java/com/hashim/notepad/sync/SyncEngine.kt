@@ -126,6 +126,9 @@ class SyncEngine(private val context: Context, private val repo: NotePadReposito
                 cv.put("id", id); cv.put("notebook_id", r.getString("notebook_id")); cv.put("sort_key", r.getDouble("sort_key")); cv.put("kind", r.getString("kind"))
                 cv.put("asset_id", str(r, "asset_id")); if (r.isNull("pdf_page_index")) cv.putNull("pdf_page_index") else cv.put("pdf_page_index", r.getInt("pdf_page_index"))
                 cv.put("width_pt", r.optDouble("width_pt", 595.0).toFloat()); cv.put("height_pt", r.optDouble("height_pt", 842.0).toFloat())
+                val bookmarked = if (r.has("bookmarked")) r.optBoolean("bookmarked", false) else
+                    db.rawQuery("select bookmarked from pages where id = ?", arrayOf(id)).use { if (it.moveToFirst()) it.getInt(0) != 0 else false }
+                cv.put("bookmarked", if (bookmarked) 1 else 0)
                 cv.put("deleted_at", msOrNull(r, "deleted_at")); cv.put("created_at", ms(r.getString("created_at"))); cv.put("updated_at", remoteUpdated)
             }
             "stroke_batches" -> {
@@ -250,6 +253,7 @@ class SyncEngine(private val context: Context, private val repo: NotePadReposito
             "pages" -> {
                 o.put("notebook_id", m["notebook_id"]); o.put("sort_key", m["sort_key"]); o.put("kind", m["kind"]); o.put("asset_id", m["asset_id"] ?: JSONObject.NULL)
                 o.put("pdf_page_index", m["pdf_page_index"] ?: JSONObject.NULL); o.put("width_pt", m["width_pt"]); o.put("height_pt", m["height_pt"])
+                o.put("bookmarked", (m["bookmarked"] as? Number)?.toInt()?.let { it != 0 } ?: false)
                 o.put("deleted_at", ts("deleted_at") ?: JSONObject.NULL); o.put("created_at", ts("created_at")); o.put("updated_at", ts("updated_at"))
             }
             "stroke_batches" -> {

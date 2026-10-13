@@ -228,6 +228,10 @@ fun PagesScreen(
                 managePage = null
                 run("Duplicating…") { repo.duplicatePage(page.id) }
             }
+            SheetRow(Icons.Default.MoreHoriz, if (page.bookmarked) "Remove bookmark" else "Bookmark page") {
+                managePage = null
+                run("Updating bookmark…") { repo.setPageBookmarked(page.id, !page.bookmarked) }
+            }
             if (page.kind != PageKind.PDF) SheetRow(Icons.Outlined.Palette, "Change template") {
                 templateRequest = PageTemplateRequest(page, insertAfter = false)
                 managePage = null

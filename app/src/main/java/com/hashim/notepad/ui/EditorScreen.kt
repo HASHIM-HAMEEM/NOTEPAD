@@ -187,6 +187,7 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
 
     var tool by rememberSaveableTool()
     val preferences = remember(context) { context.getSharedPreferences("notepad", 0) }
+    var pageSidebarOpen by rememberSaveable { mutableStateOf(false) }
     var toolbarEdge by remember(preferences) {
         mutableStateOf(
             runCatching {
@@ -1073,6 +1074,18 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
             }
         }
         Surface(
+            modifier = Modifier.offset { IntOffset(with(density) { 60.dp.roundToPx() }, safeTopPx) }
+                .graphicsLayer { alpha = toolbarAlpha; translationX = toolbarShiftXPx; translationY = toolbarShiftYPx },
+            shape = CircleShape,
+            color = MaterialTheme.colorScheme.surface,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            shadowElevation = 6.dp,
+        ) {
+            IconButton(onClick = { pageSidebarOpen = !pageSidebarOpen }, enabled = !toolbarHidden, modifier = Modifier.size(40.dp)) {
+                Icon(Icons.Default.List, "Pages and bookmarks", tint = toolbarContentColor, modifier = Modifier.size(22.dp))
+            }
+        }
+        Surface(
             modifier = Modifier.offset {
                 IntOffset((containerWidthPx - with(density) { 92.dp.roundToPx() }).coerceAtLeast(0), safeTopPx)
             }.graphicsLayer {
@@ -1114,6 +1127,16 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
                         shape = RoundedCornerShape(22.dp),
                         containerColor = MaterialTheme.colorScheme.surfaceContainer,
                     ) {
+                        DropdownMenuItem(
+                            text = { Text(if (page?.bookmarked == true) "Remove bookmark" else "Bookmark page") },
+                            leadingIcon = { Icon(Icons.Default.Bookmark, null) },
+                            onClick = {
+                                morePop = false
+                                page?.let { current ->
+                                    scope.launch { repo.setPageBookmarked(current.id, !current.bookmarked) }
+                                }
+                            },
+                        )
                         if (tool == InkTool.LASSO && clipboardHasContent) {
                             DropdownMenuItem(
                                 text = { Text("Paste") },
@@ -1289,6 +1312,30 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
             fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.labelSmall,
             modifier = Modifier.align(Alignment.BottomStart).navigationBarsPadding().padding(8.dp).background(MaterialTheme.colorScheme.surface.copy(alpha = 0.9f), MaterialTheme.shapes.small).padding(8.dp),
         )
+
+        if (pageSidebarOpen && maxWidth >= 600.dp) {
+            Box(Modifier.fillMaxSize()) {
+                Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.22f)).clickable { pageSidebarOpen = false })
+                Surface(
+                    Modifier.fillMaxHeight().width(260.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    shadowElevation = 8.dp,
+                ) {
+                    PageSidebar(repo, pages, pageId, onNavigateToPage, { pageSidebarOpen = false })
+                }
+            }
+        }
+        if (pageSidebarOpen && maxWidth < 600.dp) {
+            ModalBottomSheet(
+                onDismissRequest = { pageSidebarOpen = false },
+                containerColor = MaterialTheme.colorScheme.surface,
+            ) {
+                PageSidebar(
+                    repo, pages, pageId, onNavigateToPage, { pageSidebarOpen = false },
+                    Modifier.fillMaxWidth().heightIn(max = 520.dp),
+                )
+            }
+        }
     }
 
     if (showPenButtonSettings) AlertDialog(

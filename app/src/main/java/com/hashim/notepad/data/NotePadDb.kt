@@ -51,10 +51,14 @@ class NotePadDb(context: Context) : SQLiteOpenHelper(context, "notepad.db", null
             db.execSQL("create index if not exists notebook_tags_tag_idx on notebook_tags(tag_id)")
             db.execSQL("insert or ignore into outbox(table_name, row_id) select 'page_images', id from page_images")
         }
+        if (oldVersion < 6) {
+            db.execSQL("alter table pages add column bookmarked integer not null default 0")
+            db.execSQL("alter table text_blocks add column font_size_pt real not null default 12")
+        }
     }
 
     companion object {
-        const val VERSION = 5
+        const val VERSION = 6
 
         /** Rows changed locally and not yet pushed. row_id is the page id for stroke_batches and recognition. */
         const val OUTBOX = "create table if not exists outbox (table_name text not null, row_id text not null, primary key (table_name, row_id))"
@@ -117,6 +121,7 @@ class NotePadDb(context: Context) : SQLiteOpenHelper(context, "notepad.db", null
               pdf_page_index integer,
               width_pt real not null default 595,
               height_pt real not null default 842,
+              bookmarked integer not null default 0,
               deleted_at integer,
               created_at integer not null,
               updated_at integer not null
@@ -145,6 +150,7 @@ class NotePadDb(context: Context) : SQLiteOpenHelper(context, "notepad.db", null
               x_pt real not null, y_pt real not null, w_pt real not null,
               direction text not null default 'auto',
               content text not null,
+              font_size_pt real not null default 12,
               deleted_at integer,
               updated_at integer not null
             );

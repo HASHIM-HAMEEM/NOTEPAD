@@ -47,6 +47,7 @@ data class Page(
     val heightPt: Float,
     val createdAt: Long,
     val updatedAt: Long,
+    val bookmarked: Boolean = false,
 )
 
 data class Asset(
