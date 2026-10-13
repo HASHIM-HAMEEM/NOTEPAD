@@ -504,8 +504,12 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
     BoxWithConstraints(Modifier.fillMaxSize().background(toolbarColor)) {
         val density = androidx.compose.ui.platform.LocalDensity.current
         val verticalToolbar = toolbarEdge == EditorToolbarEdge.START || toolbarEdge == EditorToolbarEdge.END
-        val narrowToolbar = maxWidth < 520.dp
-        val toolbarWidth = if (verticalToolbar) 76.dp else minOf(680.dp, (maxWidth - 186.dp).coerceAtLeast(0.dp))
+        val narrowToolbar = maxWidth < 600.dp
+        val toolbarWidth = when {
+            verticalToolbar -> 76.dp
+            narrowToolbar -> (maxWidth - 24.dp).coerceAtLeast(0.dp)
+            else -> minOf(740.dp, (maxWidth - 186.dp).coerceAtLeast(0.dp))
+        }
         val sideToolbarClearance = if (verticalToolbar) 48.dp else 0.dp
         val pageIndicatorClearance = if (toolbarEdge == EditorToolbarEdge.START) 64.dp else 0.dp
         val toolbarSafeHeight =
@@ -517,7 +521,8 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
         val navigationBarPx = with(density) { navigationBarHeight.roundToPx() }
         val toolbarGapPx = with(density) { 12.dp.roundToPx() }
         val safeTopPx = statusBarPx + toolbarGapPx
-        val dockSafeTopPx = safeTopPx + with(density) { sideToolbarClearance.roundToPx() }
+        val topToolbarClearance = if (narrowToolbar && !verticalToolbar) 48.dp else sideToolbarClearance
+        val dockSafeTopPx = safeTopPx + with(density) { topToolbarClearance.roundToPx() }
 
         fun dockedToolbarPosition(edge: EditorToolbarEdge, size: IntSize): IntOffset {
             val maxX = (containerWidthPx - size.width).coerceAtLeast(0)
@@ -741,11 +746,11 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
         val colorControls: @Composable () -> Unit = {
             if (verticalToolbar) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Box(Modifier.padding(top = 4.dp)) {
+                    Box(Modifier.padding(top = 2.dp)) {
                         IconButton(
                             onClick = { recolorSelectionMode = false; colorPop = true },
                             enabled = !toolbarHidden,
-                            modifier = Modifier.size(44.dp),
+                            modifier = Modifier.size(36.dp),
                         ) {
                             ColorWheelButton(color)
                         }
@@ -774,7 +779,7 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
                         }
                     }
                     displayedRecentColors.forEach { swatch ->
-                        ColorDot(swatch, false, 44.dp, enabled = !toolbarHidden) { chooseColor(swatch) }
+                        ColorDot(swatch, false, 32.dp, enabled = !toolbarHidden) { chooseColor(swatch) }
                     }
                 }
             } else {
@@ -783,7 +788,7 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
                         IconButton(
                             onClick = { recolorSelectionMode = false; colorPop = true },
                             enabled = !toolbarHidden,
-                            modifier = Modifier.size(44.dp),
+                            modifier = Modifier.size(40.dp),
                         ) {
                             ColorWheelButton(color)
                         }
@@ -812,7 +817,7 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
                         }
                     }
                     displayedRecentColors.forEach { swatch ->
-                        ColorDot(swatch, false, 44.dp, enabled = !toolbarHidden) { chooseColor(swatch) }
+                        ColorDot(swatch, false, 40.dp, enabled = !toolbarHidden) { chooseColor(swatch) }
                     }
                 }
             }
@@ -823,14 +828,14 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
                     IconButton(
                         enabled = canUndo && !toolbarHidden,
                         onClick = { surface?.undo() },
-                        modifier = Modifier.size(44.dp),
+                        modifier = Modifier.size(36.dp),
                     ) {
                         HistoryArrow(redo = false, tint = toolbarContentColor.copy(alpha = if (canUndo) 1f else 0.38f))
                     }
                     IconButton(
                         enabled = canRedo && !toolbarHidden,
                         onClick = { surface?.redo() },
-                        modifier = Modifier.size(44.dp),
+                        modifier = Modifier.size(36.dp),
                     ) {
                         HistoryArrow(redo = true, tint = toolbarContentColor.copy(alpha = if (canRedo) 1f else 0.38f))
                     }
@@ -840,14 +845,14 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
                     IconButton(
                         enabled = canUndo && !toolbarHidden,
                         onClick = { surface?.undo() },
-                        modifier = Modifier.size(44.dp),
+                        modifier = Modifier.size(40.dp),
                     ) {
                         HistoryArrow(redo = false, tint = toolbarContentColor.copy(alpha = if (canUndo) 1f else 0.38f))
                     }
                     IconButton(
                         enabled = canRedo && !toolbarHidden,
                         onClick = { surface?.redo() },
-                        modifier = Modifier.size(44.dp),
+                        modifier = Modifier.size(40.dp),
                     ) {
                         HistoryArrow(redo = true, tint = toolbarContentColor.copy(alpha = if (canRedo) 1f else 0.38f))
                     }
@@ -879,12 +884,13 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
                     Modifier.width(toolbarWidth)
                         .heightIn(max = toolbarSafeHeight)
                         .verticalScroll(rememberScrollState())
-                        .padding(vertical = 8.dp),
+                        .padding(vertical = 4.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     EditorToolbarGrip(
                         enabled = toolbarPositionReady && !toolbarHidden,
-                        modifier = Modifier.padding(vertical = 4.dp),
+                        modifier = Modifier.padding(vertical = 2.dp),
+                        gripSize = 24.dp,
                         onDragStart = {
                             toolbarDragPosition = IntOffset(toolbarX.value.roundToInt(), toolbarY.value.roundToInt())
                             toolbarDragging = true
@@ -909,19 +915,19 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
                     )
                     Column(horizontalAlignment = Alignment.CenterHorizontally) { shelfTools() }
                     Box(
-                        Modifier.padding(vertical = 8.dp).fillMaxWidth(0.4f).height(1.dp)
+                        Modifier.padding(vertical = 4.dp).fillMaxWidth(0.4f).height(1.dp)
                             .background(MaterialTheme.colorScheme.outlineVariant),
                     )
                     colorControls()
                     Box(
-                        Modifier.padding(vertical = 8.dp).fillMaxWidth(0.4f).height(1.dp)
+                        Modifier.padding(vertical = 4.dp).fillMaxWidth(0.4f).height(1.dp)
                             .background(MaterialTheme.colorScheme.outlineVariant),
                     )
                     historyControls()
                 }
             } else {
                 Row(
-                    Modifier.width(toolbarWidth).height(76.dp).padding(horizontal = 8.dp),
+                Modifier.width(toolbarWidth).height(76.dp).padding(horizontal = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     EditorToolbarGrip(
@@ -958,12 +964,12 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
                         ) {
                             shelfTools()
                             Box(
-                                Modifier.padding(horizontal = 8.dp).fillMaxHeight(0.4f).width(1.dp)
+                                Modifier.padding(horizontal = 6.dp).fillMaxHeight(0.4f).width(1.dp)
                                     .background(MaterialTheme.colorScheme.outlineVariant),
                             )
                             colorControls()
                             Box(
-                                Modifier.padding(horizontal = 8.dp).fillMaxHeight(0.4f).width(1.dp)
+                                Modifier.padding(horizontal = 6.dp).fillMaxHeight(0.4f).width(1.dp)
                                     .background(MaterialTheme.colorScheme.outlineVariant),
                             )
                             historyControls()
@@ -1204,13 +1210,14 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
 private fun EditorToolbarGrip(
     enabled: Boolean,
     modifier: Modifier = Modifier,
+    gripSize: Dp = 32.dp,
     onDragStart: () -> Unit,
     onDrag: (Offset) -> Unit,
     onDragEnd: () -> Unit,
 ) {
     val gripColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.78f)
     Box(
-        Modifier.size(32.dp).then(modifier)
+        Modifier.size(gripSize).then(modifier)
             .pointerInput(enabled) {
                 if (enabled) {
                     detectDragGestures(
@@ -1400,7 +1407,7 @@ private fun ShelfCanvasItem(
     val wide = style == ShelfDrawing.ERASER || style == ShelfDrawing.RULER
     Box(
         Modifier.width(if (vertical) 76.dp else if (wide) 50.dp else 40.dp)
-            .height(if (vertical) if (wide) 50.dp else 40.dp else 76.dp)
+            .height(if (vertical) if (wide) 40.dp else 34.dp else 76.dp)
             .clipToBounds()
             .clickable(
                 enabled = enabled,
@@ -1417,12 +1424,15 @@ private fun ShelfCanvasItem(
             if (vertical) {
                 val logicalWidth = (if (wide) 50.dp else 40.dp).toPx()
                 val logicalHeight = 76.dp.toPx()
+                val verticalScale = (size.height / logicalWidth).coerceAtMost(1f)
+                val alongDockScale = ((size.width - 4.dp.toPx()) / logicalHeight).coerceAtMost(1f)
                 withTransform({
                     translate(size.width / 2f, size.height / 2f)
                     rotate(if (edge == EditorToolbarEdge.START) 90f else -90f, pivot = Offset.Zero)
+                    scale(scaleX = verticalScale, scaleY = alongDockScale, pivot = Offset.Zero)
                     translate(-logicalWidth / 2f, -logicalHeight / 2f)
                 }) {
-                    ShelfPainter(this, dark, ink, translucentInk, logicalWidth, logicalHeight)
+                    ShelfPainter(this, dark, ink, translucentInk, logicalWidth, logicalHeight, bottomExtensionDp = 0f)
                         .draw(style, top = 7.dp.toPx() + lift.toPx())
                 }
             } else {
@@ -1440,10 +1450,11 @@ private class ShelfPainter(
     val translucentInk: Color,
     canvasWidth: Float = scope.size.width,
     canvasHeight: Float = scope.size.height,
+    bottomExtensionDp: Float = 2f,
 ) {
     private val u = with(scope) { 1.dp.toPx() }
     private val cx = canvasWidth / 2f
-    private val bottom = canvasHeight + 2f * u
+    private val bottom = canvasHeight + bottomExtensionDp * u
 
     private val edge = if (dark) Color(0xFF141416) else Color(0xFFD6D9DE)
     private val mid = if (dark) Color(0xFF45464B) else Color.White
