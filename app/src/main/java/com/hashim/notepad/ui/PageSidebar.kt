@@ -12,7 +12,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -44,9 +44,9 @@ internal fun PageSidebar(
     var selectedTab by remember { mutableIntStateOf(0) }
     Column(modifier.background(MaterialTheme.colorScheme.surface)) {
         Row(
-            Modifier.fillMaxWidth().height(52.dp).padding(horizontal = 16.dp),
+            Modifier.fillMaxWidth().height(52.dp).padding(horizontal = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(24.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             listOf("Pages", "Bookmarks").forEachIndexed { index, title ->
                 Column(
@@ -70,17 +70,17 @@ internal fun PageSidebar(
             LazyColumn(Modifier.fillMaxSize()) {
                 itemsIndexed(visible, key = { _, item -> item.value.id }) { _, indexedPage ->
                     val page = indexedPage.value
-                    Row(
+                    Column(
                         Modifier.fillMaxWidth().clickable { onPageSelected(page.id) }
                             .padding(horizontal = 12.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
                         PagePreview(
                             repo = repo,
                             page = page,
                             paperColor = MaterialTheme.colorScheme.background,
-                            modifier = Modifier.size(width = 52.dp, height = 72.dp)
+                            modifier = Modifier.fillMaxWidth().aspectRatio(page.widthPt / page.heightPt)
                                 .clip(RoundedCornerShape(4.dp))
                                 .border(
                                     if (page.id == currentPageId) 2.dp else 1.dp,
@@ -88,7 +88,7 @@ internal fun PageSidebar(
                                     RoundedCornerShape(4.dp),
                                 ),
                         )
-                        Text("Page ${indexedPage.index + 1}", style = MaterialTheme.typography.bodyMedium)
+                        Text("${indexedPage.index + 1}", style = MaterialTheme.typography.bodyMedium)
                     }
                 }
             }

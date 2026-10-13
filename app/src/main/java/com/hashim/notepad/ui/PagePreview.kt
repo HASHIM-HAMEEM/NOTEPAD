@@ -122,7 +122,14 @@ fun PagePreview(repo: NotePadRepository, page: Page?, paperColor: Color, modifie
                 }
             }
             val toScreen = Matrix().apply { setScale(scale, scale) }
-            drawStrokes(n, strokes, PreviewCache.renderer, toScreen, paperColor.toArgbInt())
+            drawStrokes(
+                n,
+                strokes,
+                PreviewCache.renderer,
+                toScreen,
+                paperColor.toArgbInt(),
+                canvasHasPageTransform = true,
+            )
             if (p.bookmarked) {
                 val ribbonWidth = p.widthPt * 0.13f
                 val ribbonHeight = p.heightPt * 0.12f

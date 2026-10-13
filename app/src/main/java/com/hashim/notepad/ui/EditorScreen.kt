@@ -1448,7 +1448,14 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
                     color = MaterialTheme.colorScheme.surface,
                     shadowElevation = 8.dp,
                 ) {
-                    PageSidebar(repo, pages, pageId, onNavigateToPage, { pageSidebarOpen = false })
+                    PageSidebar(
+                        repo,
+                        pages,
+                        pageId,
+                        onNavigateToPage,
+                        { pageSidebarOpen = false },
+                        Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.systemBars),
+                    )
                 }
             }
         }

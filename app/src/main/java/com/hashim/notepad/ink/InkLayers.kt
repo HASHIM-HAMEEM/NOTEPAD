@@ -22,6 +22,7 @@ fun drawStrokes(
     paperArgb: Int,
     wet: InProgressStroke? = null,
     revealedTapeIndices: Set<Int> = emptySet(),
+    canvasHasPageTransform: Boolean = false,
 ) {
     val paperDark = Color.luminance(paperArgb) < 0.5f
     val highlighter = StockBrushes.highlighter()
@@ -35,7 +36,7 @@ fun drawStrokes(
                 canvas.restoreToCount(layer)
             }
             stroke.brush.family == InkBrushFamilies.tape ->
-                drawTape(canvas, stroke, toCanvas, index in revealedTapeIndices)
+                drawTape(canvas, stroke, toCanvas, index in revealedTapeIndices, canvasHasPageTransform)
             else -> renderer.draw(canvas, stroke, toCanvas)
         }
     }
@@ -52,7 +53,13 @@ fun drawStrokes(
     }
 }
 
-private fun drawTape(canvas: Canvas, stroke: Stroke, toCanvas: Matrix, revealed: Boolean) {
+private fun drawTape(
+    canvas: Canvas,
+    stroke: Stroke,
+    toCanvas: Matrix,
+    revealed: Boolean,
+    canvasHasPageTransform: Boolean,
+) {
     if (stroke.inputs.size < 2) return
     val first = stroke.inputs[0]
     val last = stroke.inputs[stroke.inputs.size - 1]
@@ -61,7 +68,7 @@ private fun drawTape(canvas: Canvas, stroke: Stroke, toCanvas: Matrix, revealed:
     val length = kotlin.math.hypot(dx, dy).coerceAtLeast(1f)
     val angle = Math.toDegrees(kotlin.math.atan2(dy.toDouble(), dx.toDouble())).toFloat()
     canvas.save()
-    canvas.concat(toCanvas)
+    if (!canvasHasPageTransform) canvas.concat(toCanvas)
     canvas.rotate(angle, first.x, first.y)
     val width = stroke.brush.size.coerceAtLeast(1f)
     val alpha = if (revealed) 0.12f else 1f

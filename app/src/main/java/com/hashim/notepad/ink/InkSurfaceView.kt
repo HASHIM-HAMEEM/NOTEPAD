@@ -239,6 +239,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         }
         canvas.save(); canvas.concat(zoomToView)
         drawPageImages(canvas)
+        val zoomRevealedTapes = revealedTapeIndicesByPage[revealPageId].orEmpty()
         drawStrokes(
             canvas,
             strokes,
@@ -246,7 +247,8 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
             zoomToView,
             paperPaint.color,
             highlighterWet.takeIf { highlighterStartedInStrip },
-            revealedTapeIndicesByPage[revealPageId].orEmpty(),
+            zoomRevealedTapes,
+            canvasHasPageTransform = true,
         )
         for (b in textBlocks) TextBlockPainter.draw(canvas, b, false)
         canvas.restore()
@@ -412,6 +414,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
             }
             canvas.save(); canvas.concat(pageToView)
             drawPageImages(canvas)
+            val committedRevealedTapes = revealedTapeIndicesByPage[revealPageId].orEmpty()
             drawStrokes(
                 canvas,
                 strokes,
@@ -419,7 +422,8 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
                 pageToView,
                 paperPaint.color,
                 highlighterWet.takeUnless { highlighterStartedInStrip },
-                revealedTapeIndicesByPage[revealPageId].orEmpty(),
+                committedRevealedTapes,
+                canvasHasPageTransform = true,
             )
             canvas.restore()
             selectionBounds?.let { b ->
@@ -1528,7 +1532,8 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         if (zoomEnabled && event.actionMasked == MotionEvent.ACTION_DOWN) {
             inStrip = event.y >= stripTop
         }
-        if (handleRulerTouch(event, isStylus)) return true
+        val rulerHandled = handleRulerTouch(event, isStylus)
+        if (rulerHandled) return true
         if (zoomEnabled && event.actionMasked == MotionEvent.ACTION_DOWN && !inStrip && isStylus) {
             val pt = floatArrayOf(event.x, event.y); viewToPage.mapPoints(pt)
             if (zoomWindow.contains(pt[0], pt[1])) { draggingWindow = true; dragLastX = pt[0]; dragLastY = pt[1]; return true }
@@ -1545,9 +1550,10 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
             return true
         }
         if (event.actionMasked == MotionEvent.ACTION_DOWN && brushSpec.tool != InkTool.TAPE) {
-            tapeStrokeAt(event.x, event.y)?.let { tapeIndex ->
+            val tapeIndex = tapeStrokeAt(event.x, event.y)
+            tapeIndex?.let {
                 val revealed = revealedTapeIndicesByPage.getOrPut(revealPageId) { mutableSetOf() }
-                if (!revealed.add(tapeIndex)) revealed.remove(tapeIndex)
+                if (!revealed.add(it)) revealed.remove(it)
                 tapeRevealGesture = true
                 strokeLayer.invalidate()
                 return true
@@ -1682,7 +1688,10 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
             val t = if (lengthSquared == 0f) 0f else (
                 ((point[0] - first.x) * dx + (point[1] - first.y) * dy) / lengthSquared
             ).coerceIn(0f, 1f)
-            hypot(point[0] - first.x - t * dx, point[1] - first.y - t * dy) <= stroke.brush.size / 2f + 8f
+            val distance = hypot(point[0] - first.x - t * dx, point[1] - first.y - t * dy)
+            val hitRadius = stroke.brush.size / 2f + 8f
+            val hit = distance <= hitRadius
+            hit
         }
     }
 
