@@ -31,6 +31,7 @@ import androidx.input.motionprediction.MotionEventPredictor
 import com.hashim.notepad.data.PageKind
 import com.hashim.notepad.data.TextBlock
 import androidx.ink.brush.Brush
+import androidx.ink.brush.ExperimentalInkCustomBrushApi
 import androidx.ink.brush.InputToolType
 import androidx.ink.strokes.InProgressStroke
 import android.view.InputDevice
@@ -282,11 +283,20 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     private val selected = LinkedHashSet<Stroke>()
     private var selectionBounds: RectF? = null
     private var movingSelection = false
+    private var resizingSelection = false
+    private var resizeHandle = -1
+    private var resizeAnchor = FloatArray(2)
+    private var resizeStartBounds: RectF? = null
+    private var resizeStartStrokes: List<Stroke> = emptyList()
+    private var resizeStrokeIndices: List<Int> = emptyList()
     private var moveLastX = 0f
     private var moveLastY = 0f
     var onSelectionChanged: ((Boolean) -> Unit)? = null
+    var onSelectionBoundsChanged: ((RectF?) -> Unit)? = null
     private val lassoPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF1E5EFF.toInt(); style = Paint.Style.STROKE; strokeWidth = 2f; pathEffect = DashPathEffect(floatArrayOf(10f, 8f), 0f) }
     private val selectionFill = Paint().apply { color = 0x141E5EFF; style = Paint.Style.FILL }
+    private val selectionHandlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFFFFFFF.toInt(); style = Paint.Style.FILL }
+    private val selectionHandleOutlinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF1E5EFF.toInt(); style = Paint.Style.STROKE; strokeWidth = 2f }
 
     private val renderer = CanvasStrokeRenderer.create(InkTextures.textureStore)
     private val predictor = MotionEventPredictor.newInstance(this)
@@ -355,6 +365,12 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
                 canvas.save(); canvas.scale(1f, 1f); canvas.restore()
                 canvas.restore()
                 val vb = RectF(b); pageToView.mapRect(vb); canvas.drawRect(vb, lassoPaint)
+                val radius = 5f * resources.displayMetrics.density
+                val points = selectionHandlePoints(vb)
+                points.forEach { point ->
+                    canvas.drawCircle(point[0], point[1], radius, selectionHandlePaint)
+                    canvas.drawCircle(point[0], point[1], radius, selectionHandleOutlinePaint)
+                }
             }
             if (lassoActive) {
                 canvas.save(); canvas.concat(pageToView)
@@ -556,27 +572,153 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
 
     fun hasSelection() = selected.isNotEmpty()
 
-    fun clearSelection() { selected.clear(); selectionBounds = null; strokeLayer.invalidate(); onSelectionChanged?.invoke(false) }
+    fun clearSelection() {
+        selected.clear()
+        selectionBounds = null
+        strokeLayer.invalidate()
+        onSelectionChanged?.invoke(false)
+        onSelectionBoundsChanged?.invoke(null)
+    }
+
+    fun copySelection() {
+        if (selected.isNotEmpty()) SelectionClipboard.copy(selected)
+    }
+
+    fun duplicateSelection() {
+        if (selected.isEmpty()) return
+        snapshot()
+        val copies = selected.map { transformStroke(it, 1f, 24f, 24f) }
+        strokes.addAll(copies)
+        selected.clear()
+        selected.addAll(copies)
+        updateSelectionBounds()
+        strokeLayer.invalidate()
+        notifyChanged()
+    }
+
+    fun paste() {
+        val copied = SelectionClipboard.read()
+        if (copied.isEmpty()) return
+        val bounds = strokeBounds(copied) ?: return
+        val center = floatArrayOf(width / 2f, height / 2f)
+        viewToPage.mapPoints(center)
+        val dx = center[0] - bounds.centerX()
+        val dy = center[1] - bounds.centerY()
+        snapshot()
+        val pasted = copied.map { transformStroke(it, 1f, dx, dy) }
+        strokes.addAll(pasted)
+        selected.clear()
+        selected.addAll(pasted)
+        updateSelectionBounds()
+        strokeLayer.invalidate()
+        notifyChanged()
+    }
+
+    fun recolorSelection(argb: Int) {
+        if (selected.isEmpty()) return
+        snapshot()
+        val recolored = selected.map { stroke ->
+            val color = (argb and 0x00FFFFFF) or (stroke.brush.colorIntArgb and 0xFF000000.toInt())
+            val updated = Stroke(stroke.brush.copyWithColorIntArgb(color), stroke.inputs)
+            val index = strokes.indexOf(stroke)
+            if (index >= 0) strokes[index] = updated
+            updated
+        }
+        selected.clear()
+        selected.addAll(recolored)
+        updateSelectionBounds()
+        strokeLayer.invalidate()
+        notifyChanged()
+    }
 
     fun deleteSelection() {
         if (selected.isEmpty()) return
         snapshot(); strokes.removeAll(selected); clearSelection(); notifyChanged()
     }
 
+    private fun selectionHandlePoints(bounds: RectF): List<FloatArray> = listOf(
+        floatArrayOf(bounds.left, bounds.top),
+        floatArrayOf(bounds.right, bounds.top),
+        floatArrayOf(bounds.left, bounds.bottom),
+        floatArrayOf(bounds.right, bounds.bottom),
+    )
+
+    private fun hitSelectionHandle(x: Float, y: Float): Int {
+        val bounds = selectionBounds ?: return -1
+        val viewBounds = RectF(bounds).also(pageToView::mapRect)
+        val hitRadius = 16f * resources.displayMetrics.density
+        return selectionHandlePoints(viewBounds).indexOfFirst { hypot(it[0] - x, it[1] - y) <= hitRadius }
+    }
+
+    private fun updateSelectionBounds() {
+        val bounds = strokeBounds(selected)
+        selectionBounds = bounds?.apply { inset(-6f, -6f) }
+        onSelectionBoundsChanged?.invoke(selectionBounds?.let { RectF(it).also(pageToView::mapRect) })
+        onSelectionChanged?.invoke(selected.isNotEmpty())
+    }
+
+    private fun strokeBounds(strokeList: Collection<Stroke>): RectF? {
+        var bounds: RectF? = null
+        for (stroke in strokeList) {
+            val inputs = stroke.inputs
+            for (i in 0 until inputs.size) {
+                val p = inputs[i]
+                if (bounds == null) bounds = RectF(p.x, p.y, p.x, p.y) else bounds.union(p.x, p.y)
+            }
+        }
+        return bounds
+    }
+
+    @OptIn(ExperimentalInkCustomBrushApi::class)
+    private fun transformStroke(stroke: Stroke, factor: Float, dx: Float, dy: Float, anchorX: Float = 0f, anchorY: Float = 0f): Stroke {
+        val batch = MutableStrokeInputBatch()
+        val inputs = stroke.inputs
+        for (i in 0 until inputs.size) {
+            val p = inputs[i]
+            batch.add(StrokeInput.create(
+                anchorX + (p.x - anchorX) * factor + dx,
+                anchorY + (p.y - anchorY) * factor + dy,
+                p.elapsedTimeMillis, p.toolType, p.strokeUnitLengthCm, p.pressure, p.tiltRadians, p.orientationRadians,
+            ))
+        }
+        val brush = Brush.createWithColorIntArgb(stroke.brush.family, stroke.brush.colorIntArgb, stroke.brush.size * factor, stroke.brush.epsilon)
+        return Stroke(brush, batch)
+    }
+
     private fun handleLasso(event: MotionEvent, idx: Int): Boolean {
         val pt = floatArrayOf(event.getX(idx), event.getY(idx)); viewToPage.mapPoints(pt)
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
+                val handle = hitSelectionHandle(event.getX(idx), event.getY(idx))
                 val b = selectionBounds
-                if (b != null && b.contains(pt[0], pt[1])) { snapshot(); movingSelection = true; moveLastX = pt[0]; moveLastY = pt[1] }
+                if (handle >= 0 && b != null) {
+                    snapshot()
+                    resizingSelection = true
+                    resizeHandle = handle
+                    resizeStartBounds = RectF(b)
+                    resizeStartStrokes = selected.toList()
+                    resizeStrokeIndices = resizeStartStrokes.map(strokes::indexOf)
+                    val anchors = arrayOf(
+                        floatArrayOf(b.right, b.bottom), floatArrayOf(b.left, b.bottom),
+                        floatArrayOf(b.right, b.top), floatArrayOf(b.left, b.top),
+                    )
+                    resizeAnchor = anchors[handle]
+                } else if (b != null && b.contains(pt[0], pt[1])) { snapshot(); movingSelection = true; moveLastX = pt[0]; moveLastY = pt[1] }
                 else { clearSelection(); lassoActive = true; lassoPath.reset(); lassoPath.moveTo(pt[0], pt[1]); lassoPoints.clear(); lassoPoints.add(pt[0]); lassoPoints.add(pt[1]) }
             }
             MotionEvent.ACTION_MOVE -> {
-                if (movingSelection) { moveSelection(pt[0] - moveLastX, pt[1] - moveLastY); moveLastX = pt[0]; moveLastY = pt[1] }
+                if (resizingSelection) resizeSelection(pt[0], pt[1])
+                else if (movingSelection) { moveSelection(pt[0] - moveLastX, pt[1] - moveLastY); moveLastX = pt[0]; moveLastY = pt[1] }
                 else if (lassoActive) { lassoPath.lineTo(pt[0], pt[1]); lassoPoints.add(pt[0]); lassoPoints.add(pt[1]); strokeLayer.invalidate() }
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP, MotionEvent.ACTION_CANCEL -> {
-                if (movingSelection) { movingSelection = false; notifyChanged() }
+                if (resizingSelection) {
+                    resizingSelection = false
+                    resizeStartBounds = null
+                    resizeStartStrokes = emptyList()
+                    resizeStrokeIndices = emptyList()
+                    notifyChanged()
+                } else if (movingSelection) { movingSelection = false; notifyChanged() }
                 else if (lassoActive) { lassoActive = false; lassoPath.close(); selectInside(); strokeLayer.invalidate() }
             }
         }
@@ -602,6 +744,32 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         }
         selectionBounds = if (selected.isEmpty()) null else RectF(sel).apply { inset(-6f, -6f) }
         onSelectionChanged?.invoke(selected.isNotEmpty())
+        onSelectionBoundsChanged?.invoke(selectionBounds?.let { RectF(it).also(pageToView::mapRect) })
+    }
+
+    private fun resizeSelection(pointerX: Float, pointerY: Float) {
+        val start = resizeStartBounds ?: return
+        val handle = when (resizeHandle) {
+            0 -> floatArrayOf(start.left, start.top)
+            1 -> floatArrayOf(start.right, start.top)
+            2 -> floatArrayOf(start.left, start.bottom)
+            else -> floatArrayOf(start.right, start.bottom)
+        }
+        val initialX = abs(handle[0] - resizeAnchor[0]).coerceAtLeast(1f)
+        val initialY = abs(handle[1] - resizeAnchor[1]).coerceAtLeast(1f)
+        val factor = max(abs(pointerX - resizeAnchor[0]) / initialX, abs(pointerY - resizeAnchor[1]) / initialY)
+            .coerceIn(0.1f, 20f)
+        val resized = ArrayList<Stroke>(resizeStartStrokes.size)
+        resizeStartStrokes.forEachIndexed { index, stroke ->
+            val updated = transformStroke(stroke, factor, 0f, 0f, resizeAnchor[0], resizeAnchor[1])
+            val strokeIndex = resizeStrokeIndices.getOrNull(index) ?: -1
+            if (strokeIndex in strokes.indices) strokes[strokeIndex] = updated
+            resized.add(updated)
+        }
+        selected.clear()
+        selected.addAll(resized)
+        updateSelectionBounds()
+        strokeLayer.invalidate()
     }
 
     private fun moveSelection(dx: Float, dy: Float) {
@@ -620,6 +788,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         }
         selected.clear(); selected.addAll(moved)
         selectionBounds?.offset(dx, dy)
+        onSelectionBoundsChanged?.invoke(selectionBounds?.let { RectF(it).also(pageToView::mapRect) })
         strokeLayer.invalidate()
     }
 
@@ -675,6 +844,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     private fun updateMatrices() {
         pageToView.reset(); pageToView.postScale(scale, scale); pageToView.postTranslate(panX, panY)
         pageToView.invert(viewToPage)
+        onSelectionBoundsChanged?.invoke(selectionBounds?.let { RectF(it).also(pageToView::mapRect) })
         updateZoom()
         val zoomPercent = (scale / minScale() * 100f).roundToInt()
         if (zoomPercent != lastReportedZoomPercent) {

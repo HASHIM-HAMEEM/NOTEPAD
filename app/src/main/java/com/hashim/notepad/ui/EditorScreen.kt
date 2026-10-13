@@ -25,6 +25,9 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.outlined.IosShare
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.ControlPointDuplicate
+import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.AutoFixNormal
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Speed
@@ -76,6 +79,7 @@ import com.hashim.notepad.data.TextBlock
 import com.hashim.notepad.export.PdfExporter
 import com.hashim.notepad.ink.BrushSpec
 import com.hashim.notepad.ink.InkSurfaceView
+import com.hashim.notepad.ink.SelectionClipboard
 import com.hashim.notepad.ink.InkTool
 import com.hashim.notepad.ink.PenType
 import com.hashim.notepad.ink.PointerSample
@@ -189,6 +193,9 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
     var sample by remember { mutableStateOf(PointerSample()) }
     val lastStylusEvent by StylusInputDiagnostics.lastEvent.collectAsState()
     var hasSelection by remember { mutableStateOf(false) }
+    var selectionBounds by remember { mutableStateOf<android.graphics.RectF?>(null) }
+    var clipboardHasContent by remember { mutableStateOf(!SelectionClipboard.isEmpty) }
+    var recolorSelectionMode by remember { mutableStateOf(false) }
     var canUndo by remember { mutableStateOf(false) }
     var canRedo by remember { mutableStateOf(false) }
     var pixelEraser by rememberSaveable { mutableStateOf(false) }
@@ -416,6 +423,8 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
                 .distinct().take(8)
             updateActiveBrushSettings { it.copy(color = next) }
         }
+        if (recolorSelectionMode && hasSelection) surface?.recolorSelection(next)
+        recolorSelectionMode = false
         colorPop = false
     }
 
@@ -429,7 +438,7 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
     val displayedRecentColors = (recentColors + listOf(0xFFFFFFFF.toInt(), 0xFF1B2A4E.toInt()))
         .distinct()
         .take(2)
-    Box(Modifier.fillMaxSize().background(toolbarColor)) {
+    BoxWithConstraints(Modifier.fillMaxSize().background(toolbarColor)) {
         AndroidView(
             modifier = Modifier.fillMaxSize().padding(start = 12.dp, end = 12.dp, top = statusBarHeight + 76.dp, bottom = 12.dp),
             factory = { ctx ->
@@ -437,6 +446,7 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
                     v.onSample = { sample = it }
                     v.onStylusToolSwitch = ::handleStylusToolSwitch
                     v.onSelectionChanged = { hasSelection = it }
+                    v.onSelectionBoundsChanged = { selectionBounds = it }
                     v.onZoomChanged = { zoomPercent = it }
                     v.onUndoRedoChanged = { undo, redo -> canUndo = undo; canRedo = redo }
                     v.onTextTap = { x, y, block -> if (block != null) editingBlock = block else newBlockAt = x to y }
@@ -553,12 +563,12 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
                     haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                 })
                     Box(Modifier.padding(start = 7.dp)) {
-                        IconButton(onClick = { colorPop = true }, modifier = Modifier.size(44.dp)) {
+                        IconButton(onClick = { recolorSelectionMode = false; colorPop = true }, modifier = Modifier.size(44.dp)) {
                             ColorWheelButton(color)
                         }
                     DropdownMenu(
                         expanded = colorPop,
-                        onDismissRequest = { colorPop = false },
+                        onDismissRequest = { colorPop = false; recolorSelectionMode = false },
                         shape = RoundedCornerShape(22.dp),
                         containerColor = MaterialTheme.colorScheme.surfaceContainer,
                     ) {
@@ -612,11 +622,11 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
                     shape = RoundedCornerShape(22.dp),
                     containerColor = MaterialTheme.colorScheme.surfaceContainer,
                 ) {
-                    if (hasSelection) {
+                    if (tool == InkTool.LASSO && clipboardHasContent) {
                         DropdownMenuItem(
-                            text = { Text("Delete selection") },
-                            leadingIcon = { Icon(Icons.Default.DeleteOutline, null, tint = MaterialTheme.colorScheme.error) },
-                            onClick = { surface?.deleteSelection(); morePop = false },
+                            text = { Text("Paste") },
+                            leadingIcon = { Icon(Icons.Outlined.ContentCopy, null) },
+                            onClick = { surface?.paste(); morePop = false },
                         )
                     }
                     ToggleItem("Zoom box", "Magnified line for small writing", Icons.Outlined.ZoomIn, zoomBox) { zoomBox = it }
@@ -629,6 +639,53 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
                         onClick = { morePop = false; showPenButtonSettings = true },
                     )
                     ToggleItem("Pixel eraser", "Erase pixels, not strokes", Icons.Outlined.AutoFixNormal, pixelEraser) { pixelEraser = it }
+                }
+            }
+        }
+
+        if (hasSelection && selectionBounds != null) {
+            val bounds = requireNotNull(selectionBounds)
+            val density = androidx.compose.ui.platform.LocalDensity.current
+            val barWidth = 264.dp
+            val barHeight = 56.dp
+            val left = with(density) {
+                (bounds.centerX().toDp() + 12.dp - barWidth / 2)
+                    .coerceIn(8.dp, (maxWidth - barWidth - 8.dp).coerceAtLeast(8.dp))
+            }
+            val top = with(density) {
+                (bounds.top.toDp() + statusBarHeight + 76.dp - barHeight - 8.dp)
+                    .coerceIn(8.dp, (maxHeight - barHeight - 8.dp).coerceAtLeast(8.dp))
+            }
+            Surface(
+                modifier = Modifier.offset(left, top),
+                shape = RoundedCornerShape(18.dp),
+                color = MaterialTheme.colorScheme.surfaceContainer,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                shadowElevation = 4.dp,
+            ) {
+                Row(
+                    Modifier.width(barWidth).height(barHeight).padding(horizontal = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    SelectionAction(Icons.Outlined.ControlPointDuplicate, "Duplicate", Modifier.weight(1f)) {
+                        surface?.duplicateSelection()
+                    }
+                    SelectionAction(Icons.Outlined.ContentCopy, "Copy", Modifier.weight(1f)) {
+                        surface?.copySelection()
+                        clipboardHasContent = !SelectionClipboard.isEmpty
+                    }
+                    SelectionAction(Icons.Outlined.Palette, "Recolour", Modifier.weight(1f)) {
+                        recolorSelectionMode = true
+                        colorPop = true
+                    }
+                    SelectionAction(
+                        Icons.Default.DeleteOutline,
+                        "Delete",
+                        Modifier.weight(1f),
+                        MaterialTheme.colorScheme.error,
+                    ) {
+                        surface?.deleteSelection()
+                    }
                 }
             }
         }
@@ -701,6 +758,24 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
             scope.launch { repo.updateTextBlock(b.id, b.pageId, content = content) }
             editingBlock = null
         }
+    }
+}
+
+@Composable
+private fun SelectionAction(
+    icon: ImageVector,
+    label: String,
+    modifier: Modifier = Modifier,
+    tint: Color = MaterialTheme.colorScheme.onSurface,
+    onClick: () -> Unit,
+) {
+    Column(
+        modifier.fillMaxHeight().clip(RoundedCornerShape(10.dp)).clickable(onClick = onClick),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(20.dp))
+        Text(label, style = MaterialTheme.typography.labelSmall, color = tint, maxLines = 1)
     }
 }
 
