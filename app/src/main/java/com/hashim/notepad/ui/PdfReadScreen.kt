@@ -61,6 +61,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -284,7 +285,6 @@ fun PdfReadScreen(
         val tabletWidth = maxWidth >= 840.dp
         val dockedSidebar = maxWidth >= 840.dp && sidebarOpen
         val sidebarWidth = if (dockedSidebar) 300.dp else 0.dp
-        val toolbarTitleWidth = (maxWidth - sidebarWidth - 304.dp).coerceIn(96.dp, 400.dp)
         val pageWidth = maxWidth - sidebarWidth - 32.dp
         val density = LocalDensity.current
         val pagePaper = if (MaterialTheme.colorScheme.background.luminance() < 0.5f) Color(0xFF202024) else Color.White
@@ -637,7 +637,7 @@ fun PdfReadScreen(
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back", tint = MaterialTheme.colorScheme.onSurface)
                     }
-                    Column(Modifier.width(toolbarTitleWidth).padding(end = 8.dp)) {
+                    Column(Modifier.weight(1f).padding(end = 8.dp)) {
                         Text(
                             notebook?.title.orEmpty(),
                             Modifier.fillMaxWidth(),
@@ -654,7 +654,6 @@ fun PdfReadScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    Spacer(Modifier.weight(1f))
                     val statusLabel = when {
                         ocrWorkInfo != null -> "Recognizing $ocrProgress/$ocrTotal"
                         modelWorkInfo != null -> "Downloading model"
@@ -799,8 +798,8 @@ fun PdfReadScreen(
                             )
                         }
                     }
-                    Box(Modifier.fillMaxWidth().height(1.dp).background(MaterialTheme.colorScheme.outlineVariant))
                 }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             }
         }
         }
