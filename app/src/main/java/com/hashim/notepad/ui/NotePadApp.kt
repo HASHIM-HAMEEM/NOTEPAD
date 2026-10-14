@@ -4,11 +4,11 @@ import android.net.Uri
 import android.widget.Toast
 import com.hashim.notepad.InboundShare
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.togetherWith
+import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionLayout
 import androidx.compose.animation.SharedTransitionScope
-import androidx.compose.animation.AnimatedVisibilityScope
+import androidx.compose.animation.togetherWith
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.platform.LocalContext
@@ -128,7 +128,7 @@ fun NotePadApp(
         val showNavigationRail = maxWidth >= 840.dp && screen !is Screen.Editor
         val screenContent: @Composable () -> Unit = {
             SharedTransitionLayout {
-            val sharedScope = this
+                val sharedScope = this
             androidx.compose.animation.AnimatedContent(
                 targetState = screen,
                 contentKey = ::screenContentKey,

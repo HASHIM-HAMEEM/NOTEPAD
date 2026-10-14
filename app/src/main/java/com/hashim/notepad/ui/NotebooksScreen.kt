@@ -928,15 +928,23 @@ private fun SubjectSpineColumn(
             SubjectSpine(folder.name, counts[folder.id] ?: 0, selectedFolderId == folder.id, color, { onSelect(folder.id) }, { onLongPress(folder) })
         }
         Spacer(Modifier.height(6.dp))
-        SubjectSpine("+ New subject", null, false, MaterialTheme.colorScheme.surfaceContainerHigh, onAdd)
+        SubjectSpine("New", null, false, MaterialTheme.colorScheme.surfaceContainerHigh, onAdd, showPlus = true)
     }
 }
 
 @Composable
-private fun SubjectSpine(label: String, count: Int?, selected: Boolean, color: Color, onClick: () -> Unit, onLongPress: (() -> Unit)? = null) {
+private fun SubjectSpine(
+    label: String,
+    count: Int?,
+    selected: Boolean,
+    color: Color,
+    onClick: () -> Unit,
+    onLongPress: (() -> Unit)? = null,
+    showPlus: Boolean = false,
+) {
     val offset by animateDpAsState(if (selected) 6.dp else 0.dp, spring(dampingRatio = 0.72f, stiffness = 520f), label = "subject-spine")
     val shape = RoundedCornerShape(16.dp)
-    val base = if (selected || label.startsWith("+")) color else color.copy(alpha = 0.35f)
+    val base = if (selected || showPlus) color else color.copy(alpha = 0.35f)
     val foreground = if (selected) {
         if (android.graphics.Color.luminance(color.toArgb()) < 0.55f) Color.White else Color(0xFF282622)
     } else MaterialTheme.colorScheme.onSurface
@@ -951,16 +959,28 @@ private fun SubjectSpine(label: String, count: Int?, selected: Boolean, color: C
             .combinedClickable(onClick = onClick, onLongClick = onLongPress),
         contentAlignment = Alignment.Center,
     ) {
-        Text(
-            label,
-            Modifier.width(124.dp).rotate(-90f),
-            style = MaterialTheme.typography.titleSmall.copy(fontFamily = FontFamily.Serif),
-            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-            color = foreground,
-            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
+        if (showPlus) {
+            Row(
+                Modifier.width(112.dp).rotate(-90f),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Default.Add, null, Modifier.size(18.dp), tint = foreground)
+                Spacer(Modifier.width(3.dp))
+                Text(label, style = MaterialTheme.typography.titleSmall.copy(fontFamily = FontFamily.Serif), fontWeight = FontWeight.Medium, color = foreground, maxLines = 1)
+            }
+        } else {
+            Text(
+                label,
+                Modifier.width(124.dp).rotate(-90f),
+                style = MaterialTheme.typography.titleSmall.copy(fontFamily = FontFamily.Serif),
+                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                color = foreground,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
         if (count != null) Text("$count", Modifier.align(Alignment.BottomCenter).padding(bottom = 9.dp), style = MaterialTheme.typography.labelSmall, color = foreground.copy(alpha = 0.84f))
         Canvas(Modifier.fillMaxSize()) {
             val x = 1.dp.toPx()
@@ -1119,15 +1139,19 @@ private fun subjectColor(notebook: Notebook, folders: List<Folder>): Color {
 
 @Composable
 private fun FileCover(notebook: Notebook, modifier: Modifier = Modifier) {
-    Box(modifier.background(Color(0xFFF6F3EB))) {
-        Text(notebook.originalFilename ?: notebook.title, Modifier.fillMaxWidth().padding(18.dp), style = MaterialTheme.typography.titleSmall, maxLines = 4, overflow = TextOverflow.Ellipsis)
-        Surface(Modifier.align(Alignment.Center).padding(top = 12.dp), color = MaterialTheme.colorScheme.primaryContainer, shape = RoundedCornerShape(18.dp)) {
+    val coverColor = MaterialTheme.colorScheme.surfaceContainerHigh
+    val titleColor = accessibleTextColor(coverColor, MaterialTheme.colorScheme.onSurface)
+    val badgeColor = MaterialTheme.colorScheme.primaryContainer
+    val badgeTextColor = accessibleTextColor(badgeColor, MaterialTheme.colorScheme.onPrimaryContainer)
+    Box(modifier.background(coverColor)) {
+        Text(notebook.originalFilename ?: notebook.title, Modifier.fillMaxWidth().padding(18.dp), style = MaterialTheme.typography.titleSmall, color = titleColor, maxLines = 4, overflow = TextOverflow.Ellipsis)
+        Surface(Modifier.align(Alignment.Center).padding(top = 12.dp), color = badgeColor, shape = RoundedCornerShape(18.dp)) {
             Text(
                 fileTypeBadge(notebook.fileMimeType, notebook.originalFilename),
                 Modifier.padding(horizontal = 18.dp, vertical = 12.dp),
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                color = badgeTextColor,
             )
         }
     }
