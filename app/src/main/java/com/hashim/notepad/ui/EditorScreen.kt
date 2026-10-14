@@ -898,7 +898,7 @@ fun EditorScreen(
         val tabletWidth = maxWidth >= 840.dp
         val density = androidx.compose.ui.platform.LocalDensity.current
         val verticalToolbar = toolbarEdge == EditorToolbarEdge.START || toolbarEdge == EditorToolbarEdge.END
-        val narrowToolbar = maxWidth < 600.dp
+        val narrowToolbar = maxWidth < 1024.dp
         val toolbarWidth = when {
             verticalToolbar -> 76.dp
             narrowToolbar -> (maxWidth - 24.dp).coerceAtLeast(0.dp)
@@ -915,7 +915,7 @@ fun EditorScreen(
         val navigationBarPx = with(density) { navigationBarHeight.roundToPx() }
         val toolbarGapPx = with(density) { 12.dp.roundToPx() }
         val safeTopPx = statusBarPx + toolbarGapPx
-        val topToolbarClearance = if (narrowToolbar && !verticalToolbar) 48.dp else sideToolbarClearance
+        val topToolbarClearance = if (narrowToolbar && !verticalToolbar) 88.dp else sideToolbarClearance
         val dockSafeTopPx = safeTopPx + with(density) { topToolbarClearance.roundToPx() }
 
         fun dockedToolbarPosition(edge: EditorToolbarEdge, size: IntSize): IntOffset {

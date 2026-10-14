@@ -170,7 +170,7 @@ fun SplitViewScreen(
                 )
             }
         } else {
-            Row(Modifier.fillMaxSize().onSizeChanged { containerSize = it }) {
+            Row(Modifier.fillMaxSize().statusBarsPadding().onSizeChanged { containerSize = it }) {
                 SplitDocumentPane(
                     repo = repo,
                     notebookId = leftNotebook.id,

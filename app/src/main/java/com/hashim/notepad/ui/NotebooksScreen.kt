@@ -1011,13 +1011,14 @@ internal fun LibrarySidebar(
     val selectedLibrary = screen == Screen.Notebooks || screen is Screen.Pages || screen is Screen.Read
 
     Column(
-        Modifier.width(264.dp).fillMaxHeight().background(MaterialTheme.colorScheme.surfaceContainerLow)
-            .padding(horizontal = 12.dp, vertical = 16.dp),
+        Modifier.width(264.dp).fillMaxHeight().background(MaterialTheme.colorScheme.surfaceContainer)
+            .statusBarsPadding().padding(start = 12.dp, end = 12.dp, bottom = 16.dp),
     ) {
         Text(
             "NotePad",
-            Modifier.padding(horizontal = 12.dp, vertical = 12.dp),
+            Modifier.padding(horizontal = 12.dp).padding(top = 16.dp, bottom = 12.dp),
             style = MaterialTheme.typography.titleLarge.copy(fontFamily = FontFamily.Serif, fontWeight = FontWeight.SemiBold),
+            color = MaterialTheme.colorScheme.onSurface,
         )
         Spacer(Modifier.height(8.dp))
         SidebarDestination("Library", Icons.Outlined.Book, selectedLibrary) { onNavigate(Screen.Notebooks) }
@@ -1053,7 +1054,7 @@ internal fun LibrarySidebar(
                     onLongClick = { folderActionsFor = folder },
                 )
             }
-            SidebarActionRow(Icons.Default.Add, "+ New subject") { showCreateFolder = true }
+            SidebarActionRow(Icons.Default.Add, "New subject") { showCreateFolder = true }
         }
         Spacer(Modifier.height(8.dp))
         SidebarActionRow(Icons.Outlined.Palette, "Appearance") { showAppearance = true }
@@ -1158,12 +1159,14 @@ private fun SidebarFolderRow(
             .padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (dotColor != null) {
-            Box(Modifier.size(10.dp).clip(CircleShape).background(dotColor))
-            Spacer(Modifier.width(12.dp))
-        } else {
-            Spacer(Modifier.width(22.dp))
+        Box(Modifier.size(24.dp), contentAlignment = Alignment.Center) {
+            Box(
+                Modifier.size(if (dotColor == null) 8.dp else 10.dp)
+                    .clip(CircleShape)
+                    .background(dotColor ?: MaterialTheme.colorScheme.onSurfaceVariant),
+            )
         }
+        Spacer(Modifier.width(12.dp))
         Text(
             name,
             Modifier.weight(1f),
