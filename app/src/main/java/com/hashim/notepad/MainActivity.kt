@@ -29,6 +29,7 @@ data class InboundShare(val uris: List<Uri>, val mimeType: String?)
 class MainActivity : ComponentActivity() {
     private val launchUri = mutableStateOf<Uri?>(null)
     private val launchShare = mutableStateOf<InboundShare?>(null)
+    private var shareHandled = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -58,7 +59,13 @@ class MainActivity : ComponentActivity() {
             return
         }
         launchUri.value = intent?.data?.takeIf { intent.action == Intent.ACTION_VIEW }
-        launchShare.value = shareFrom(intent)
+        shareHandled = savedInstanceState?.getBoolean(SHARE_HANDLED_KEY) == true
+        val incomingShare = if (shareHandled) null else shareFrom(intent)
+        launchShare.value = incomingShare
+        if (incomingShare != null) {
+            shareHandled = true
+            setIntent(Intent())
+        }
         setContent {
             var mode by remember { mutableStateOf(Settings.themeMode(this)) }
             var dynamic by remember { mutableStateOf(Settings.useDynamicColor(this)) }
@@ -78,7 +85,17 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         launchUri.value = intent.data?.takeIf { intent.action == Intent.ACTION_VIEW }
-        launchShare.value = shareFrom(intent)
+        val incomingShare = shareFrom(intent)
+        launchShare.value = incomingShare
+        if (incomingShare != null) {
+            shareHandled = true
+            setIntent(Intent())
+        }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putBoolean(SHARE_HANDLED_KEY, shareHandled)
+        super.onSaveInstanceState(outState)
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
@@ -113,5 +130,9 @@ class MainActivity : ComponentActivity() {
             }
         }.distinct()
         return uris.takeIf { it.isNotEmpty() }?.let { InboundShare(it, intent.type) }
+    }
+
+    private companion object {
+        const val SHARE_HANDLED_KEY = "inbound_share_handled"
     }
 }

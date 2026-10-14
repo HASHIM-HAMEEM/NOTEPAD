@@ -238,7 +238,7 @@ fun PdfReadScreen(
                         prefetch.forEach { index ->
                             val page = pages[index]
                             val displayWidth = if (fitPage) minOf(pageWidth, maxHeight * page.displayWidthPt / page.displayHeightPt) else pageWidth
-                            val widthPx = with(density) { (displayWidth * 0.4f).roundToPx() }
+                            val widthPx = with(density) { (displayWidth * 0.25f).roundToPx() }
                             precomposeReadPage(context, repo, page, widthPx, pagePaper, bookmarkColor)
                         }
                         visible.forEach { index ->
@@ -371,26 +371,16 @@ fun PdfReadScreen(
                             }
                         },
                 ) {
+                    val renderScale = if (index in settledPages) zoom else 0.25f
                     PagePreview(
                         repo = repo,
                         page = page,
                         paperColor = pagePaper,
                         renderEnabled = true,
-                        renderScale = 0.4f,
+                        renderScale = renderScale,
                         precomposedOnly = true,
                         modifier = Modifier.fillMaxSize(),
                     )
-                    if (index in settledPages) {
-                        PagePreview(
-                            repo = repo,
-                            page = page,
-                            paperColor = pagePaper,
-                            renderEnabled = true,
-                            renderScale = zoom,
-                            precomposedOnly = true,
-                            modifier = Modifier.fillMaxSize(),
-                        )
-                    }
                     currentHit?.takeIf { it.pageId == page.id }?.let { hit ->
                         Canvas(Modifier.fillMaxSize()) {
                             hit.rects.forEach { rect ->
@@ -550,7 +540,14 @@ fun PdfReadScreen(
                         noteDraft = selected.mark?.note.orEmpty()
                         noteDialog = true
                     }) { Text("Note") }
-                    TextButton(onClick = { clipboard.setText(AnnotatedString(selected.text)); selection = null }) { Text("Copy") }
+                    TextButton(onClick = {
+                        clipboard.setText(
+                            AnnotatedString(
+                                java.text.Normalizer.normalize(selected.text, java.text.Normalizer.Form.NFC),
+                            ),
+                        )
+                        selection = null
+                    }) { Text("Copy") }
                     TextButton(onClick = {
                         searchQuery = selected.text
                         sidebarOpen = true

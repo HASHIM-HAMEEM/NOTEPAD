@@ -4,6 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.text.BreakIterator
+import java.text.Normalizer
 import java.util.Locale
 
 class PdfTextSearchTest {
@@ -37,8 +38,8 @@ class PdfTextSearchTest {
                 else -> 140f
             }
             val x = when (index) {
-                37, 38, 39 -> 20f
-                40 -> 10f
+                37, 38 -> 20f
+                39, 40 -> 10f
                 41 -> 0f
                 63, 64 -> 30f
                 else -> (index % 8) * 12f
@@ -51,10 +52,16 @@ class PdfTextSearchTest {
 
         assertEquals(first.matchStart, second.matchStart)
         assertEquals(first.matchEnd, second.matchEnd)
-        assertEquals("لُغٌَة", layer.text.substring(first.matchStart, first.matchEnd))
+        assertEquals("لُغَةٌ", layer.text.substring(first.matchStart, first.matchEnd))
         assertEquals(listOf(37, 38, 39, 40, 63, 64), first.sourceIndices.sorted())
         assertEquals(1, first.rects.size)
         assertEquals(PdfTextRect(10f, 60f, 38f, 70f), first.rects.single())
+        val selection = PdfWordSnap.wordRange(layer.text, first.matchStart, Locale("ar"))!!
+        val copied = Normalizer.normalize(
+            layer.text.substring(selection.start, selection.end),
+            Normalizer.Form.NFC,
+        )
+        assertEquals("لُغَةٌ", copied)
     }
 
     @Test fun rtlSnippetsPreserveWordAndGraphemeBoundaries() {

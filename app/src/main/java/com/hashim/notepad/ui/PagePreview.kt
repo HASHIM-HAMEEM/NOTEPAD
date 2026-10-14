@@ -10,7 +10,9 @@ import android.graphics.PorterDuffColorFilter
 import android.os.Build
 import android.util.LruCache
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -22,10 +24,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.ContentScale
 import androidx.ink.rendering.android.canvas.CanvasStrokeRenderer
 import androidx.ink.strokes.Stroke
 import com.hashim.notepad.data.NotePadRepository
@@ -275,7 +280,21 @@ fun PagePreview(
     }
 
     val ruling = lineColor ?: if (paperColor.luminance() < 0.5f) Color(0xFF3A3A40) else Color(0xFFCDD1D8)
-    Canvas(modifier.onSizeChanged { if (it.width > 0) targetWidthPx = it.width }.background(paperColor)) {
+    val measuredModifier = modifier.onSizeChanged { if (it.width > 0) targetWidthPx = it.width }
+    if (precomposedOnly && page?.rotation == 0) {
+        val previewBitmap = compositeBitmap ?: bitmap
+        if (previewBitmap != null) {
+            Image(
+                bitmap = previewBitmap.asImageBitmap(),
+                contentDescription = null,
+                modifier = measuredModifier,
+                contentScale = ContentScale.FillBounds,
+                filterQuality = FilterQuality.Low,
+            )
+        } else {
+            Box(measuredModifier.background(paperColor))
+        }
+    } else Canvas(measuredModifier.background(paperColor)) {
         val p = page ?: return@Canvas
         val rotation = (p.rotation % 360 + 360) % 360
         val crop = if (rotation == 0) contentBounds?.let { fitCropToAspect(it, p.widthPt, p.heightPt, size.width / size.height) } else null
@@ -358,7 +377,7 @@ private fun renderPreviewComposite(
     bookmarkArgb: Int,
 ): Bitmap {
     val height = (width * page.heightPt / page.widthPt).roundToInt().coerceAtLeast(1)
-    return Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).also { bitmap ->
+    return Bitmap.createBitmap(width, height, Bitmap.Config.RGB_565).also { bitmap ->
         val canvas = android.graphics.Canvas(bitmap)
         val scale = width / page.widthPt
         canvas.save()

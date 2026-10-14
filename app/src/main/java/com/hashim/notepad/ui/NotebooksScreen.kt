@@ -220,6 +220,7 @@ fun NotebooksScreen(
     LaunchedEffect(selectedFolderId) { libraryPrefs.edit().putString("library_folder", selectedFolderId).apply() }
     LaunchedEffect(sharedImportKey) {
         if (sharedImportKey.isNotEmpty() && sharedImportKey != handledSharedImportKey) {
+            handledSharedImportKey = sharedImportKey
             requestImportDetails(sharedItems)
         }
     }
@@ -539,6 +540,7 @@ fun NotebooksScreen(
             onClick = {
                 val folder = sharedFolderId
                 val itemsToSave = saveItems
+                if (sharedImportKey.isNotEmpty()) handledSharedImportKey = sharedImportKey
                 showSaveShared = false
                 pendingImportUris = emptyList()
                 importJob = scope.launch {
@@ -827,8 +829,9 @@ private fun LibraryHeader(
     onFolderLongPress: (Folder) -> Unit,
 ) {
     var sortExpanded by remember { mutableStateOf(false) }
+    val phoneLayout = compact || androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 600
     Column(Modifier.statusBarsPadding().padding(top = 12.dp, bottom = 4.dp)) {
-        if (compact) {
+        if (phoneLayout) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f).padding(end = 8.dp)) {
                     Text("Library", style = MaterialTheme.typography.headlineSmall.copy(fontFamily = FontFamily.Serif))
@@ -852,7 +855,7 @@ private fun LibraryHeader(
             Column(Modifier.padding(end = 16.dp)) {
                 Text(
                     "Library",
-                    style = (if (compact) MaterialTheme.typography.headlineSmall else MaterialTheme.typography.headlineLarge)
+                    style = (if (phoneLayout) MaterialTheme.typography.headlineSmall else MaterialTheme.typography.headlineLarge)
                         .copy(fontFamily = FontFamily.Serif),
                 )
                 Text(if (importing) "Importing…" else "$count items", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -936,7 +939,7 @@ private fun LibrarySearchButton(onClick: () -> Unit, modifier: Modifier = Modifi
         onClick = onClick,
         shape = RoundedCornerShape(18.dp),
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        modifier = modifier.height(46.dp),
+        modifier = modifier.heightIn(min = 48.dp),
     ) {
         Row(Modifier.padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Outlined.Search, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
