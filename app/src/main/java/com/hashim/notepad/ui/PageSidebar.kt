@@ -357,7 +357,7 @@ internal fun PageSidebar(
                 }
             }
             5 -> {
-                if (audioRecordings.isEmpty()) {
+                if (audioRecordings.isEmpty() && deletedAudio == null) {
                     EmptySidebar("No recordings yet")
                 } else {
                     Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -370,8 +370,13 @@ internal fun PageSidebar(
                                 }) { Text("Undo") }
                             }
                         }
-                        LazyColumn(Modifier.fillMaxSize()) {
-                            items(audioRecordings, key = { "audio:${it.id}" }) { recording ->
+                        if (audioRecordings.isEmpty()) {
+                            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                                Text("No recordings yet", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        } else {
+                            LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
+                                items(audioRecordings, key = { "audio:${it.id}" }) { recording ->
                                 Column(
                                     Modifier.fillMaxWidth().clickable { onAudioRecordingSelected(recording.id) }
                                         .padding(vertical = 6.dp),
@@ -410,6 +415,7 @@ internal fun PageSidebar(
                                     }
                                 }
                                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                                }
                             }
                         }
                     }
