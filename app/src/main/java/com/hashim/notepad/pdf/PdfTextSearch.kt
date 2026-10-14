@@ -37,9 +37,23 @@ internal object PdfSearchResultKey {
 }
 
 object PdfTextCache {
+    const val GEOMETRY_CACHE_VERSION = 2
+
     private val memory = object : LruCache<String, PdfGeometryTextLayer>(16 * 1024) {
         override fun sizeOf(key: String, value: PdfGeometryTextLayer): Int =
             ((value.text.length * 2L + value.characters.size * 64L) / 1024L).toInt().coerceAtLeast(1)
+    }
+    private var initializedCacheRoot: String? = null
+
+    internal fun memoryCacheKey(assetId: String, pageIndex: Int): String =
+        "v$GEOMETRY_CACHE_VERSION:$assetId:$pageIndex"
+
+    fun clearStaleCacheVersions(context: Context) {
+        synchronized(memory) {
+            deleteStaleCacheVersions(context)
+            memory.evictAll()
+            initializedCacheRoot = File(context.cacheDir, "pdf-text").absolutePath
+        }
     }
 
     fun getOrLoad(
@@ -48,11 +62,15 @@ object PdfTextCache {
         pageIndex: Int,
         load: () -> PdfGeometryTextLayer,
     ): PdfGeometryTextLayer {
-        val key = "$assetId:$pageIndex"
-        synchronized(memory) { memory.get(key)?.let { return it } }
+        val key = memoryCacheKey(assetId, pageIndex)
+        synchronized(memory) {
+            ensureCurrentCacheVersion(context)
+            memory.get(key)?.let { return it }
+        }
         val digest = MessageDigest.getInstance("SHA-256").digest(assetId.toByteArray())
             .joinToString("") { "%02x".format(it) }
-        val file = File(File(context.cacheDir, "pdf-text/$digest"), "$pageIndex.gtext")
+        val versionRoot = File(File(context.cacheDir, "pdf-text"), "v$GEOMETRY_CACHE_VERSION")
+        val file = File(File(versionRoot, digest), "$pageIndex.gtext")
         val cached = if (file.isFile) runCatching { readLayer(file) }.getOrNull() else null
         val layer = cached ?: load()
         if (cached == null) {
@@ -65,6 +83,20 @@ object PdfTextCache {
         }
         synchronized(memory) { memory.put(key, layer) }
         return layer
+    }
+
+    private fun ensureCurrentCacheVersion(context: Context) {
+        val root = File(context.cacheDir, "pdf-text")
+        if (initializedCacheRoot != root.absolutePath) {
+            deleteStaleCacheVersions(context)
+            memory.evictAll()
+            initializedCacheRoot = root.absolutePath
+        }
+    }
+
+    private fun deleteStaleCacheVersions(context: Context) {
+        val root = File(context.cacheDir, "pdf-text")
+        root.listFiles()?.filter { it.name != "v$GEOMETRY_CACHE_VERSION" }?.forEach { it.deleteRecursively() }
     }
 
     private fun writeLayer(file: File, layer: PdfGeometryTextLayer) {

@@ -3,6 +3,10 @@ package com.hashim.notepad.export
 import android.graphics.Color as AndroidColor
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import com.hashim.notepad.data.Asset
+import com.hashim.notepad.data.NotePadRepository
+import com.hashim.notepad.data.PdfMark
+import com.hashim.notepad.data.PdfMarkKind
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import com.tom_roush.pdfbox.pdmodel.PDDocument
 import com.tom_roush.pdfbox.pdmodel.PDPage
@@ -13,7 +17,10 @@ import com.tom_roush.pdfbox.pdmodel.graphics.color.PDDeviceRGB
 import com.tom_roush.pdfbox.pdmodel.interactive.annotation.PDAnnotationTextMarkup
 import com.tom_roush.pdfbox.text.PDFTextStripper
 import com.hashim.notepad.pdf.PdfPageSource
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
 import java.io.File
+import java.util.UUID
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -110,5 +117,64 @@ class PdfBoxTextExportInstrumentedTest {
             AndroidColor.red(pixel) > AndroidColor.blue(pixel) + 20 &&
                 AndroidColor.green(pixel) > AndroidColor.blue(pixel) + 20,
         )
+    }
+
+    @Test
+    fun exporterKeepsHighlightOnPreviouslyImportedArabicPdf() {
+        runBlocking {
+            val instrumentation = InstrumentationRegistry.getInstrumentation()
+            val context = instrumentation.targetContext
+            PDFBoxResourceLoader.init(context)
+            val databaseName = "legacy-arabic-export-test.db"
+            context.deleteDatabase(databaseName)
+            val source = File(context.cacheDir, "arabic-legacy-import.pdf")
+            instrumentation.context.assets.open("arabic-legacy.pdf").use { input ->
+                source.outputStream().use(input::copyTo)
+            }
+            val repo = NotePadRepository(context, databaseName)
+            try {
+                val pageSizes = PdfPageSource(context, source).use { it.pageSizesPt() }
+                val asset = Asset(
+                    id = UUID.randomUUID().toString(),
+                    kind = "pdf",
+                    localPath = source.absolutePath,
+                    byteSize = source.length(),
+                    sha256 = "legacy-arabic-fixture",
+                    pageCount = pageSizes.size,
+                    name = "arabic.pdf",
+                )
+                val notebookId = repo.createPdfNotebook("Legacy Arabic", asset, pageSizes, null)
+                val page = repo.pages(notebookId).first().first()
+                val right = (page.widthPt - 30f).coerceAtMost(300f)
+                val top = page.heightPt - 50f
+                repo.savePdfMark(
+                    PdfMark(
+                        id = UUID.randomUUID().toString(),
+                        notebookId = notebookId,
+                        pageId = page.id,
+                        kind = PdfMarkKind.HIGHLIGHT,
+                        colorArgb = 0x80FFEB3B.toInt(),
+                        quads = listOf(30f, top, right, top, 30f, top - 20f, right, top - 20f),
+                        charStart = 0,
+                        charEnd = 5,
+                        text = "العربية",
+                        note = null,
+                        createdAt = System.currentTimeMillis(),
+                        updatedAt = System.currentTimeMillis(),
+                    ),
+                )
+                val exportedFile = PdfExporter(context, repo).exportNotebook(notebookId, "legacy-arabic-export")
+                PDDocument.load(exportedFile).use { exported ->
+                    val annotation = exported.getPage(0).annotations.single()
+                    assertTrue(annotation.isPrinted())
+                    assertNotNull(annotation.normalAppearanceStream)
+                }
+            } finally {
+                repo.helper.close()
+                context.deleteDatabase(databaseName)
+                source.delete()
+                File(context.cacheDir, "exports/legacy-arabic-export.pdf").delete()
+            }
+        }
     }
 }

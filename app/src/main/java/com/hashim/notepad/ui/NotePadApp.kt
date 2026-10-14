@@ -109,6 +109,7 @@ fun NotePadApp(
 
     LaunchedEffect(repo) {
         withContext(Dispatchers.IO) {
+            com.hashim.notepad.pdf.PdfTextCache.clearStaleCacheVersions(context)
             val referenced = repo.helper.readableDatabase.rawQuery("select local_path from assets", null).use { cursor ->
                 buildSet { while (cursor.moveToNext()) add(cursor.getString(0)) }
             }
