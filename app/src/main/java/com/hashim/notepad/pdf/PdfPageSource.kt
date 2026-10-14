@@ -2,6 +2,7 @@ package com.hashim.notepad.pdf
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.RectF
 import android.os.ParcelFileDescriptor
 import io.legere.pdfiumandroid.PdfDocument
 import io.legere.pdfiumandroid.PdfiumCore
@@ -60,6 +61,36 @@ class PdfPageSource(context: Context, file: File, password: String? = null) : Cl
                 }
             }
         }
+    }
+
+    fun textLineRects(pageIndex: Int, start: Int, end: Int): List<PdfTextRect> = synchronized(pdfiumLock) {
+        val page = document.openPage(pageIndex) ?: return@synchronized emptyList()
+        page.use { pg ->
+            pg.openTextPage().use { textPage ->
+                val boxes = (start until end).mapNotNull { index ->
+                    if (index !in 0 until textPage.textPageCountChars()) return@mapNotNull null
+                    textPage.textPageGetCharBox(index)?.takeUnless { it.isEmpty }
+                }.sortedWith(compareBy<RectF> { it.centerY() }.thenBy { it.left })
+                val lines = ArrayList<RectF>()
+                boxes.forEach { box ->
+                    val line = lines.lastOrNull()
+                    if (line != null && kotlin.math.abs(line.centerY() - box.centerY()) <= 3f) {
+                        line.union(box)
+                    } else {
+                        lines += RectF(box)
+                    }
+                }
+                lines.map { PdfTextRect(it.left, it.top, it.right, it.bottom) }
+            }
+        }
+    }
+
+    fun tableOfContents(): List<PdfOutlineItem> = synchronized(pdfiumLock) {
+        fun convert(items: List<io.legere.pdfiumandroid.api.Bookmark>): List<PdfOutlineItem> =
+            items.map { bookmark ->
+                PdfOutlineItem(bookmark.title.orEmpty(), bookmark.pageIdx.toInt(), convert(bookmark.children))
+            }
+        convert(document.getTableOfContents())
     }
 
     override fun close() = synchronized(pdfiumLock) {

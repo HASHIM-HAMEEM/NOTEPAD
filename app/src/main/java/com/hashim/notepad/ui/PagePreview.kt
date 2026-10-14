@@ -31,10 +31,12 @@ import com.hashim.notepad.data.NotePadRepository
 import com.hashim.notepad.data.Page
 import com.hashim.notepad.data.PageImage
 import com.hashim.notepad.data.PageKind
+import com.hashim.notepad.data.TextBlock
 import com.hashim.notepad.ink.InkTextures
 import com.hashim.notepad.ink.PaperTexture
 import com.hashim.notepad.ink.PageTemplateRenderer
 import com.hashim.notepad.ink.StrokeStore
+import com.hashim.notepad.ink.TextBlockPainter
 import com.hashim.notepad.ink.drawStrokes
 import com.hashim.notepad.pdf.PdfInvert
 import com.hashim.notepad.pdf.PdfPageSource
@@ -49,7 +51,9 @@ import kotlin.math.roundToInt
 
 /** Small memory caches front the persistent WebP cache used by library covers. */
 private object PreviewCache {
-    val bitmaps = LruCache<String, Bitmap>(24)
+    val bitmaps = object : LruCache<String, Bitmap>((Runtime.getRuntime().maxMemory() / 8 / 1024).toInt().coerceAtLeast(1)) {
+        override fun sizeOf(key: String, value: Bitmap): Int = (value.allocationByteCount / 1024).coerceAtLeast(1)
+    }
     val strokes = LruCache<String, List<Stroke>>(64)
     val renderer: CanvasStrokeRenderer by lazy { CanvasStrokeRenderer.create(InkTextures.textureStore) }
 }
@@ -68,22 +72,28 @@ fun PagePreview(
     renderEnabled: Boolean = true,
     cropScale: Float = 1f,
     cropToContent: Boolean = false,
+    renderScale: Float = 1f,
 ) {
     val context = LocalContext.current
     var targetWidthPx by remember { mutableIntStateOf(0) }
-    val renderWidth = (targetWidthPx * cropScale.coerceAtLeast(1f)).roundToInt().coerceIn(420, 1800)
+    val renderWidth = (targetWidthPx * cropScale.coerceAtLeast(1f) * renderScale.coerceIn(0.2f, 4f)).roundToInt().coerceIn(420, 1800)
     val bitmapKey = page?.takeIf { it.kind == PageKind.PDF && it.assetId != null }?.let {
         "${it.assetId}:${it.pdfPageIndex ?: 0}:$renderWidth"
     }
-    var bitmap by remember(bitmapKey) { mutableStateOf<Bitmap?>(bitmapKey?.let { PreviewCache.bitmaps.get(it) }) }
+    var bitmap by remember(page?.id, page?.pdfPageIndex) { mutableStateOf<Bitmap?>(bitmapKey?.let { PreviewCache.bitmaps.get(it) }) }
     val cropStartFraction = remember(bitmap, cropScale, cropToContent) {
         if (cropToContent) 0f else bitmap?.let { focusCropStartFraction(it, cropScale) } ?: 0f
     }
     var strokes by remember(page?.id, page?.updatedAt) { mutableStateOf<List<Stroke>>(page?.let { PreviewCache.strokes.get("${it.id}:${it.updatedAt}") } ?: emptyList()) }
     var pageImages by remember(page?.id, page?.updatedAt) { mutableStateOf(emptyList<PageImage>()) }
+    var textBlocks by remember(page?.id, page?.updatedAt) { mutableStateOf(emptyList<TextBlock>()) }
     var imageBitmaps by remember(page?.id, page?.updatedAt) { mutableStateOf(emptyMap<String, Bitmap>()) }
     val contentBounds = remember(page?.id, page?.updatedAt, bitmap, strokes, pageImages, cropToContent) {
         if (cropToContent && page != null) pageContentBounds(page, bitmap, strokes, pageImages) else null
+    }
+
+    LaunchedEffect(bitmapKey) {
+        bitmapKey?.let { PreviewCache.bitmaps.get(it) }?.let { bitmap = it }
     }
 
     LaunchedEffect(page?.id, page?.updatedAt, renderEnabled, renderWidth) {
@@ -103,6 +113,7 @@ fun PagePreview(
         }
         pageImages = imageRows
         imageBitmaps = decodedImages
+        textBlocks = repo.textBlocks(p.id).first()
         if (PreviewCache.strokes.get(key) == null) {
             val list = withContext(Dispatchers.Default) {
                 repo.loadStrokes(p.id)?.let { runCatching { StrokeStore.decode(it) }.getOrNull() } ?: emptyList()
@@ -189,6 +200,7 @@ fun PagePreview(
                 paperColor.toArgbInt(),
                 canvasHasPageTransform = true,
             )
+            textBlocks.forEach { TextBlockPainter.draw(n, it, false, paperColor.toArgbInt(), context) }
             if (p.bookmarked) {
                 val ribbonWidth = p.widthPt * 0.13f
                 val ribbonHeight = p.heightPt * 0.12f

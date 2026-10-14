@@ -43,13 +43,18 @@ import kotlinx.coroutines.withContext
 sealed interface Screen {
     data object Notebooks : Screen
     data class Pages(val notebookId: String) : Screen
-    data class Editor(val notebookId: String, val pageId: String) : Screen
+    data class Editor(val notebookId: String, val pageId: String, val returnToRead: Boolean = false) : Screen
+    data class Read(val notebookId: String, val pageId: String) : Screen
     data object Search : Screen
     data object Account : Screen
 }
 
 internal fun screenContentKey(screen: Screen): Any =
-    if (screen is Screen.Editor) "editor:${screen.notebookId}" else screen
+    when (screen) {
+        is Screen.Editor -> "editor:${screen.notebookId}"
+        is Screen.Read -> "read:${screen.notebookId}"
+        else -> screen
+    }
 
 @Composable
 @OptIn(ExperimentalSharedTransitionApi::class)
@@ -119,7 +124,8 @@ fun NotePadApp(
 
     BackHandler(enabled = screen != Screen.Notebooks) {
         screen = when (val s = screen) {
-            is Screen.Editor -> Screen.Pages(s.notebookId)
+            is Screen.Editor -> if (s.returnToRead) Screen.Read(s.notebookId, s.pageId) else Screen.Pages(s.notebookId)
+            is Screen.Read -> Screen.Notebooks
             else -> Screen.Notebooks
         }
     }
@@ -161,7 +167,10 @@ fun NotePadApp(
                         onContinueAtPosition = { notebookId, pageIndex ->
                             appScope.launch {
                                 val targetPage = repo.pages(notebookId).first().getOrNull(pageIndex)
-                                screen = targetPage?.let { Screen.Editor(notebookId, it.id) } ?: Screen.Pages(notebookId)
+                                screen = targetPage?.let {
+                                    if (it.kind == com.hashim.notepad.data.PageKind.PDF) Screen.Read(notebookId, it.id)
+                                    else Screen.Editor(notebookId, it.id)
+                                } ?: Screen.Pages(notebookId)
                             }
                         },
                         onSearch = { screen = Screen.Search }, onAccount = { screen = Screen.Account },
@@ -187,8 +196,25 @@ fun NotePadApp(
                         Box(sharedModifier.fillMaxSize()) {
                             EditorScreen(
                                 repo = repo, notebookId = s.notebookId, pageId = s.pageId, recognizer = recognizer,
-                                onBack = { screen = Screen.Pages(s.notebookId) },
-                                onNavigateToPage = { screen = Screen.Editor(s.notebookId, it) },
+                                onBack = { screen = if (s.returnToRead) Screen.Read(s.notebookId, s.pageId) else Screen.Pages(s.notebookId) },
+                                onNavigateToPage = { screen = Screen.Editor(s.notebookId, it, s.returnToRead) },
+                            )
+                        }
+                    }
+                    is Screen.Read -> {
+                        val sharedModifier = with(sharedScope) {
+                            Modifier.sharedElement(
+                                sharedContentState = rememberSharedContentState("notebook-cover-${s.notebookId}"),
+                                animatedVisibilityScope = visibilityScope,
+                            )
+                        }
+                        Box(sharedModifier.fillMaxSize()) {
+                            PdfReadScreen(
+                                repo = repo,
+                                notebookId = s.notebookId,
+                                startPageId = s.pageId,
+                                onBack = { screen = Screen.Notebooks },
+                                onWrite = { screen = Screen.Editor(s.notebookId, it, returnToRead = true) },
                             )
                         }
                     }
@@ -231,7 +257,7 @@ fun NotePadApp(
     }
 }
 
-private fun depth(s: Screen) = when (s) { Screen.Notebooks -> 0; Screen.Search, Screen.Account -> 1; is Screen.Pages -> 1; is Screen.Editor -> 2 }
+private fun depth(s: Screen) = when (s) { Screen.Notebooks -> 0; Screen.Search, Screen.Account -> 1; is Screen.Pages -> 1; is Screen.Editor, is Screen.Read -> 2 }
 
 private fun parseAuthCallback(fragment: String): Map<String, String> =
     fragment.split('&').mapNotNull { parameter ->

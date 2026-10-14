@@ -252,7 +252,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
             zoomRevealedTapes,
             canvasHasPageTransform = true,
         )
-        for (b in textBlocks) TextBlockPainter.draw(canvas, b, false, paperPaint.color)
+        for (b in textBlocks) TextBlockPainter.draw(canvas, b, false, paperPaint.color, context)
         canvas.restore()
         canvas.restore()
         canvas.drawLine(0f, stripTop, width.toFloat(), stripTop, stripBorderPaint)
@@ -452,7 +452,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
             }
             if (textBlocks.isNotEmpty()) {
                 canvas.save(); canvas.concat(pageToView)
-                for (b in textBlocks) TextBlockPainter.draw(canvas, b, b.id == selectedTextBlockId, paperPaint.color)
+                for (b in textBlocks) TextBlockPainter.draw(canvas, b, b.id == selectedTextBlockId, paperPaint.color, context)
                 canvas.restore()
             }
             canvas.restore()
@@ -505,8 +505,8 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         val detachedLayer = wetLayer
         wetLayerGeneration++
         runCatching { detachedLayer.cancelUnfinishedStrokes() }
-        runCatching { detachedLayer.flush(500, TimeUnit.MILLISECONDS, false) }
-        runCatching { detachedLayer.sync(500, TimeUnit.MILLISECONDS) }
+        runCatching { detachedLayer.flush(150, TimeUnit.MILLISECONDS, false) }
+        runCatching { detachedLayer.sync(150, TimeUnit.MILLISECONDS) }
         detachedLayer.clearFinishedStrokesListeners()
         replaceWetLayerOnAttach = true
         super.onDetachedFromWindow()
@@ -1634,7 +1634,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         if (brushSpec.tool == InkTool.TEXT) {
             if (event.actionMasked == MotionEvent.ACTION_UP) {
                 val pt = floatArrayOf(event.x, event.y); viewToPage.mapPoints(pt)
-                onTextTap?.invoke(pt[0], pt[1], textBlocks.lastOrNull { TextBlockPainter.hit(it, pt[0], pt[1]) })
+                onTextTap?.invoke(pt[0], pt[1], textBlocks.lastOrNull { TextBlockPainter.hit(it, pt[0], pt[1], context) })
             }
             return true
         }

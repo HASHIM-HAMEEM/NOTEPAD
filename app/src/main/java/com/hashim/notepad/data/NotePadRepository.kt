@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.withContext
+import com.hashim.notepad.search.TextNormalizer
 import java.util.UUID
 
 private data class StoredStrokeBatch(
@@ -563,22 +564,26 @@ class NotePadRepository(context: Context) {
     }
 
     suspend fun search(query: String): List<SearchHit> = withContext(Dispatchers.IO) {
-        val q = query.trim()
+        val q = TextNormalizer.normalize(query).text
         if (q.isEmpty()) return@withContext emptyList()
-        val like = "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
         helper.readableDatabase.rawQuery(
             """select r.page_id, p.notebook_id, n.title, r.text, r.source,
                       (select count(*) from pages p2 where p2.notebook_id = p.notebook_id and p2.sort_key <= p.sort_key and p2.deleted_at is null) as idx
                from recognition r join pages p on p.id = r.page_id join notebooks n on n.id = p.notebook_id
-               where p.deleted_at is null and n.deleted_at is null and r.text like ? escape '\'
-               order by n.updated_at desc limit 100""", arrayOf(like)
+               where p.deleted_at is null and n.deleted_at is null
+               order by n.updated_at desc limit 2000""", emptyArray()
         ).use { c ->
             buildList {
                 while (c.moveToNext()) {
                     val text = c.getString(3)
-                    val at = text.indexOf(q, ignoreCase = true).coerceAtLeast(0)
-                    val snippet = text.substring((at - 40).coerceAtLeast(0), (at + q.length + 60).coerceAtMost(text.length)).replace('\n', ' ')
-                    add(SearchHit(c.getString(0), c.getString(1), c.getString(2), c.getInt(5), snippet, c.getString(4)))
+                    val normalized = TextNormalizer.normalize(text)
+                    val at = normalized.text.indexOf(q)
+                    if (at >= 0) {
+                        val (start, end) = normalized.sourceRange(text, at, at + q.length)
+                        val snippet = text.substring((start - 40).coerceAtLeast(0), (end + 60).coerceAtMost(text.length)).replace('\n', ' ')
+                        add(SearchHit(c.getString(0), c.getString(1), c.getString(2), c.getInt(5), snippet, c.getString(4)))
+                        if (size == 100) break
+                    }
                 }
             }
         }
