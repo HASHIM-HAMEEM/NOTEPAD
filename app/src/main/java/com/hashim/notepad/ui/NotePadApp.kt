@@ -38,6 +38,9 @@ import androidx.compose.material3.VerticalDivider
 import com.hashim.notepad.data.NotePadRepository
 import com.hashim.notepad.pdf.PdfImporter
 import com.hashim.notepad.pdf.ImportStorage
+import com.hashim.notepad.pdf.FileImporter
+import com.hashim.notepad.export.BundleFileClassifier
+import com.hashim.notepad.export.ImportFileKind
 import com.hashim.notepad.sync.SyncManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -123,6 +126,7 @@ fun NotePadApp(
     LaunchedEffect(selectedFolderId) { libraryPrefs.edit().putString("library_folder", selectedFolderId).apply() }
     val appScope = rememberCoroutineScope()
     val importer = remember { PdfImporter(context, repo) }
+    val fileImporter = remember { FileImporter(context, repo) }
     val exporter = remember { com.hashim.notepad.export.PdfExporter(context, repo) }
     val recognizer = remember { com.hashim.notepad.recognition.InkRecognizer() }
     val bundles = remember { com.hashim.notepad.export.BundleCodec(context, repo) }
@@ -166,11 +170,21 @@ fun NotePadApp(
     }
 
     LaunchedEffect(initialPdf) {
-        initialPdf ?: return@LaunchedEffect
+        val uri = initialPdf ?: return@LaunchedEffect
         importing = true
-        runCatching { importer.importAsNotebook(initialPdf) }
-            .onSuccess { screen = Screen.Pages(it) }
-            .onFailure { android.util.Log.e("NotePad", "PDF import failed", it); Toast.makeText(context, "Could not import PDF: ${it.message}", Toast.LENGTH_LONG).show() }
+        runCatching {
+            val name = ImportStorage(context).displayName(uri)
+            val kind = context.contentResolver.openInputStream(uri)!!.use { BundleFileClassifier.classify(name, it) }
+            val id = when (kind) {
+                ImportFileKind.NOTEPAD_BUNDLE -> context.contentResolver.openInputStream(uri)!!.use { bundles.import(it) }
+                ImportFileKind.PDF -> importer.importAsNotebook(uri)
+                ImportFileKind.ZIP, ImportFileKind.OTHER -> fileImporter.import(uri, null, null)
+            }
+            kind to id
+        }.onSuccess { (kind, id) ->
+            screen = if (kind == ImportFileKind.PDF || kind == ImportFileKind.NOTEPAD_BUNDLE) Screen.Pages(id)
+            else Screen.Notebooks
+        }.onFailure { android.util.Log.e("NotePad", "File import failed", it); Toast.makeText(context, "Could not import file: ${it.message}", Toast.LENGTH_LONG).show() }
         importing = false
     }
 

@@ -42,9 +42,9 @@ class BundleCodec(private val context: Context, private val repo: NotePadReposit
                     arrayOf(notebookId),
                 ).use { c -> while (c.moveToNext()) names.put(c.getString(0)) }
             }
-            val manifest = JSONObject().put("format", "notepad-bundle").put("version", 1).put("exportedAt", System.currentTimeMillis())
+            val manifest = JSONObject().put("format", BUNDLE_FORMAT).put("version", 1).put("exportedAt", System.currentTimeMillis())
             manifest.put("folder_name", folderName ?: JSONObject.NULL).put("tags", tagNames)
-            zip.put("manifest.json", manifest.toString().toByteArray())
+            zip.put(BUNDLE_MANIFEST_ENTRY, manifest.toString().toByteArray())
             val root = JSONObject()
             root.put("notebook", rows(db, "select * from notebooks where id = ?", arrayOf(notebookId)).optJSONObject(0))
             root.put("pages", rows(db, "select * from pages where notebook_id = ? and deleted_at is null", arrayOf(notebookId)))
@@ -86,7 +86,7 @@ class BundleCodec(private val context: Context, private val repo: NotePadReposit
             var e = zip.nextEntry
             while (e != null) {
                 when {
-                    e.name == "manifest.json" -> manifest = JSONObject(zip.readBytes().decodeToString())
+                    e.name == BUNDLE_MANIFEST_ENTRY -> manifest = JSONObject(zip.readBytes().decodeToString())
                     e.name == "notebook.json" -> root = JSONObject(zip.readBytes().decodeToString())
                     e.name.startsWith("strokes/") -> strokes[e.name.removePrefix("strokes/").removeSuffix(".npik")] = zip.readBytes()
                     e.name.startsWith("assets/") -> {

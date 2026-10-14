@@ -72,6 +72,8 @@ import com.hashim.notepad.data.Tag
 import com.hashim.notepad.data.displayWidthPt
 import com.hashim.notepad.data.displayHeightPt
 import com.hashim.notepad.export.BundleCodec
+import com.hashim.notepad.export.BundleFileClassifier
+import com.hashim.notepad.export.ImportFileKind
 import com.hashim.notepad.export.PdfExporter
 import com.hashim.notepad.pdf.PdfImporter
 import com.hashim.notepad.pdf.FileImporter
@@ -294,7 +296,12 @@ fun NotebooksScreen(
         uri ?: return@rememberLauncherForActivityResult
         scope.launch {
             onImportingChanged(true)
-            runCatching { context.contentResolver.openInputStream(uri)!!.use { bundles.import(it) } }
+            runCatching {
+                val name = ImportStorage(context).displayName(uri)
+                val kind = context.contentResolver.openInputStream(uri)!!.use { BundleFileClassifier.classify(name, it) }
+                check(kind == ImportFileKind.NOTEPAD_BUNDLE) { "This file is not a NotePad bundle" }
+                context.contentResolver.openInputStream(uri)!!.use { bundles.import(it) }
+            }
                 .onSuccess { onOpen(it) }
                 .onFailure { Toast.makeText(context, "Could not import bundle: ${it.message}", Toast.LENGTH_LONG).show() }
             onImportingChanged(false)
@@ -555,6 +562,7 @@ fun NotebooksScreen(
                     onImportingChanged(true)
                     try {
                         var firstOpenedId: String? = null
+                        var firstOpenedIsBundle = false
                         val imageUris = itemsToSave.filter { uri ->
                             val name = ImportStorage(context).displayName(uri)
                             context.contentResolver.getType(uri)?.startsWith("image/") == true ||
@@ -584,18 +592,18 @@ fun NotebooksScreen(
                         itemsToSave.filterNot { it in imageUris }.forEachIndexed { index, uri ->
                             if (passwordUri != null) return@forEachIndexed
                             val name = ImportStorage(context).displayName(uri).ifBlank { "Shared file" }
-                            val mime = context.contentResolver.getType(uri).orEmpty()
-                                .ifBlank {
-                                    sharedMimeType.takeIf { uri in sharedItems }
-                                        ?: mimeTypeForImport.takeIf { uri in itemsToSave }
-                                        .orEmpty()
-                                }
                             val title = sharedTitle.takeIf { index == 0 && it.isNotBlank() }
+                            val kind = context.contentResolver.openInputStream(uri)!!.use {
+                                BundleFileClassifier.classify(name, it)
+                            }
                             val id = try {
-                                when {
-                                    mime == "application/pdf" || name.endsWith(".pdf", true) ->
+                                when (kind) {
+                                    ImportFileKind.NOTEPAD_BUNDLE ->
+                                        context.contentResolver.openInputStream(uri)!!.use { bundles.import(it) }
+                                    ImportFileKind.PDF ->
                                         importer.importAsNotebook(uri, folder, title) { importProgress = it }
-                                    else -> fileImporter.import(uri, folder, title) { importProgress = it }
+                                    ImportFileKind.ZIP, ImportFileKind.OTHER ->
+                                        fileImporter.import(uri, folder, title) { importProgress = it }
                                 }
                             } catch (error: PdfPasswordRequiredException) {
                                 passwordUri = uri
@@ -605,10 +613,13 @@ fun NotebooksScreen(
                                 passwordFolderPending = true
                                 return@forEachIndexed
                             }
-                            if (firstOpenedId == null && (mime == "application/pdf" || name.endsWith(".pdf", true))) firstOpenedId = id
+                            if (firstOpenedId == null && kind in setOf(ImportFileKind.PDF, ImportFileKind.NOTEPAD_BUNDLE)) {
+                                firstOpenedId = id
+                                firstOpenedIsBundle = kind == ImportFileKind.NOTEPAD_BUNDLE
+                            }
                         }
                         if (passwordUri == null) {
-                            firstOpenedId?.let { onContinueAtPosition(it, 0) }
+                            firstOpenedId?.let { if (firstOpenedIsBundle) onOpen(it) else onContinueAtPosition(it, 0) }
                         }
                     } catch (error: Throwable) {
                         if (error is kotlinx.coroutines.CancellationException) throw error
