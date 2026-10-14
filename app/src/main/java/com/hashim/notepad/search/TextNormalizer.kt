@@ -77,6 +77,11 @@ object TextNormalizer {
             codePoint == 0x0640 ||
             codePoint == 0x200C ||
             codePoint == 0x200D ||
+            codePoint == 0x200E ||
+            codePoint == 0x200F ||
+            codePoint in 0x202A..0x202E ||
+            codePoint in 0x2066..0x2069 ||
+            codePoint == 0xFEFF ||
             codePoint == 0x0000 ||
             codePoint == 0xFFFD
 

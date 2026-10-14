@@ -270,11 +270,18 @@ class PdfBoxExporter(private val context: Context, private val repo: NotePadRepo
                 stream.setRenderingMode(RenderingMode.NEITHER)
                 stream.setFont(font, 10f)
                 words.sortedBy { it.index }.forEach { word ->
+                    val sanitizedText = PdfTextSanitizer.sanitize(word.text) { codePoint ->
+                        runCatching { font.hasGlyph(codePoint) }.getOrDefault(false)
+                    }
+                    if (sanitizedText.isEmpty()) return@forEach
                     stream.beginText()
-                    stream.setFont(font, (word.bottom - word.top).coerceAtLeast(1f))
-                    stream.newLineAtOffset(word.left, model.heightPt - word.bottom)
-                    stream.showText(word.text)
-                    stream.endText()
+                    try {
+                        stream.setFont(font, (word.bottom - word.top).coerceAtLeast(1f))
+                        stream.newLineAtOffset(word.left, model.heightPt - word.bottom)
+                        stream.showText(sanitizedText)
+                    } finally {
+                        stream.endText()
+                    }
                 }
             }
         }
@@ -344,20 +351,27 @@ internal fun drawTextBlock(
     rotationDegrees: Float = 0f,
 ) {
     val font = PDType0Font.load(document, fontFile, true)
+    val sanitizedText = PdfTextSanitizer.sanitize(text) { codePoint ->
+        runCatching { font.hasGlyph(codePoint) }.getOrDefault(false)
+    }
+    if (sanitizedText.isEmpty()) return
     stream.setNonStrokingColor(
         colorArgb ushr 16 and 0xff,
         colorArgb ushr 8 and 0xff,
         colorArgb and 0xff,
     )
     stream.beginText()
-    stream.setFont(font, fontSize.coerceAtLeast(1f))
-    stream.setTextMatrix(
-        Matrix.getRotateInstance(
-            Math.toRadians(rotationDegrees.toDouble()),
-            x,
-            baseline,
-        ),
-    )
-    stream.showText(text)
-    stream.endText()
+    try {
+        stream.setFont(font, fontSize.coerceAtLeast(1f))
+        stream.setTextMatrix(
+            Matrix.getRotateInstance(
+                Math.toRadians(rotationDegrees.toDouble()),
+                x,
+                baseline,
+            ),
+        )
+        stream.showText(sanitizedText)
+    } finally {
+        stream.endText()
+    }
 }

@@ -53,4 +53,16 @@ class OcrGeometryTest {
         assertEquals(1, findOcrWordHits("page", 0, words, "لغـه").size)
         assertEquals(1, findOcrWordHits("page", 0, words, "عَرَبِیَّة").size)
     }
+
+    @Test
+    fun ocrSearchIgnoresInternalBidiControlAndMapsTheHitToOriginalText() {
+        val source = "لـ\u200Eغة"
+        val words = listOf(OcrWord("page", 0, source, 10f, 20f, 50f, 34f, 98f))
+
+        val hit = findOcrWordHits("page", 0, words, "لغة").single()
+
+        assertEquals(0, hit.matchStart)
+        assertEquals(source.length, hit.matchEnd)
+        assertEquals(source, hit.snippet.substring(hit.snippetMatchStart, hit.snippetMatchEnd))
+    }
 }
