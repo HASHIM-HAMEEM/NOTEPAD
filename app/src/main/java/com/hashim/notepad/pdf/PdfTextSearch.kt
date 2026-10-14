@@ -24,9 +24,17 @@ data class PdfTextSearchHit(
     val snippetMatchEnd: Int,
     val rects: List<PdfTextRect> = emptyList(),
     val sourceIndices: List<Int> = emptyList(),
+    val resultKey: String = PdfSearchResultKey.text(pageId, matchStart, matchEnd),
 )
 
 data class PdfTextRect(val left: Float, val top: Float, val right: Float, val bottom: Float)
+
+internal object PdfSearchResultKey {
+    fun text(pageId: String, matchStart: Int, matchEnd: Int) =
+        "pdf-text-hit:$pageId:$matchStart:$matchEnd"
+
+    fun mark(markId: String) = "pdf-mark-hit:$markId"
+}
 
 object PdfTextCache {
     private val memory = object : LruCache<String, PdfGeometryTextLayer>(16 * 1024) {

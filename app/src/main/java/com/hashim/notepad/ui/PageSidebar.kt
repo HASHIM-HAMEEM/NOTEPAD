@@ -58,6 +58,7 @@ import com.hashim.notepad.pdf.PdfPageSource
 import com.hashim.notepad.pdf.PdfPasswordVault
 import com.hashim.notepad.pdf.PdfTextSearchHit
 import com.hashim.notepad.pdf.PdfMarkGeometry
+import com.hashim.notepad.pdf.PdfSearchResultKey
 import com.hashim.notepad.pdf.PdfiumDispatcher
 import com.hashim.notepad.pdf.chapterForPage
 import com.hashim.notepad.pdf.flattenOutline
@@ -172,6 +173,7 @@ internal fun PageSidebar(
                             snippetMatchStart = at,
                             snippetMatchEnd = at + normalizedQuery.length,
                             rects = PdfWordSnap.topLeftRects(mark.quads, pages.getOrNull(pageIndex)?.heightPt ?: 0f),
+                            resultKey = PdfSearchResultKey.mark(mark.id),
                         )
                     }
                 }.toList()
@@ -225,7 +227,7 @@ internal fun PageSidebar(
                     EmptySidebar("No bookmarks yet")
                 } else {
                     LazyColumn(Modifier.fillMaxSize()) {
-                        itemsIndexed(visible, key = { _, item -> item.value.id }) { _, indexedPage ->
+                        itemsIndexed(visible, key = { _, item -> "page:${item.value.id}" }) { _, indexedPage ->
                             val page = indexedPage.value
                             Column(
                                 Modifier.fillMaxWidth().clickable { onPageSelected(page.id) }
@@ -256,7 +258,7 @@ internal fun PageSidebar(
                     outlineLoading -> EmptySidebar("Loading contents…")
                     outline.isEmpty() -> EmptySidebar("No contents in this PDF")
                     else -> LazyColumn(Modifier.fillMaxSize()) {
-                        items(outlineRows, key = { it.path.joinToString(".") }) { row ->
+                        items(outlineRows, key = { "contents:${it.path.joinToString(".")}" }) { row ->
                             OutlineRow(
                                 row = row,
                                 selected = row.item == activeChapter,
@@ -312,7 +314,7 @@ internal fun PageSidebar(
                         LazyColumn(Modifier.fillMaxSize()) {
                             visibleMarks.forEach { (pageId, pageMarks) ->
                                 val pageNumber = pages.indexOfFirst { it.id == pageId } + 1
-                                item(key = "marks-page-$pageId") {
+                                item(key = "marks-page:$pageId") {
                                     Text(
                                         "Page $pageNumber",
                                         Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
@@ -320,7 +322,7 @@ internal fun PageSidebar(
                                         color = MaterialTheme.colorScheme.primary,
                                     )
                                 }
-                                items(pageMarks, key = { it.id }) { mark ->
+                                items(pageMarks, key = { "pdf-mark:${it.id}" }) { mark ->
                                     Column(
                                         Modifier.fillMaxWidth().clickable {
                                             pages.firstOrNull { it.id == pageId }?.let { onPageSelected(it.id) }
@@ -353,7 +355,7 @@ internal fun PageSidebar(
                         Text("No matches", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(12.dp))
                     }
                     LazyColumn(Modifier.fillMaxSize()) {
-                        items(searchHits, key = { "${it.pageId}:${it.matchStart}" }) { hit ->
+                        items(searchHits, key = { it.resultKey }) { hit ->
                             val pageNumber = pages.indexOfFirst { it.id == hit.pageId } + 1
                             Column(
                                 Modifier.fillMaxWidth().clickable {

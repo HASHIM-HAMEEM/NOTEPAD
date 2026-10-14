@@ -306,8 +306,7 @@ fun PdfReadScreen(
                                         val assetId = page.assetId ?: return@launch
                                         val asset = repo.asset(assetId) ?: return@launch
                                         val coordinates = pageCoordinates?.takeIf { it.isAttached } ?: return@launch
-                                        val bounds = coordinates.boundsInRoot()
-                                        val textPoint = pagePointForText(point, coordinates, bounds, page)
+                                        val textPoint = pagePointForText(point, coordinates, page)
                                         val pdfIndex = page.pdfPageIndex ?: index
                                         val found = withContext(PdfiumDispatcher.dispatcher) {
                                             PdfPageSource(context, File(asset.localPath), PdfPasswordVault(context).read(asset.id)).use { source ->
@@ -316,8 +315,8 @@ fun PdfReadScreen(
                                                     text,
                                                     textPoint.x,
                                                     textPoint.y,
-                                                    page.displayWidthPt * 4f / bounds.width,
-                                                    page.displayHeightPt * 12f / bounds.height,
+                                                    page.displayWidthPt * 4f / coordinates.size.width,
+                                                    page.displayHeightPt * 12f / coordinates.size.height,
                                                 ) ?: return@use null
                                                 val range = PdfWordSnap.wordRange(
                                                     text.text, charIndex, Locale.forLanguageTag(notebook?.language ?: "und"),
@@ -340,9 +339,8 @@ fun PdfReadScreen(
                                 onTap = { point ->
                                     chromeVisible = !chromeVisible
                                     val coordinates = pageCoordinates?.takeIf { it.isAttached }
-                                    val bounds = coordinates?.boundsInRoot()
-                                    val textPoint = if (coordinates != null && bounds != null) {
-                                        pagePointForText(point, coordinates, bounds, page)
+                                    val textPoint = if (coordinates != null) {
+                                        pagePointForText(point, coordinates, page)
                                     } else null
                                     val mark = textPoint?.let { pointOnPage ->
                                         marks.firstOrNull { item ->
@@ -712,17 +710,15 @@ private fun Modifier.systemGestureExclusion(view: View): Modifier =
 private fun pagePointForText(
     point: Offset,
     coordinates: LayoutCoordinates,
-    bounds: androidx.compose.ui.geometry.Rect,
     page: Page,
 ): Offset {
-    val screen = coordinates.localToRoot(point)
     val pagePoint = PdfPageCoordinates.screenToPageTopLeft(
-        screenX = screen.x,
-        screenY = screen.y,
-        pageLeft = bounds.left,
-        pageTop = bounds.top,
-        pageWidthPx = bounds.width,
-        pageHeightPx = bounds.height,
+        screenX = point.x,
+        screenY = point.y,
+        pageLeft = 0f,
+        pageTop = 0f,
+        pageWidthPx = coordinates.size.width.toFloat(),
+        pageHeightPx = coordinates.size.height.toFloat(),
         pageWidthPt = page.widthPt,
         pageHeightPt = page.heightPt,
         rotation = page.rotation,

@@ -1,6 +1,8 @@
 package com.hashim.notepad.pdf
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PdfPageCoordinatesTest {
@@ -48,6 +50,42 @@ class PdfPageCoordinatesTest {
             assertEquals(expected.x, mapped.x, 0.01f)
             assertEquals(expected.y, mapped.y, 0.01f)
         }
+    }
+
+    @Test
+    fun itemLocalTouchUsesFullPageSizeInsteadOfClippedViewportBounds() {
+        val pageWidthPx = 2496f
+        val pageHeightPx = pageWidthPx * 792f / 612f
+        val mapped = PdfPageCoordinates.screenToPageTopLeft(
+            screenX = 183f,
+            screenY = 52f,
+            pageLeft = 0f,
+            pageTop = 0f,
+            pageWidthPx = pageWidthPx,
+            pageHeightPx = pageHeightPx,
+            pageWidthPt = 612f,
+            pageHeightPt = 792f,
+            rotation = 0,
+        )
+        val quickCharacter = PdfTextRect(43.416f, 10.764f, 47.916f, 16.608f)
+        val clippedViewportMapping = PdfPageCoordinates.screenToPageTopLeft(
+            screenX = 183f,
+            screenY = 52f,
+            pageLeft = 0f,
+            pageTop = 0f,
+            pageWidthPx = pageWidthPx,
+            pageHeightPx = 1432f,
+            pageWidthPt = 612f,
+            pageHeightPt = 792f,
+            rotation = 0,
+        )
+
+        assertEquals(44.87019f, mapped.x, 0.01f)
+        assertEquals(12.75f, mapped.y, 0.01f)
+        assertTrue(mapped.x in quickCharacter.left..quickCharacter.right)
+        assertTrue(mapped.y in quickCharacter.top..quickCharacter.bottom)
+        assertFalse(clippedViewportMapping.y in quickCharacter.top..quickCharacter.bottom)
+        assertEquals(28.75978f, clippedViewportMapping.y, 0.01f)
     }
 
     private fun assertRoundTrip(rotation: Int, pageWidthPx: Float, pageHeightPx: Float) {

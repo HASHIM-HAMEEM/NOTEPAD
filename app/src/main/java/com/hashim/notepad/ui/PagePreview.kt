@@ -14,6 +14,7 @@ import androidx.compose.foundation.background
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -47,6 +48,7 @@ import com.hashim.notepad.pdf.PdfPageSource
 import com.hashim.notepad.pdf.PdfMarkGeometry
 import com.hashim.notepad.pdf.PdfiumDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -76,11 +78,11 @@ internal suspend fun precomposeReadPage(
 ) = withContext(Dispatchers.Default) {
     val renderWidth = width.coerceIn(420, 1800)
     val paperArgb = paperColor.toArgbInt()
-    val key = "${page.id}:${page.updatedAt}:$renderWidth:$paperArgb:0"
+    val marks = repo.pdfMarks(page.notebookId).first().filter { it.pageId == page.id && !it.deleted }
+    val key = "${page.id}:${page.updatedAt}:$renderWidth:$paperArgb:0:${marks.hashCode()}"
     if (PreviewCache.composites.get(key) != null) return@withContext
 
     val pageImages = repo.pageImages(page.id).first()
-    val marks = repo.pdfMarks(page.notebookId).first().filter { it.pageId == page.id && !it.deleted }
     val textBlocks = repo.textBlocks(page.id).first()
     val strokesKey = "${page.id}:${page.updatedAt}"
     val strokes = PreviewCache.strokes.get(strokesKey) ?: repo.loadStrokes(page.id)?.let {
@@ -170,14 +172,20 @@ fun PagePreview(
     }
     var strokes by remember(page?.id, page?.updatedAt) { mutableStateOf<List<Stroke>>(page?.let { PreviewCache.strokes.get("${it.id}:${it.updatedAt}") } ?: emptyList()) }
     var pageImages by remember(page?.id, page?.updatedAt) { mutableStateOf(emptyList<PageImage>()) }
-    var marks by remember(page?.id) { mutableStateOf(emptyList<PdfMark>()) }
+    val pageMarksFlow = remember(repo, page?.notebookId) {
+        page?.notebookId?.let(repo::pdfMarks) ?: flowOf(emptyList())
+    }
+    val notebookMarks by pageMarksFlow.collectAsState(initial = emptyList())
+    val marks = remember(notebookMarks, page?.id) {
+        notebookMarks.filter { it.pageId == page?.id && !it.deleted }
+    }
     var textBlocks by remember(page?.id, page?.updatedAt) { mutableStateOf(emptyList<TextBlock>()) }
     var imageBitmaps by remember(page?.id, page?.updatedAt) { mutableStateOf(emptyMap<String, Bitmap>()) }
     val contentBounds = remember(page?.id, page?.updatedAt, bitmap, strokes, pageImages, cropToContent) {
         if (cropToContent && page != null) pageContentBounds(page, bitmap, strokes, pageImages) else null
     }
     val compositeKey = page?.let {
-        "${it.id}:${it.updatedAt}:$renderWidth:${paperColor.toArgbInt()}:${lineColor?.toArgbInt() ?: 0}"
+        "${it.id}:${it.updatedAt}:$renderWidth:${paperColor.toArgbInt()}:${lineColor?.toArgbInt() ?: 0}:${marks.hashCode()}"
     }
     val bookmarkColor = MaterialTheme.colorScheme.primary.toArgbInt()
     var compositeBitmap by remember(compositeKey) {
@@ -193,7 +201,6 @@ fun PagePreview(
         val p = page ?: return@LaunchedEffect
         val key = "${p.id}:${p.updatedAt}"
         val imageRows = repo.pageImages(p.id).first()
-        marks = repo.pdfMarks(p.notebookId).first().filter { it.pageId == p.id && !it.deleted }
         val decodedImages = withContext(Dispatchers.Default) {
             imageRows.associate { image ->
                 val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }

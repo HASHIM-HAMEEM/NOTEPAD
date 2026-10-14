@@ -79,4 +79,14 @@ class PdfTextSearchTest {
         assertEquals(0, hit.single().matchStart)
         assertEquals(1, hit.single().matchEnd)
     }
+
+    @Test fun textAndMultipleMarksHaveDistinctNamespacedResultKeys() {
+        val textHit = findPdfTextHits("page", 0, "hello", "hello").single()
+        val markHits = listOf(textHit.copy(resultKey = PdfSearchResultKey.mark("mark-one")),
+            textHit.copy(resultKey = PdfSearchResultKey.mark("mark-two")))
+
+        assertEquals("pdf-text-hit:page:0:5", textHit.resultKey)
+        assertEquals("pdf-mark-hit:mark-one", markHits.first().resultKey)
+        assertEquals(3, (listOf(textHit) + markHits).map { it.resultKey }.distinct().size)
+    }
 }

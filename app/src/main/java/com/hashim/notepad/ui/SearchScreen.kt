@@ -5,7 +5,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -79,7 +79,7 @@ fun SearchScreen(repo: NotePadRepository, onBack: () -> Unit, onOpenPage: (noteb
                     )
                 }
                 else -> LazyColumn(contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    items(hits, key = { it.pageId + it.source }) { h ->
+                    itemsIndexed(hits, key = { index, hit -> "search-result:${hit.source}:${hit.pageId}:$index" }) { _, h ->
                         Surface(
                             onClick = { onOpenPage(h.notebookId, h.pageId) }, shape = RoundedCornerShape(22.dp),
                             color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.fillMaxWidth().animateItem(),
