@@ -55,6 +55,9 @@ import kotlin.math.abs
 internal fun snapSplitDividerRatio(value: Float): Float =
     listOf(0.33f, 0.5f, 0.67f).minBy { abs(value - it) }
 
+internal fun splitVisualOrder(leftNotebookId: String, rightNotebookId: String, swapped: Boolean): Pair<String, String> =
+    if (swapped) rightNotebookId to leftNotebookId else leftNotebookId to rightNotebookId
+
 @Composable
 fun SplitViewScreen(
     repo: NotePadRepository,
@@ -75,8 +78,9 @@ fun SplitViewScreen(
         return
     }
 
-    val visualLeftId = if (savedPair.swapped) savedPair.rightNotebookId else savedPair.leftNotebookId
-    val visualRightId = if (savedPair.swapped) savedPair.leftNotebookId else savedPair.rightNotebookId
+    var swapped by rememberSaveable(savedPair.id) { mutableStateOf(savedPair.swapped) }
+    val (visualLeftId, visualRightId) =
+        splitVisualOrder(savedPair.leftNotebookId, savedPair.rightNotebookId, swapped)
     val leftNotebook = notebooks.firstOrNull { it.id == visualLeftId }
     val rightNotebook = notebooks.firstOrNull { it.id == visualRightId }
     if (leftNotebook == null || rightNotebook == null) {
@@ -110,7 +114,6 @@ fun SplitViewScreen(
     }
 
     var ratio by rememberSaveable(savedPair.id) { mutableFloatStateOf(savedPair.dividerRatio.coerceIn(0.33f, 0.67f)) }
-    var swapped by rememberSaveable(savedPair.id) { mutableStateOf(savedPair.swapped) }
     var compactPane by rememberSaveable(savedPair.id) { mutableStateOf(false) }
     var containerSize by remember { mutableStateOf(IntSize.Zero) }
     val scope = rememberCoroutineScope()
@@ -218,7 +221,7 @@ private fun SplitDivider(
         Modifier.width(40.dp).fillMaxHeight().background(MaterialTheme.colorScheme.surfaceVariant)
             .draggable(
                 state = draggableState,
-                orientation = Orientation.Vertical,
+                orientation = Orientation.Horizontal,
                 onDragStopped = {
                     val target = snapSplitDividerRatio(ratio)
                     scope.launch {
@@ -273,31 +276,33 @@ private fun SplitDocumentPane(
         return
     }
     val writePdf = page.kind == PageKind.PDF && editingPdfPageId == page.id
-    if (page.kind == PageKind.PDF && !writePdf) {
-        PdfReadScreen(
-            repo = repo,
-            notebookId = notebookId,
-            startPageId = page.id,
-            onBack = onClose,
-            onWrite = {
-                pageId = it
-                onPageChange(it)
-                editingPdfPageId = it
-            },
-        )
-    } else {
-        EditorScreen(
-            repo = repo,
-            notebookId = notebookId,
-            pageId = page.id,
-            recognizer = recognizer,
-            onBack = {
-                if (writePdf) editingPdfPageId = null else onClose()
-            },
-            onNavigateToPage = {
-                pageId = it
-                onPageChange(it)
-            },
-        )
+    Box(modifier.fillMaxSize()) {
+        if (page.kind == PageKind.PDF && !writePdf) {
+            PdfReadScreen(
+                repo = repo,
+                notebookId = notebookId,
+                startPageId = page.id,
+                onBack = onClose,
+                onWrite = {
+                    pageId = it
+                    onPageChange(it)
+                    editingPdfPageId = it
+                },
+            )
+        } else {
+            EditorScreen(
+                repo = repo,
+                notebookId = notebookId,
+                pageId = page.id,
+                recognizer = recognizer,
+                onBack = {
+                    if (writePdf) editingPdfPageId = null else onClose()
+                },
+                onNavigateToPage = {
+                    pageId = it
+                    onPageChange(it)
+                },
+            )
+        }
     }
 }

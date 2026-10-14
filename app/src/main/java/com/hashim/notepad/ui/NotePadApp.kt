@@ -10,6 +10,7 @@ import androidx.compose.animation.SharedTransitionLayout
 import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.animation.togetherWith
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Modifier
@@ -60,6 +61,44 @@ internal fun screenContentKey(screen: Screen): Any =
 
 private data class SplitRequest(val notebookId: String, val pageId: String)
 
+private val screenSaver = listSaver<Screen, String>(
+    save = { screen ->
+        when (screen) {
+            Screen.Notebooks -> listOf("notebooks")
+            is Screen.Pages -> listOf("pages", screen.notebookId)
+            is Screen.Editor -> listOf("editor", screen.notebookId, screen.pageId, screen.returnToRead.toString())
+            is Screen.Read -> listOf("read", screen.notebookId, screen.pageId)
+            is Screen.Split -> listOf("split", screen.notebookId, screen.pageId)
+            Screen.Search -> listOf("search")
+            Screen.Account -> listOf("account")
+        }
+    },
+    restore = { state ->
+        when (state.firstOrNull()) {
+            "pages" -> state.getOrNull(1)?.let(Screen::Pages) ?: Screen.Notebooks
+            "editor" -> {
+                val notebookId = state.getOrNull(1)
+                val pageId = state.getOrNull(2)
+                if (notebookId == null || pageId == null) Screen.Notebooks
+                else Screen.Editor(notebookId, pageId, state.getOrNull(3).toBoolean())
+            }
+            "read" -> {
+                val notebookId = state.getOrNull(1)
+                val pageId = state.getOrNull(2)
+                if (notebookId == null || pageId == null) Screen.Notebooks else Screen.Read(notebookId, pageId)
+            }
+            "split" -> {
+                val notebookId = state.getOrNull(1)
+                val pageId = state.getOrNull(2)
+                if (notebookId == null || pageId == null) Screen.Notebooks else Screen.Split(notebookId, pageId)
+            }
+            "search" -> Screen.Search
+            "account" -> Screen.Account
+            else -> Screen.Notebooks
+        }
+    },
+)
+
 @Composable
 @OptIn(ExperimentalSharedTransitionApi::class)
 fun NotePadApp(
@@ -79,7 +118,7 @@ fun NotePadApp(
     val exporter = remember { com.hashim.notepad.export.PdfExporter(context, repo) }
     val recognizer = remember { com.hashim.notepad.recognition.InkRecognizer() }
     val bundles = remember { com.hashim.notepad.export.BundleCodec(context, repo) }
-    var screen by remember { mutableStateOf<Screen>(Screen.Notebooks) }
+    var screen by rememberSaveable(stateSaver = screenSaver) { mutableStateOf<Screen>(Screen.Notebooks) }
     var splitRequest by remember { mutableStateOf<SplitRequest?>(null) }
     var importing by rememberSaveable { mutableStateOf(false) }
 
