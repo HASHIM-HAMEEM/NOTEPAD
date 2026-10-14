@@ -22,6 +22,7 @@ class PdfOcrWorker(
         val notebook = repo.notebooks().first().firstOrNull { it.id == notebookId } ?: return Result.failure()
         val pages = repo.pages(notebookId).first()
         val requestedPageId = inputData.getString(KEY_PAGE_ID)
+        val forceRecognition = inputData.getBoolean(KEY_FORCE_RECOGNITION, false)
         val pdfPages = pages.filter {
             it.kind.db == "pdf" && it.assetId != null && (requestedPageId == null || it.id == requestedPageId)
         }
@@ -38,7 +39,9 @@ class PdfOcrWorker(
                         PdfPasswordVault(applicationContext).read(asset.id),
                     ).use { it.text(pageIndex) }
                 }
-                if (!OcrGeometry.isScannedPage(embedded) || repo.ocrWords(page.id).isNotEmpty()) {
+                val scannedPage = OcrGeometry.isScannedPage(embedded)
+                val hasOcrWords = scannedPage && repo.ocrWords(page.id).isNotEmpty()
+                if (PdfOcrPolicy.shouldSkipPage(scannedPage, hasOcrWords, forceRecognition)) {
                     setProgress(Data.Builder().putInt(KEY_COMPLETED, pageOrder + 1).putInt(KEY_TOTAL, pdfPages.size).build())
                     return@forEachIndexed
                 }
@@ -65,7 +68,10 @@ class PdfOcrWorker(
                     )
                     OcrWord(page.id, index, box.text, rect.left, rect.top, rect.right, rect.bottom, box.confidence)
                 }
-                repo.replaceOcrWords(page.id, words, notebook.language)
+                if (PdfOcrPolicy.shouldFailWhenNoWords(requestedPageId != null, words.size)) {
+                    return Result.failure()
+                }
+                if (words.isNotEmpty()) repo.replaceOcrWords(page.id, words, notebook.language)
                 setProgress(Data.Builder().putInt(KEY_COMPLETED, pageOrder + 1).putInt(KEY_TOTAL, pdfPages.size).build())
             }
         }
@@ -75,6 +81,7 @@ class PdfOcrWorker(
     companion object {
         const val KEY_NOTEBOOK_ID = "notebook_id"
         const val KEY_PAGE_ID = "page_id"
+        const val KEY_FORCE_RECOGNITION = "force_recognition"
         const val KEY_COMPLETED = "completed"
         const val KEY_TOTAL = "total"
     }

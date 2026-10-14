@@ -5,6 +5,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.Locale
 
 class OcrGeometryTest {
     @Test
@@ -52,6 +53,12 @@ class OcrGeometryTest {
         assertEquals("لُغَةٌ عَرَبِيَّةٌ", layer.text.substring(adjacentWords.matchStart, adjacentWords.matchEnd))
         assertEquals(1, findOcrWordHits("page", 0, words, "لغـه").size)
         assertEquals(1, findOcrWordHits("page", 0, words, "عَرَبِیَّة").size)
+
+        val characterIndex = requireNotNull(PdfWordSnap.nearestCharacterIndex(layer, 30f, 27f, 0f, 0f))
+        val selectedRange = requireNotNull(
+            PdfWordSnap.wordRange(layer.text, characterIndex, Locale.forLanguageTag("ar")),
+        )
+        assertEquals("لُغَةٌ", layer.text.substring(selectedRange.start, selectedRange.end))
     }
 
     @Test

@@ -274,6 +274,7 @@ fun PdfReadScreen(
     }
     fun enqueueOcr(pageId: String?) {
         val data = androidx.work.Data.Builder().putString(PdfOcrWorker.KEY_NOTEBOOK_ID, notebookId)
+            .putBoolean(PdfOcrWorker.KEY_FORCE_RECOGNITION, true)
         pageId?.let { data.putString(PdfOcrWorker.KEY_PAGE_ID, it) }
         val request = androidx.work.OneTimeWorkRequestBuilder<PdfOcrWorker>()
             .setInputData(data.build())
