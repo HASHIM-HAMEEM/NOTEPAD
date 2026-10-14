@@ -214,7 +214,8 @@ fun NotePadApp(
     }
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        val showSidebar = maxWidth >= 840.dp && screen !is Screen.Editor && screen !is Screen.Split
+        val showSidebar = maxWidth >= 840.dp &&
+            (screen == Screen.Notebooks || screen == Screen.Search || screen == Screen.Account || screen is Screen.Pages)
         val showNavigationBar = maxWidth < 600.dp &&
             (screen == Screen.Notebooks || screen == Screen.Search || screen == Screen.Account)
         val screenContent: @Composable () -> Unit = {
