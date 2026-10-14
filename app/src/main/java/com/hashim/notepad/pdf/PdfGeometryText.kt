@@ -74,10 +74,24 @@ object PdfGeometryText {
         val direction: Direction,
     )
 
-    private data class Line(val chars: MutableList<RawChar> = mutableListOf()) {
-        val top get() = chars.minOfOrNull { it.box.top } ?: Float.MAX_VALUE
-        val bottom get() = chars.maxOfOrNull { it.box.bottom } ?: Float.MAX_VALUE
+    private class Line {
+        val chars: MutableList<RawChar> = mutableListOf()
+        var top = Float.MAX_VALUE
+            private set
+        var bottom = Float.MAX_VALUE
+            private set
         val center get() = (top + bottom) * 0.5f
+
+        fun add(char: RawChar) {
+            if (chars.isEmpty()) {
+                top = char.box.top
+                bottom = char.box.bottom
+            } else if (char.box.isValid()) {
+                top = min(top, char.box.top)
+                bottom = max(bottom, char.box.bottom)
+            }
+            chars += char
+        }
     }
 
     private enum class Direction { LTR, RTL, NEUTRAL }
@@ -105,13 +119,13 @@ object PdfGeometryText {
                 .filter { it.second >= LINE_OVERLAP_THRESHOLD }
                 .maxByOrNull { it.second }
                 ?.first
-            (candidate ?: Line().also(lines::add)).chars += char
+            (candidate ?: Line().also(lines::add)).add(char)
         }
         rawChars.filterNot { it.box.isValid() || it.text == "\r" || it.text == "\n" }.forEach { char ->
             val nearest = lines.minByOrNull { line ->
                 abs(line.chars.map { it.sourceIndex }.average() - char.sourceIndex)
             }
-            if (nearest != null && !char.text.all(Char::isWhitespace)) nearest.chars += char
+            if (nearest != null && !char.text.all(Char::isWhitespace)) nearest.add(char)
         }
 
         val orderedLines = lines.sortedWith(compareBy<Line> { it.top }.thenBy { it.chars.minOf { c -> c.sourceIndex } })
