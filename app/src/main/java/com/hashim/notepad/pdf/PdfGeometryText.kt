@@ -1,5 +1,6 @@
 package com.hashim.notepad.pdf
 
+import java.text.Normalizer
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -65,37 +66,42 @@ object PdfGeometryText {
         val text: String,
         val sourceIndex: Int,
         val box: PdfTextRect,
-        val sourceIndices: List<Int> = listOf(sourceIndex),
-        val lineBox: PdfTextRect = box,
     )
 
-    private data class Glyph(
+    private data class Cluster(
         val text: String,
         val sourceIndices: List<Int>,
         val box: PdfTextRect,
         val direction: Direction,
-        val sourceIndex: Int,
-    )
+    ) {
+        val sourceIndex get() = sourceIndices.minOrNull() ?: Int.MAX_VALUE
+        val height get() = (box.bottom - box.top).coerceAtLeast(0f)
+        val centerX get() = (box.left + box.right) * 0.5f
+        val centerY get() = (box.top + box.bottom) * 0.5f
+    }
 
-    private class Line {
-        val chars: MutableList<RawChar> = mutableListOf()
+    private class ClusterLine {
+        val clusters = mutableListOf<Cluster>()
         var top = Float.MAX_VALUE
             private set
-        var bottom = Float.MAX_VALUE
+        var bottom = -Float.MAX_VALUE
             private set
-        val center get() = (top + bottom) * 0.5f
+        var left = Float.MAX_VALUE
+            private set
+        var right = -Float.MAX_VALUE
+            private set
 
-        fun add(char: RawChar) {
-            if (chars.isEmpty()) {
-                top = char.lineBox.top
-                bottom = char.lineBox.bottom
-            } else if (char.lineBox.isValid()) {
-                top = min(top, char.lineBox.top)
-                bottom = max(bottom, char.lineBox.bottom)
-            }
-            chars += char
+        fun add(cluster: Cluster) {
+            top = min(top, cluster.box.top)
+            bottom = max(bottom, cluster.box.bottom)
+            left = min(left, cluster.box.left)
+            right = max(right, cluster.box.right)
+            clusters += cluster
         }
     }
+
+    private data class RunCluster(val cluster: Cluster, val runIndex: Int, val runDirection: Direction)
+    private data class OutputGlyph(val text: String, val sourceIndices: List<Int>, val box: PdfTextRect)
 
     private enum class Direction { LTR, RTL, NEUTRAL }
 
@@ -112,36 +118,48 @@ object PdfGeometryText {
             sourceIndex++
         }
 
-        val lineChars = attachCombiningMarks(rawChars)
-        val positioned = lineChars.filter {
-            it.lineBox.isValid() && it.text.none(Char::isWhitespace)
-        }
-        if (positioned.isEmpty()) return sourceOrderFallback(rawChars)
+        val content = rawChars.filterNot { it.text == "\r" || it.text == "\n" }
+        val sourceSpaces = content.filter { it.text.all(Char::isWhitespace) }
+        val clusters = attachMarksBySourceRun(content)
+        val positioned = clusters.filter { it.box.isPositioned() && it.text.none(Char::isWhitespace) }
+        if (positioned.isEmpty()) return sourceOrderFallback(content)
+        val lineClusters = groupClustersIntoLines(positioned)
+        val orderedLines = lineClusters.sortedBy { it.top }
+        val clusterToLine = mutableMapOf<Cluster, Int>()
+        orderedLines.forEachIndexed { index, line -> line.clusters.forEach { clusterToLine[it] = index } }
+        val sourceToCluster = mutableMapOf<Int, Cluster>()
+        clusters.forEach { cluster -> cluster.sourceIndices.forEach { sourceToCluster[it] = cluster } }
 
-        val lines = mutableListOf<Line>()
-        positioned.sortedWith(compareBy<RawChar> { it.lineBox.centerY() }.thenBy { it.lineBox.left }).forEach { char ->
-            val candidate = lines
-                .map { line -> line to verticalOverlap(char.lineBox, line) }
-                .filter { it.second >= LINE_OVERLAP_THRESHOLD }
-                .maxByOrNull { it.second }
-                ?.first
-            (candidate ?: Line().also(lines::add)).add(char)
-        }
-        lineChars.filterNot { it.lineBox.isValid() && it.text.none(Char::isWhitespace) }
-            .filterNot { it.text == "\r" || it.text == "\n" }
-            .forEach { char ->
-            val nearest = lines.minByOrNull { line ->
-                abs(line.chars.map { it.sourceIndex }.average() - char.sourceIndex)
-            }
-            if (nearest != null) nearest.add(char)
-        }
-
-        val orderedLines = lines.sortedWith(compareBy<Line> { it.top }.thenBy { it.chars.minOf { c -> c.sourceIndex } })
         val output = StringBuilder()
         val characters = mutableListOf<GeometryTextChar>()
         orderedLines.forEachIndexed { lineIndex, line ->
             if (lineIndex > 0) output.append('\n')
-            logicalLine(line.chars).forEach { glyph ->
+            val ordered = logicalClusters(line.clusters)
+            val spacesAfter = mutableMapOf<Cluster, MutableList<RawChar>>()
+            sourceSpaces.forEach { space ->
+                val previous = sourceToCluster[space.sourceIndex - 1]
+                val following = sourceToCluster[space.sourceIndex + 1]
+                val target = previous ?: following ?: return@forEach
+                val targetLine = clusterToLine[target] ?: return@forEach
+                if (targetLine == lineIndex) spacesAfter.getOrPut(target) { mutableListOf() } += space
+            }
+            val lineHasSourceSpaces = spacesAfter.isNotEmpty()
+            val lineGlyphs = mutableListOf<OutputGlyph>()
+            ordered.forEachIndexed { index, item ->
+                val cluster = item.cluster
+                lineGlyphs += OutputGlyph(cluster.text, cluster.sourceIndices, cluster.box)
+                val explicitSpaces = spacesAfter[cluster].orEmpty().sortedBy { it.sourceIndex }
+                val isLast = index == ordered.lastIndex
+                if (explicitSpaces.isNotEmpty()) {
+                    if (!isLast) explicitSpaces.forEach { lineGlyphs += OutputGlyph(" ", listOf(it.sourceIndex), EMPTY_RECT) }
+                } else if (!isLast && !(lineHasSourceSpaces && item.runDirection == Direction.RTL)) {
+                    val next = ordered[index + 1]
+                    if (item.runIndex == next.runIndex && shouldSynthesizeSpace(cluster, next.cluster, item.runDirection, line.clusters)) {
+                        lineGlyphs += OutputGlyph(" ", emptyList(), EMPTY_RECT)
+                    }
+                }
+            }
+            lineGlyphs.forEach { glyph ->
                 val start = output.length
                 output.append(glyph.text)
                 characters += GeometryTextChar(
@@ -157,91 +175,173 @@ object PdfGeometryText {
         return PdfGeometryTextLayer(output.toString(), characters)
     }
 
-    private fun logicalLine(chars: List<RawChar>): List<Glyph> {
-        val sourceSpaces = chars.filter { it.text.all(Char::isWhitespace) }
-        val bases = chars.filterNot { it.text.all(Char::isWhitespace) }.map { char ->
-            Glyph(char.text, char.sourceIndices, char.box, direction(char.text), char.sourceIndex)
-        }.toMutableList()
-
-        val visual = bases.sortedWith(compareBy<Glyph> { it.box.left }.thenBy { it.box.right }.thenBy { it.sourceIndices.first() })
-        val rtlCount = visual.count { it.direction == Direction.RTL }
-        val ltrCount = visual.count { it.direction == Direction.LTR }
-        val baseDirection = when {
-            rtlCount > ltrCount -> Direction.RTL
-            ltrCount > rtlCount -> Direction.LTR
-            else -> visual.firstOrNull { it.direction != Direction.NEUTRAL }?.direction ?: Direction.LTR
-        }
-        val runs = mutableListOf<Pair<Direction, MutableList<Glyph>>>()
-        visual.forEach { glyph ->
-            val direction = glyph.direction.takeUnless { it == Direction.NEUTRAL }
-                ?: runs.lastOrNull()?.first ?: baseDirection
-            if (runs.lastOrNull()?.first != direction) runs += direction to mutableListOf()
-            runs.last().second += glyph
-        }
-        val logicalRuns = if (baseDirection == Direction.RTL) runs.asReversed() else runs
-        val result = mutableListOf<Glyph>()
-        logicalRuns.forEach { (runDirection, run) ->
-            val logicalRun = if (runDirection == Direction.RTL) run.asReversed() else run
-            val widths = logicalRun.mapNotNull { glyph ->
-                (glyph.box.right - glyph.box.left).takeIf { glyph.box.isValid() && it > 0f }
-            }.sorted()
-            val medianWidth = widths.getOrNull(widths.size / 2) ?: 0f
-            logicalRun.forEachIndexed { index, glyph ->
-                val previous = logicalRun.getOrNull(index - 1)
-                if (previous != null) {
-                    val sourceMin = min(previous.sourceIndex, glyph.sourceIndex)
-                    val sourceMax = max(previous.sourceIndex, glyph.sourceIndex)
-                    val explicitSpaces = sourceSpaces
-                        .filter { it.sourceIndex in (sourceMin + 1) until sourceMax }
-                        .sortedBy { it.sourceIndex }
-                    val gap = if (runDirection == Direction.RTL) {
-                        previous.box.left - glyph.box.right
-                    } else {
-                        glyph.box.left - previous.box.right
-                    }
-                    val separatesGlyphs = medianWidth > 0f &&
-                        previous.box.isValid() && glyph.box.isValid() &&
-                        gap > medianWidth * SPACE_GAP_WIDTH_RATIO
-                    if (explicitSpaces.isNotEmpty()) {
-                        explicitSpaces.forEach { space ->
-                        result += Glyph(" ", listOf(space.sourceIndex), EMPTY_RECT, Direction.NEUTRAL, space.sourceIndex)
-                    }
-                } else if (explicitSpaces.isEmpty() && separatesGlyphs) {
-                    result += Glyph(" ", emptyList(), EMPTY_RECT, Direction.NEUTRAL, Int.MAX_VALUE)
-                }
-                }
-                result += glyph
+    private fun attachMarksBySourceRun(chars: List<RawChar>): List<Cluster> {
+        val charsByIndex = chars.associateBy { it.sourceIndex }
+        val attached = mutableMapOf<Int, MutableList<List<RawChar>>>()
+        val standalone = mutableListOf<List<RawChar>>()
+        val markRuns = mutableListOf<List<RawChar>>()
+        var index = 0
+        while (index < chars.size) {
+            if (!isCombiningMark(chars[index].text.codePointAt(0))) {
+                index++
+                continue
             }
+            val run = mutableListOf<RawChar>()
+            var expected = chars[index].sourceIndex
+            while (index < chars.size && chars[index].sourceIndex == expected &&
+                isCombiningMark(chars[index].text.codePointAt(0))
+            ) {
+                run += chars[index]
+                index++
+                expected++
+            }
+            markRuns += run
         }
-        return result
-    }
 
-    private fun attachCombiningMarks(chars: List<RawChar>): List<RawChar> {
-        val bases = chars.filterNot {
-            it.text.all(Char::isWhitespace) || it.text == "\r" || it.text == "\n" ||
-                isCombiningMark(it.text.codePointAt(0))
-        }
-        if (bases.isEmpty()) return chars
-        val combined = bases.associateByTo(mutableMapOf()) { it.sourceIndex }
-        chars.filter { isCombiningMark(it.text.codePointAt(0)) }.forEach { mark ->
-            val nearest = bases.minByOrNull { base ->
-                if (mark.box.isValid() && base.box.isValid()) {
-                    horizontalGap(mark.box, base.box) + verticalGap(mark.box, base.box) +
-                        abs(mark.sourceIndex - base.sourceIndex) * 1.5f
-                } else {
-                    abs(mark.sourceIndex - base.sourceIndex).toFloat()
+        fun validBase(char: RawChar?) = char != null &&
+            !char.text.all(Char::isWhitespace) &&
+            !isCombiningMark(char.text.codePointAt(0))
+
+        markRuns.forEach { run ->
+            val runBox = run.map { it.box }.filter { it.isPositioned() }.reduceOrNull { first, second -> first.union(second) }
+            val previous = charsByIndex[run.first().sourceIndex - 1]
+            val following = charsByIndex[run.last().sourceIndex + 1]
+            val before = previous.takeIf(::validBase)?.takeIf { base ->
+                runBox != null && horizontalOverlap(runBox, base.box) > 0f
+            }
+            val after = following.takeIf(::validBase)?.takeIf { base ->
+                runBox != null && horizontalGap(runBox, base.box) <= 0.5f
+            }
+            val target = before ?: after ?: chars.asSequence()
+                .filter(::validBase)
+                .minByOrNull { base ->
+                    if (runBox != null && base.box.isPositioned()) {
+                        val dx = runBox.centerX() - base.box.centerX()
+                        val dy = runBox.centerY() - base.box.centerY()
+                        dx * dx + dy * dy
+                    } else {
+                        abs(base.sourceIndex - run.first().sourceIndex).toFloat()
+                    }
                 }
-            } ?: return@forEach
-            val base = combined.getValue(nearest.sourceIndex)
-            combined[base.sourceIndex] = base.copy(
-                text = base.text + mark.text,
-                sourceIndices = base.sourceIndices + mark.sourceIndex,
-                box = if (mark.box.isValid()) base.box.union(mark.box) else base.box,
+            if (target == null) standalone.add(run) else attached.getOrPut(target.sourceIndex) { mutableListOf() }.add(run)
+        }
+
+        val clusters = mutableListOf<Cluster>()
+        chars.filter { !it.text.all(Char::isWhitespace) && !isCombiningMark(it.text.codePointAt(0)) }.forEach { base ->
+            val marks = attached[base.sourceIndex].orEmpty().flatten().sortedBy { it.sourceIndex }
+            val sourceIndices = (listOf(base.sourceIndex) + marks.map { it.sourceIndex }).sorted()
+            val text = Normalizer.normalize(base.text + marks.joinToString("") { it.text }, Normalizer.Form.NFC)
+            val box = (listOf(base.box) + marks.map { it.box }).filter { it.isPositioned() }
+                .reduceOrNull { first, second -> first.union(second) }
+                ?: base.box
+            clusters += Cluster(text, sourceIndices, box, direction(base.text))
+        }
+        standalone.forEach { run ->
+            val box = run.map { it.box }.filter { it.isPositioned() }
+                .reduceOrNull { first, second -> first.union(second) } ?: EMPTY_RECT
+            clusters += Cluster(
+                Normalizer.normalize(run.joinToString("") { it.text }, Normalizer.Form.NFC),
+                run.map { it.sourceIndex },
+                box,
+                Direction.NEUTRAL,
             )
         }
-        return chars.filterNot { isCombiningMark(it.text.codePointAt(0)) || it.text == "\r" || it.text == "\n" }
-            .map { combined[it.sourceIndex] ?: it }
+        return clusters
     }
+
+    private fun groupClustersIntoLines(clusters: List<Cluster>): MutableList<ClusterLine> {
+        val heights = clusters.map { it.height }.sorted()
+        val medianHeight = if (heights.size % 2 == 0) {
+            (heights[heights.size / 2 - 1] + heights[heights.size / 2]) * 0.5f
+        } else heights[heights.size / 2]
+        val thresholdHeight = medianHeight * 0.5f
+        val tall = clusters.filter { it.height >= thresholdHeight }
+        val short = clusters.filter { it.height < thresholdHeight }
+        val lines = mutableListOf<ClusterLine>()
+        tall.sortedWith(compareBy<Cluster> { it.centerY }.thenBy { it.box.left }).forEach { cluster ->
+            val target = lines
+                .filter { verticalIntersection(cluster.box, it.top, it.bottom) >= 0.5f * min(cluster.height, it.bottom - it.top) }
+                .maxByOrNull { verticalIntersection(cluster.box, it.top, it.bottom) }
+            (target ?: ClusterLine().also(lines::add)).add(cluster)
+        }
+        if (lines.isEmpty()) {
+            val first = short.minByOrNull { it.centerY }
+            if (first != null) lines += ClusterLine().also { it.add(first) }
+        }
+        val tallClusters = lines.flatMap { it.clusters }.toSet()
+        short.filterNot { it in tallClusters }.forEach { cluster ->
+            val candidates = lines.filter { cluster.box.right + 2f * medianHeight >= it.left && cluster.box.left - 2f * medianHeight <= it.right }
+            val pool = candidates.ifEmpty { lines }
+            val target = pool.minByOrNull { verticalDistance(cluster.box.top, cluster.box.bottom, it.top, it.bottom) }
+            if (target != null) target.add(cluster)
+        }
+        return lines
+    }
+
+    private fun logicalClusters(clusters: List<Cluster>): List<RunCluster> {
+        val visual = clusters.sortedWith(compareBy<Cluster> { it.centerX }.thenBy { it.sourceIndex })
+        val rtlCount = visual.count { it.direction == Direction.RTL }
+        val ltrCount = visual.count { it.direction == Direction.LTR }
+        val baseDirection = if (rtlCount >= ltrCount) Direction.RTL else Direction.LTR
+        val resolved = visual.mapIndexed { index, cluster ->
+            if (cluster.direction != Direction.NEUTRAL) cluster.direction else {
+                val before = (index - 1 downTo 0).firstNotNullOfOrNull { visual[it].direction.takeIf { d -> d != Direction.NEUTRAL } }
+                val after = (index + 1..visual.lastIndex).firstNotNullOfOrNull { visual[it].direction.takeIf { d -> d != Direction.NEUTRAL } }
+                when {
+                    before != null && before == after -> before
+                    before == null -> after ?: baseDirection
+                    after == null -> before
+                    else -> baseDirection
+                }
+            }
+        }
+        val runs = mutableListOf<Pair<Direction, MutableList<Cluster>>>()
+        visual.forEachIndexed { index, cluster ->
+            val runDirection = resolved[index]
+            if (runs.lastOrNull()?.first != runDirection) runs += runDirection to mutableListOf()
+            runs.last().second += cluster
+        }
+        val visualRuns = runs.mapIndexed { index, pair -> Triple(index, pair.first, pair.second) }
+        val logicalRuns = if (baseDirection == Direction.RTL) visualRuns.asReversed() else visualRuns
+        return logicalRuns.flatMap { (runIndex, runDirection, run) ->
+            val ordered = if (runDirection == Direction.RTL) run.asReversed() else run
+            ordered.map { RunCluster(it, runIndex, runDirection) }
+        }
+    }
+
+    private fun shouldSynthesizeSpace(
+        first: Cluster,
+        second: Cluster,
+        runDirection: Direction,
+        lineClusters: List<Cluster>,
+    ): Boolean {
+        val widths = lineClusters.map { it.box.right - it.box.left }.filter { it > 0f }.sorted()
+        if (widths.isEmpty()) return false
+        val medianWidth = if (widths.size % 2 == 0) {
+            (widths[widths.size / 2 - 1] + widths[widths.size / 2]) * 0.5f
+        } else {
+            widths[widths.size / 2]
+        }
+        val gap = if (runDirection == Direction.RTL) first.box.left - second.box.right else second.box.left - first.box.right
+        return gap > medianWidth * SPACE_GAP_WIDTH_RATIO
+    }
+
+    private fun verticalIntersection(box: PdfTextRect, top: Float, bottom: Float): Float =
+        max(0f, min(box.bottom, bottom) - max(box.top, top))
+
+    private fun verticalDistance(firstTop: Float, firstBottom: Float, secondTop: Float, secondBottom: Float): Float =
+        max(0f, max(firstTop - secondBottom, secondTop - firstBottom))
+
+    private fun horizontalOverlap(first: PdfTextRect, second: PdfTextRect): Float =
+        max(0f, min(first.right, second.right) - max(first.left, second.left))
+
+    private fun horizontalGap(first: PdfTextRect, second: PdfTextRect): Float =
+        max(0f, max(first.left - second.right, second.left - first.right))
+
+    private fun PdfTextRect.centerX() = (left + right) * 0.5f
+    private fun PdfTextRect.centerY() = (top + bottom) * 0.5f
+    private fun PdfTextRect.isPositioned() =
+        right >= left && bottom >= top && !(left == 0f && top == 0f && right == 0f && bottom == 0f)
 
     private fun sourceOrderFallback(chars: List<RawChar>): PdfGeometryTextLayer {
         val text = StringBuilder()
@@ -253,20 +353,6 @@ object PdfGeometryText {
         }
         return PdfGeometryTextLayer(text.toString(), output)
     }
-
-    private fun verticalOverlap(box: PdfTextRect, line: Line): Float {
-        val intersection = max(0f, min(box.bottom, line.bottom) - max(box.top, line.top))
-        val shortest = min(box.bottom - box.top, line.bottom - line.top).coerceAtLeast(0.001f)
-        val centerDistance = abs(box.centerY() - line.center)
-        val height = max(box.bottom - box.top, line.bottom - line.top).coerceAtLeast(0.001f)
-        return max(intersection / shortest, if (centerDistance <= max(height * 0.7f, 18f)) 0.36f else 0f)
-    }
-
-    private fun horizontalGap(first: PdfTextRect, second: PdfTextRect): Float =
-        max(0f, max(first.left - second.right, second.left - first.right))
-
-    private fun verticalGap(first: PdfTextRect, second: PdfTextRect): Float =
-        max(0f, max(first.top - second.bottom, second.top - first.bottom))
 
     private fun direction(text: String): Direction = when (Character.getDirectionality(text.codePointAt(0))) {
         Character.DIRECTIONALITY_RIGHT_TO_LEFT,
@@ -284,10 +370,8 @@ object PdfGeometryText {
             Character.NON_SPACING_MARK.toInt(),
             Character.COMBINING_SPACING_MARK.toInt(),
             Character.ENCLOSING_MARK.toInt(),
-        )
+        ) || codePoint in 0x064B..0x065F || codePoint == 0x0670 || codePoint in 0x06D6..0x06ED
 
-    private fun PdfTextRect.isValid() = right > left && bottom > top
-    private fun PdfTextRect.centerY() = (top + bottom) * 0.5f
     private fun PdfTextRect.union(other: PdfTextRect) = PdfTextRect(
         min(left, other.left),
         min(top, other.top),
@@ -295,8 +379,7 @@ object PdfGeometryText {
         max(bottom, other.bottom),
     )
 
-    private const val LINE_OVERLAP_THRESHOLD = 0.35f
-    private const val SPACE_GAP_WIDTH_RATIO = 0.5f
+    private const val SPACE_GAP_WIDTH_RATIO = 0.25f
     private val EMPTY_RECT = PdfTextRect(0f, 0f, 0f, 0f)
 }
 

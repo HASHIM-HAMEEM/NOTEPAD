@@ -17,9 +17,42 @@ class PdfTextSearchTest {
         )
 
         assertEquals(
+            layer.characters.joinToString(" | ") { "${it.sourceIndices}:${it.text}[${it.box.left},${it.box.right}]" },
             expected.map { Normalizer.normalize(it, Normalizer.Form.NFC) },
             layer.text.lines().map { Normalizer.normalize(it, Normalizer.Form.NFC) },
         )
+        val walkthrough = listOf(
+            listOf(63, 64) to "لُ",
+            listOf(37, 38) to "غَ",
+            listOf(39, 40) to "ةٌ",
+            listOf(42, 43) to "عَ",
+            listOf(44, 45) to "رَ",
+            listOf(46, 47) to "بِ",
+            listOf(48, 49, 50) to "يَّ",
+            listOf(51, 52) to "ةٌ",
+            listOf(54, 55) to "جَ",
+            listOf(56, 57) to "مِ",
+            listOf(58) to "ي",
+            listOf(59, 60) to "لَ",
+            listOf(33, 34) to "ةٌ",
+        )
+        walkthrough.forEach { (indices, text) ->
+            val glyph = layer.characters.single { character -> indices.all { it in character.sourceIndices } }
+            assertEquals(text, glyph.text)
+            assertEquals(1, glyph.lineIndex)
+        }
+        listOf(27, 41, 53).forEach { sourceIndex ->
+            val space = layer.characters.single { sourceIndex in it.sourceIndices }
+            assertEquals(" ", space.text)
+            assertEquals(listOf(sourceIndex), space.sourceIndices)
+        }
+        fun position(sourceIndex: Int, lineIndex: Int) =
+            layer.characters.indexOfFirst { it.lineIndex == lineIndex && sourceIndex in it.sourceIndices }
+        assertEquals(position(40, 1) + 1, position(41, 1))
+        assertEquals(position(52, 1) + 1, position(53, 1))
+        assertEquals(position(26, 0) + 1, position(27, 0))
+        assertEquals(position(27, 0) + 1, position(28, 0))
+
         val plainHit = findPdfTextHits("arabic", 0, layer, "لغة").single()
         val markedHit = findPdfTextHits("arabic", 0, layer, "لُغَة").single()
         assertEquals(plainHit.matchStart, markedHit.matchStart)
@@ -35,10 +68,10 @@ class PdfTextSearchTest {
     @Test fun capturedUrduGeometrySearchAndCopyKeepTheWholeWord() {
         val (source, boxes) = PdfGeometryTestFixtures.load("urdu")
         val layer = PdfGeometryText.order(source, boxes)
+        assertEquals("geometry: ${layer.text}", "اُردو کی کتاب ہے", layer.text)
         val hit = findPdfTextHits("urdu", 0, layer, "کتاب").single()
         val word = PdfWordSnap.wordRange(layer.text, hit.matchStart, Locale("ur"))!!
 
-        assertEquals("اُردو کی کتاب ہے", layer.text)
         assertEquals("کتاب", layer.text.substring(word.start, word.end))
     }
 
@@ -58,46 +91,6 @@ class PdfTextSearchTest {
         assertEquals(extracted.length, hit.matchEnd)
     }
 
-    @Test fun geometryOrdersCapturedArabicFragmentsAndMatchesBothFormsAcrossWholeWord() {
-        val extracted = "اختبار ترتيب العربية في ملف PDF\r\n" +
-            "\u064Cة\r\n" +
-            "\u064Eغ\u064Cة \u064Eع\u064Eر\u0650ب\u064E\u0651ي\u064Cة \u064Eج\u0650م\u064A\u064Eل\r\n" +
-            "\u064Fل"
-        val boxes = extracted.indices.map { index ->
-            val line = when (index) {
-                in 0..32 -> 0f
-                in 33..36 -> 40f
-                in 37..41, in 63..64 -> 60f
-                in 42..60 -> 100f
-                else -> 140f
-            }
-            val x = when (index) {
-                37, 38 -> 20f
-                39, 40 -> 10f
-                41 -> 0f
-                63, 64 -> 30f
-                else -> (index % 8) * 12f
-            }
-            PdfTextRect(x, line, x + 8f, line + 10f)
-        }
-        val layer = PdfGeometryText.order(extracted, boxes)
-        val first = findPdfTextHits("arabic", 0, layer, "لغه").single()
-        val second = findPdfTextHits("arabic", 0, layer, "لغة").single()
-
-        assertEquals(first.matchStart, second.matchStart)
-        assertEquals(first.matchEnd, second.matchEnd)
-        assertEquals("لُغَةٌ", layer.text.substring(first.matchStart, first.matchEnd))
-        assertEquals(listOf(37, 38, 39, 40, 63, 64), first.sourceIndices.sorted())
-        assertEquals(1, first.rects.size)
-        assertEquals(PdfTextRect(10f, 60f, 38f, 70f), first.rects.single())
-        val selection = PdfWordSnap.wordRange(layer.text, first.matchStart, Locale("ar"))!!
-        val copied = Normalizer.normalize(
-            layer.text.substring(selection.start, selection.end),
-            Normalizer.Form.NFC,
-        )
-        assertEquals("لُغَةٌ", copied)
-    }
-
     @Test fun geometryPreservesEnglishPdfiumSpacesWithoutUsableBoxes() {
         val source = "Release101 text survives"
         var x = 0f
@@ -114,6 +107,10 @@ class PdfTextSearchTest {
 
         assertEquals(source, layer.text)
         assertEquals(1, findPdfTextHits("page", 0, layer, "text survives").size)
+    }
+
+    @Test fun geometryFallbackDropsCarriageReturnsAndLineFeeds() {
+        assertEquals("firstsecond", PdfGeometryText.order("first\r\nsecond", emptyList()).text)
     }
 
     @Test fun geometryKeepsArabicSourceSpacesBetweenRtlWords() {

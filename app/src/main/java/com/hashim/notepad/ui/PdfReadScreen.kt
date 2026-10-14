@@ -63,6 +63,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -72,6 +73,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.input.pointer.pointerInput
@@ -120,6 +122,8 @@ private data class PdfReadSelection(
     val mark: PdfMark? = null,
 )
 
+private enum class SelectionHandle { START, END }
+
 @Composable
 @OptIn(ExperimentalMaterial3Api::class)
 fun PdfReadScreen(
@@ -155,6 +159,8 @@ fun PdfReadScreen(
     var searchResults by remember { mutableStateOf(emptyList<PdfTextSearchHit>()) }
     var searchHitIndex by remember { mutableIntStateOf(-1) }
     var selection by remember { mutableStateOf<PdfReadSelection?>(null) }
+    var draggingSelectionHandle by remember { mutableStateOf(false) }
+    val selectionState = rememberUpdatedState(selection)
     var searchQuery by remember { mutableStateOf("") }
     var selectedMarkColor by remember { mutableIntStateOf(0x66FFF176) }
     var noteDialog by remember { mutableStateOf(false) }
@@ -396,7 +402,92 @@ fun PdfReadScreen(
                         }
                     }
                     selection?.takeIf { it.pageId == page.id }?.let { selected ->
-                        Canvas(Modifier.fillMaxSize()) {
+                        Canvas(
+                            Modifier.fillMaxSize().pointerInput(page.id, page.rotation) {
+                                awaitEachGesture {
+                                    val down = awaitFirstDown(requireUnconsumed = false)
+                                    val current = selectionState.value?.takeIf { it.pageId == page.id }
+                                        ?: return@awaitEachGesture
+                                    val anchors = selectionHandleAnchors(
+                                        current,
+                                        page,
+                                        size.width.toFloat(),
+                                        size.height.toFloat(),
+                                    )
+                                    val hitRadius = 28.dp.toPx()
+                                    val startDistance = (down.position - anchors.first).getDistance()
+                                    val endDistance = (down.position - anchors.second).getDistance()
+                                    val activeHandle = when {
+                                        startDistance <= hitRadius && startDistance <= endDistance -> SelectionHandle.START
+                                        endDistance <= hitRadius -> SelectionHandle.END
+                                        else -> return@awaitEachGesture
+                                    }
+                                    down.consume()
+                                    draggingSelectionHandle = true
+                                    val pointerId = down.id
+                                    do {
+                                        val event = awaitPointerEvent()
+                                        val change = event.changes.firstOrNull { it.id == pointerId } ?: break
+                                        if (change.position != change.previousPosition) {
+                                            change.consume()
+                                            scope.launch {
+                                                val currentSelection = selectionState.value ?: return@launch
+                                                val coordinates = pageCoordinates?.takeIf { it.isAttached } ?: return@launch
+                                                val assetId = page.assetId ?: return@launch
+                                                val asset = repo.asset(assetId) ?: return@launch
+                                                val pdfIndex = page.pdfPageIndex ?: index
+                                                val text = withContext(PdfiumDispatcher.dispatcher) {
+                                                    PdfPageSource(
+                                                        context,
+                                                        File(asset.localPath),
+                                                        PdfPasswordVault(context).read(asset.id),
+                                                    ).use { source ->
+                                                        PdfTextCache.getOrLoad(context, asset.id, pdfIndex) {
+                                                            source.textGeometry(pdfIndex)
+                                                        }
+                                                    }
+                                                }
+                                                val textPoint = pagePointForText(change.position, coordinates, page)
+                                                val characterIndex = PdfWordSnap.nearestCharacterIndex(
+                                                    text,
+                                                    textPoint.x,
+                                                    textPoint.y,
+                                                    page.displayWidthPt * 4f / coordinates.size.width,
+                                                    page.displayHeightPt * 12f / coordinates.size.height,
+                                                ) ?: return@launch
+                                                val target = PdfWordSnap.wordRange(
+                                                    text.text,
+                                                    characterIndex,
+                                                    Locale.forLanguageTag(notebook?.language ?: "und"),
+                                                ) ?: return@launch
+                                                val (start, end) = when (activeHandle) {
+                                                    SelectionHandle.START -> if (target.start < currentSelection.end) {
+                                                        target.start to currentSelection.end
+                                                    } else {
+                                                        currentSelection.end to target.end
+                                                    }
+                                                    SelectionHandle.END -> if (target.end > currentSelection.start) {
+                                                        currentSelection.start to target.end
+                                                    } else {
+                                                        target.start to currentSelection.start
+                                                    }
+                                                }
+                                                if (start < end) {
+                                                    selection = PdfReadSelection(
+                                                        page.id,
+                                                        start,
+                                                        end,
+                                                        text.text.substring(start, end),
+                                                        text.rectsForRange(start, end),
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    } while (event.changes.any { it.pressed })
+                                    draggingSelectionHandle = false
+                                }
+                            },
+                        ) {
                             val sx = size.width / page.displayWidthPt
                             val sy = size.height / page.displayHeightPt
                             selected.rects.forEach { rect ->
@@ -406,6 +497,17 @@ fun PdfReadScreen(
                                     Offset(shown.left * sx, shown.top * sy),
                                     Size((shown.right - shown.left) * sx, (shown.bottom - shown.top) * sy),
                                 )
+                            }
+                            val (startHandle, endHandle) = selectionHandleAnchors(
+                                selected,
+                                page,
+                                size.width,
+                                size.height,
+                            )
+                            val radius = 12.dp.toPx()
+                            listOf(startHandle, endHandle).forEach { anchor ->
+                                drawPath(selectionHandlePath(anchor, radius), Color(0xFF1565C0))
+                                drawCircle(Color.White, radius * 0.28f, Offset(anchor.x, anchor.y - radius))
                             }
                         }
                     }
@@ -506,7 +608,7 @@ fun PdfReadScreen(
                 }
             }
         }
-        selection?.let { selected ->
+        selection?.takeUnless { draggingSelectionHandle }?.let { selected ->
             Surface(
                 Modifier.align(Alignment.BottomCenter).padding(bottom = if (chromeVisible) 118.dp else 24.dp),
                 shape = RoundedCornerShape(24.dp),
@@ -733,6 +835,59 @@ private fun pageRectToDisplay(
     180 -> androidx.compose.ui.geometry.Rect(pageWidth - rect.right, pageHeight - rect.bottom, pageWidth - rect.left, pageHeight - rect.top)
     270 -> androidx.compose.ui.geometry.Rect(rect.top, pageWidth - rect.right, rect.bottom, pageWidth - rect.left)
     else -> androidx.compose.ui.geometry.Rect(rect.left, rect.top, rect.right, rect.bottom)
+}
+
+private fun selectionHandleAnchors(
+    selection: PdfReadSelection,
+    page: Page,
+    widthPx: Float,
+    heightPx: Float,
+): Pair<Offset, Offset> {
+    val first = selection.rects.firstOrNull() ?: PdfTextRect(0f, 0f, 0f, 0f)
+    val last = selection.rects.lastOrNull() ?: first
+    val firstDisplay = pageRectToDisplay(page.widthPt, page.heightPt, page.rotation, first)
+    val lastDisplay = pageRectToDisplay(page.widthPt, page.heightPt, page.rotation, last)
+    val scaleX = widthPx / page.displayWidthPt
+    val scaleY = heightPx / page.displayHeightPt
+    val rtl = isRtlText(selection.text)
+    val startX = if (rtl) firstDisplay.right else firstDisplay.left
+    val endX = if (rtl) lastDisplay.left else lastDisplay.right
+    return Offset(startX * scaleX, firstDisplay.bottom * scaleY) to
+        Offset(endX * scaleX, lastDisplay.bottom * scaleY)
+}
+
+private fun selectionHandlePath(anchor: Offset, radius: Float) = Path().apply {
+    moveTo(anchor.x, anchor.y)
+    cubicTo(
+        anchor.x - radius * 0.25f,
+        anchor.y - radius * 0.25f,
+        anchor.x - radius,
+        anchor.y - radius * 0.45f,
+        anchor.x - radius,
+        anchor.y - radius,
+    )
+    cubicTo(anchor.x - radius, anchor.y - radius * 1.65f, anchor.x + radius, anchor.y - radius * 1.65f, anchor.x + radius, anchor.y - radius)
+    cubicTo(
+        anchor.x + radius,
+        anchor.y - radius * 0.45f,
+        anchor.x + radius * 0.25f,
+        anchor.y - radius * 0.25f,
+        anchor.x,
+        anchor.y,
+    )
+    close()
+}
+
+private fun isRtlText(text: String): Boolean {
+    for (character in text) {
+        when (Character.getDirectionality(character.code)) {
+            Character.DIRECTIONALITY_RIGHT_TO_LEFT,
+            Character.DIRECTIONALITY_RIGHT_TO_LEFT_ARABIC,
+            -> return true
+            Character.DIRECTIONALITY_LEFT_TO_RIGHT -> return false
+        }
+    }
+    return false
 }
 
 private fun saveSelection(

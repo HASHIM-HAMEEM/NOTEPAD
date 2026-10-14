@@ -1,5 +1,6 @@
 package com.hashim.notepad.export
 
+import android.graphics.Color as AndroidColor
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
@@ -11,6 +12,7 @@ import com.tom_roush.pdfbox.pdmodel.graphics.color.PDColor
 import com.tom_roush.pdfbox.pdmodel.graphics.color.PDDeviceRGB
 import com.tom_roush.pdfbox.pdmodel.interactive.annotation.PDAnnotationTextMarkup
 import com.tom_roush.pdfbox.text.PDFTextStripper
+import com.hashim.notepad.pdf.PdfPageSource
 import java.io.File
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -78,5 +80,35 @@ class PdfBoxTextExportInstrumentedTest {
             assertTrue(annotation.isPrinted())
             assertNotNull(annotation.normalAppearanceStream)
         }
+    }
+
+    @Test
+    fun exportedHighlightRendersTintedPixelsThroughPdfium() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        PDFBoxResourceLoader.init(context)
+        val output = File(context.cacheDir, "text-mark-pdfium-render.pdf")
+        PDDocument().use { document ->
+            val pdfPage = PDPage(PDRectangle(300f, 300f))
+            document.addPage(pdfPage)
+            val annotation = PDAnnotationTextMarkup(PDAnnotationTextMarkup.SUB_TYPE_HIGHLIGHT).apply {
+                quadPoints = floatArrayOf(24f, 250f, 200f, 250f, 24f, 230f, 200f, 230f)
+                rectangle = PDRectangle(24f, 230f, 176f, 20f)
+                color = PDColor(floatArrayOf(1f, 0.8f, 0.1f), PDDeviceRGB.INSTANCE)
+                contents = "Search"
+                setPrinted(true)
+                page = pdfPage
+                constructAppearances(document)
+            }
+            pdfPage.annotations.add(annotation)
+            document.save(output)
+        }
+
+        val bitmap = PdfPageSource(context, output).use { it.render(0, 600) }
+        val pixel = bitmap.getPixel(200, 120)
+        assertTrue(
+            "Expected the reopened highlight to tint its interior, got #${pixel.toUInt().toString(16)}",
+            AndroidColor.red(pixel) > AndroidColor.blue(pixel) + 20 &&
+                AndroidColor.green(pixel) > AndroidColor.blue(pixel) + 20,
+        )
     }
 }
