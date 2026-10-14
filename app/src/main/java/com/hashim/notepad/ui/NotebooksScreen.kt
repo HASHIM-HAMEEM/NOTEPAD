@@ -93,7 +93,7 @@ import java.io.File
 import java.text.DateFormat
 import java.util.Date
 
-private const val ALL_FOLDERS = "all"
+internal const val ALL_FOLDERS = "all"
 
 private fun Context.findActivity(): Activity? = when (this) {
     is Activity -> this
@@ -129,6 +129,8 @@ fun NotebooksScreen(
     onContinueAtPosition: (String, Int) -> Unit = { id, _ -> onOpen(id) },
     onSearch: () -> Unit,
     onAccount: () -> Unit = {},
+    selectedFolderId: String,
+    onSelectedFolderChange: (String) -> Unit,
     themeMode: ThemeMode,
     dynamicColor: Boolean,
     onThemeChange: (ThemeMode) -> Unit,
@@ -143,7 +145,9 @@ fun NotebooksScreen(
     animatedVisibilityScope: AnimatedVisibilityScope? = null,
 ) {
     val context = LocalContext.current
-    val tabletLayout = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp >= 840 && !compact
+    val screenWidthDp = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp
+    val tabletLayout = screenWidthDp >= 840 && !compact
+    val phoneLayout = screenWidthDp < 600 && !compact
     val scope = rememberCoroutineScope()
     val haptics = LocalHapticFeedback.current
     val notebooks by repo.notebooks().collectAsState(initial = emptyList())
@@ -154,7 +158,6 @@ fun NotebooksScreen(
     val gridState = rememberLazyGridState()
     val renderThumbnails = !gridState.isScrollInProgress
     val libraryPrefs = remember(context) { context.getSharedPreferences("notepad", 0) }
-    var selectedFolderId by remember { mutableStateOf(libraryPrefs.getString("library_folder", ALL_FOLDERS) ?: ALL_FOLDERS) }
     var librarySort by remember {
         mutableStateOf(runCatching { LibrarySort.valueOf(libraryPrefs.getString("library_sort", "RECENT") ?: "RECENT") }.getOrDefault(LibrarySort.RECENT))
     }
@@ -219,7 +222,6 @@ fun NotebooksScreen(
             }
         }
     }
-    LaunchedEffect(selectedFolderId) { libraryPrefs.edit().putString("library_folder", selectedFolderId).apply() }
     LaunchedEffect(sharedIntentId) {
         val intentId = sharedIntentId ?: return@LaunchedEffect
         if (sharedItems.isNotEmpty() && intentId != handledSharedIntentId) {
@@ -231,7 +233,9 @@ fun NotebooksScreen(
     LaunchedEffect(librarySort) { libraryPrefs.edit().putString("library_sort", librarySort.name).apply() }
     LaunchedEffect(folderSnapshot, selectedFolderId) {
         val loadedFolders = folderSnapshot.value ?: return@LaunchedEffect
-        if (selectedFolderId != ALL_FOLDERS && loadedFolders.none { it.id == selectedFolderId }) selectedFolderId = ALL_FOLDERS
+        if (selectedFolderId != ALL_FOLDERS && loadedFolders.none { it.id == selectedFolderId }) {
+            onSelectedFolderChange(ALL_FOLDERS)
+        }
     }
     LaunchedEffect(tags, selectedTagId) {
         if (selectedTagId != null && tags.none { it.id == selectedTagId }) selectedTagId = null
@@ -312,23 +316,21 @@ fun NotebooksScreen(
         },
     ) { padding ->
         Row(Modifier.fillMaxSize().padding(padding)) {
-        if (tabletLayout) SubjectSpineColumn(
-            folders = folders,
-            counts = notebooks.groupingBy { it.folderId }.eachCount(),
-            allCount = notebooks.size,
-            selectedFolderId = selectedFolderId,
-            onSelect = { selectedFolderId = it },
-            onAdd = { showCreateFolder = true },
-            onLongPress = { folderActionsFor = it },
-            modifier = Modifier.width(120.dp).fillMaxHeight(),
-        )
         LazyVerticalGrid(
             state = gridState,
-            columns = if (tabletLayout) GridCells.Adaptive(168.dp) else GridCells.Fixed(1),
+            columns = when {
+                tabletLayout -> GridCells.Adaptive(168.dp)
+                phoneLayout -> GridCells.Adaptive(150.dp)
+                else -> GridCells.Fixed(1)
+            },
             modifier = Modifier.weight(1f).fillMaxHeight(),
-            contentPadding = PaddingValues(start = 24.dp, end = 24.dp, top = 8.dp, bottom = 184.dp),
-            horizontalArrangement = Arrangement.spacedBy(20.dp),
-            verticalArrangement = Arrangement.spacedBy(20.dp),
+            contentPadding = if (phoneLayout) {
+                PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 120.dp)
+            } else {
+                PaddingValues(start = 24.dp, end = 24.dp, top = 8.dp, bottom = 184.dp)
+            },
+            horizontalArrangement = Arrangement.spacedBy(if (phoneLayout) 16.dp else 20.dp),
+            verticalArrangement = Arrangement.spacedBy(if (phoneLayout) 16.dp else 20.dp),
         ) {
             item(span = { GridItemSpan(maxLineSpan) }, contentType = "library-header") {
                 LibraryHeader(
@@ -339,7 +341,7 @@ fun NotebooksScreen(
                     onSearch = onSearch, onAccount = onAccount, onAppearance = { showAppearance = true },
                     onNew = { showNew = true },
                     folders = folders, selectedFolderId = selectedFolderId,
-                    onSelectFolder = { selectedFolderId = it },
+                    onSelectFolder = onSelectedFolderChange,
                     onAddFolder = { showCreateFolder = true }, onFolderLongPress = { folderActionsFor = it },
                 )
             }
@@ -359,6 +361,7 @@ fun NotebooksScreen(
                                     notebook = nb,
                                     subjectColor = subjectColor(nb, folders),
                                     renderThumbnail = renderThumbnails,
+                                    phoneLayout = phoneLayout,
                                     onOpen = { onContinueAtPosition(nb.id, nb.lastPageIndex) },
                                 )
                             }
@@ -638,7 +641,7 @@ fun NotebooksScreen(
             val id = repo.createFolder(name, color)
             val notebook = newFolderForNotebook
             if (notebook == null) {
-                selectedFolderId = id
+                onSelectedFolderChange(id)
             } else {
                 repo.moveNotebookToFolder(notebook.id, id)
             }
@@ -677,7 +680,7 @@ fun NotebooksScreen(
                 TextButton(
                     onClick = {
                         scope.launch { repo.deleteFolder(folder.id) }
-                        if (selectedFolderId == folder.id) selectedFolderId = ALL_FOLDERS
+                        if (selectedFolderId == folder.id) onSelectedFolderChange(ALL_FOLDERS)
                         deleteFolderFor = null
                     },
                     colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
@@ -785,35 +788,54 @@ fun NotebooksScreen(
             dismissButton = { TextButton(onClick = { deleteFor = null }) { Text("Cancel") } },
         )
     }
-    if (showAppearance) ModalBottomSheet(onDismissRequest = { showAppearance = false }, shape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp), containerColor = MaterialTheme.colorScheme.surfaceContainer) {
+    if (showAppearance) AppearanceSheet(themeMode, dynamicColor, onThemeChange, onDynamicChange) { showAppearance = false }
+}
+
+/* ---------------------------------------------------------------- pieces */
+
+@Composable
+@OptIn(ExperimentalMaterial3Api::class)
+private fun AppearanceSheet(
+    themeMode: ThemeMode,
+    dynamicColor: Boolean,
+    onThemeChange: (ThemeMode) -> Unit,
+    onDynamicChange: (Boolean) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        shape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp),
+        containerColor = MaterialTheme.colorScheme.surfaceContainer,
+    ) {
         SheetTitle("Appearance")
         Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            ThemeMode.entries.forEach { m ->
-                val selected = themeMode == m
+            ThemeMode.entries.forEach { mode ->
+                val selected = themeMode == mode
                 Surface(
-                    onClick = { onThemeChange(m) }, shape = MaterialTheme.shapes.medium,
+                    onClick = { onThemeChange(mode) },
+                    shape = MaterialTheme.shapes.medium,
                     color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer,
                     border = if (selected) BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary) else null,
                     modifier = Modifier.weight(1f),
                 ) {
                     Column(Modifier.padding(vertical = 14.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                        ThemeSwatch(m)
+                        ThemeSwatch(mode)
                         Spacer(Modifier.height(8.dp))
-                        Text(m.label, style = MaterialTheme.typography.labelLarge)
+                        Text(mode.label, style = MaterialTheme.typography.labelLarge)
                     }
                 }
             }
         }
         ListItem(
-            headlineContent = { Text("Use wallpaper colours") }, supportingContent = { Text("Material You accent from your wallpaper") },
+            headlineContent = { Text("Use wallpaper colours") },
+            supportingContent = { Text("Material You accent from your wallpaper") },
             trailingContent = { Switch(checked = dynamicColor, onCheckedChange = onDynamicChange) },
-            colors = ListItemDefaults.colors(containerColor = Color.Transparent), modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
+            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
         )
         Spacer(Modifier.height(24.dp))
     }
 }
-
-/* ---------------------------------------------------------------- pieces */
 
 @Composable
 @OptIn(ExperimentalFoundationApi::class)
@@ -966,85 +988,203 @@ private fun LibrarySearchButton(onClick: () -> Unit, modifier: Modifier = Modifi
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun SubjectSpineColumn(
-    folders: List<Folder>,
-    counts: Map<String?, Int>,
-    allCount: Int,
+internal fun LibrarySidebar(
+    repo: NotePadRepository,
     selectedFolderId: String,
-    onSelect: (String) -> Unit,
-    onAdd: () -> Unit,
-    onLongPress: (Folder) -> Unit,
-    modifier: Modifier = Modifier,
+    onSelectFolder: (String) -> Unit,
+    screen: Screen,
+    onNavigate: (Screen) -> Unit,
+    themeMode: ThemeMode,
+    dynamicColor: Boolean,
+    onThemeChange: (ThemeMode) -> Unit,
+    onDynamicChange: (Boolean) -> Unit,
 ) {
+    val folders by repo.folders().collectAsState(initial = emptyList())
+    val notebooks by repo.notebooks().collectAsState(initial = emptyList())
+    val counts = remember(notebooks) { notebooks.groupingBy { it.folderId }.eachCount() }
+    val scope = rememberCoroutineScope()
+    var folderActionsFor by remember { mutableStateOf<Folder?>(null) }
+    var renameFolderFor by remember { mutableStateOf<Folder?>(null) }
+    var deleteFolderFor by remember { mutableStateOf<Folder?>(null) }
+    var showCreateFolder by remember { mutableStateOf(false) }
+    var showAppearance by remember { mutableStateOf(false) }
+    val selectedLibrary = screen == Screen.Notebooks || screen is Screen.Pages || screen is Screen.Read
+
     Column(
-        modifier.verticalScroll(rememberScrollState()).padding(start = 8.dp, end = 4.dp, top = 18.dp, bottom = 18.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        Modifier.width(264.dp).fillMaxHeight().background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .padding(horizontal = 12.dp, vertical = 16.dp),
     ) {
-        SubjectSpine("All", allCount, selectedFolderId == ALL_FOLDERS, MaterialTheme.colorScheme.primary, { onSelect(ALL_FOLDERS) })
-        folders.forEach { folder ->
-            val color = runCatching { Color(android.graphics.Color.parseColor(folder.color ?: "#75885C")) }.getOrDefault(Color(0xFF75885C))
-            SubjectSpine(folder.name, counts[folder.id] ?: 0, selectedFolderId == folder.id, color, { onSelect(folder.id) }, { onLongPress(folder) })
+        Text(
+            "NotePad",
+            Modifier.padding(horizontal = 12.dp, vertical = 12.dp),
+            style = MaterialTheme.typography.titleLarge.copy(fontFamily = FontFamily.Serif, fontWeight = FontWeight.SemiBold),
+        )
+        Spacer(Modifier.height(8.dp))
+        SidebarDestination("Library", Icons.Outlined.Book, selectedLibrary) { onNavigate(Screen.Notebooks) }
+        SidebarDestination("Search", Icons.Outlined.Search, screen == Screen.Search) { onNavigate(Screen.Search) }
+        SidebarDestination("Sync", Icons.Outlined.Cloud, screen == Screen.Account) { onNavigate(Screen.Account) }
+        Spacer(Modifier.height(20.dp))
+        Text(
+            "Subjects",
+            Modifier.padding(start = 12.dp, bottom = 8.dp),
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Column(
+            Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            SidebarFolderRow(
+                name = "All",
+                count = notebooks.size,
+                selected = selectedFolderId == ALL_FOLDERS,
+                onClick = { onSelectFolder(ALL_FOLDERS) },
+            )
+            folders.forEach { folder ->
+                val color = runCatching {
+                    Color(android.graphics.Color.parseColor(folder.color ?: "#75885C"))
+                }.getOrDefault(Color(0xFF75885C))
+                SidebarFolderRow(
+                    name = folder.name,
+                    count = counts[folder.id] ?: 0,
+                    selected = selectedFolderId == folder.id,
+                    dotColor = color,
+                    onClick = { onSelectFolder(folder.id) },
+                    onLongClick = { folderActionsFor = folder },
+                )
+            }
+            SidebarActionRow(Icons.Default.Add, "+ New subject") { showCreateFolder = true }
         }
-        Spacer(Modifier.height(6.dp))
-        SubjectSpine("New", null, false, MaterialTheme.colorScheme.surfaceContainerHigh, onAdd, showPlus = true)
+        Spacer(Modifier.height(8.dp))
+        SidebarActionRow(Icons.Outlined.Palette, "Appearance") { showAppearance = true }
+    }
+
+    if (showCreateFolder) SubjectDialog(
+        title = "New subject",
+        initial = "",
+        initialColor = null,
+        onDismiss = { showCreateFolder = false },
+    ) { name, color ->
+        scope.launch {
+            onSelectFolder(repo.createFolder(name, color))
+            showCreateFolder = false
+        }
+    }
+    folderActionsFor?.let { folder ->
+        AlertDialog(
+            onDismissRequest = { folderActionsFor = null },
+            title = { Text(folder.name) },
+            text = { Text("Subject actions") },
+            confirmButton = {
+                TextButton(onClick = { renameFolderFor = folder; folderActionsFor = null }) { Text("Rename") }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(
+                        onClick = { deleteFolderFor = folder; folderActionsFor = null },
+                        colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                    ) { Text("Delete") }
+                    TextButton(onClick = { folderActionsFor = null }) { Text("Cancel") }
+                }
+            },
+        )
+    }
+    renameFolderFor?.let { folder ->
+        SubjectDialog(
+            title = "Rename subject",
+            initial = folder.name,
+            initialColor = folder.color,
+            onDismiss = { renameFolderFor = null },
+        ) { name, color ->
+            scope.launch { repo.renameFolder(folder.id, name, color) }
+            renameFolderFor = null
+        }
+    }
+    deleteFolderFor?.let { folder ->
+        AlertDialog(
+            onDismissRequest = { deleteFolderFor = null },
+            title = { Text("Delete “${folder.name}”?") },
+            text = { Text("The notebooks in this subject will be kept and moved to All.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        scope.launch { repo.deleteFolder(folder.id) }
+                        if (selectedFolderId == folder.id) onSelectFolder(ALL_FOLDERS)
+                        deleteFolderFor = null
+                    },
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                ) { Text("Delete") }
+            },
+            dismissButton = { TextButton(onClick = { deleteFolderFor = null }) { Text("Cancel") } },
+        )
+    }
+    if (showAppearance) {
+        AppearanceSheet(themeMode, dynamicColor, onThemeChange, onDynamicChange) { showAppearance = false }
     }
 }
 
 @Composable
-private fun SubjectSpine(
-    label: String,
-    count: Int?,
-    selected: Boolean,
-    color: Color,
-    onClick: () -> Unit,
-    onLongPress: (() -> Unit)? = null,
-    showPlus: Boolean = false,
-) {
-    val offset by animateDpAsState(if (selected) 6.dp else 0.dp, spring(dampingRatio = 0.72f, stiffness = 520f), label = "subject-spine")
-    val shape = RoundedCornerShape(16.dp)
-    val base = if (selected || showPlus) color else color.copy(alpha = 0.35f)
-    val foreground = if (selected) {
-        if (android.graphics.Color.luminance(color.toArgb()) < 0.55f) Color.White else Color(0xFF282622)
-    } else MaterialTheme.colorScheme.onSurface
-    Box(
-        Modifier
-            .offset(x = offset)
-            .width(84.dp)
-            .height(148.dp)
-            .shadow(if (selected) 9.dp else 0.dp, shape, spotColor = Color.Black.copy(alpha = 0.2f))
-            .clip(shape)
-            .background(Brush.verticalGradient(listOf(base.copy(alpha = base.alpha * 0.82f), base, base.copy(alpha = base.alpha * 0.94f))))
-            .combinedClickable(onClick = onClick, onLongClick = onLongPress),
-        contentAlignment = Alignment.Center,
+private fun SidebarDestination(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, selected: Boolean, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(24.dp)
+    val contentColor = if (selected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurface
+    Row(
+        Modifier.fillMaxWidth().height(48.dp).clip(shape)
+            .background(if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (showPlus) {
-            Row(
-                Modifier.width(112.dp).rotate(-90f),
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(Icons.Default.Add, null, Modifier.size(18.dp), tint = foreground)
-                Spacer(Modifier.width(3.dp))
-                Text(label, style = MaterialTheme.typography.titleSmall.copy(fontFamily = FontFamily.Serif), fontWeight = FontWeight.Medium, color = foreground, maxLines = 1)
-            }
+        Icon(icon, contentDescription = null, modifier = Modifier.size(24.dp), tint = contentColor)
+        Spacer(Modifier.width(12.dp))
+        Text(label, style = MaterialTheme.typography.labelLarge, color = contentColor)
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun SidebarFolderRow(
+    name: String,
+    count: Int,
+    selected: Boolean,
+    dotColor: Color? = null,
+    onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
+) {
+    val shape = RoundedCornerShape(24.dp)
+    Row(
+        Modifier.fillMaxWidth().height(48.dp).clip(shape)
+            .background(if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            .padding(horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (dotColor != null) {
+            Box(Modifier.size(10.dp).clip(CircleShape).background(dotColor))
+            Spacer(Modifier.width(12.dp))
         } else {
-            Text(
-                label,
-                Modifier.width(124.dp).rotate(-90f),
-                style = MaterialTheme.typography.titleSmall.copy(fontFamily = FontFamily.Serif),
-                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                color = foreground,
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Spacer(Modifier.width(22.dp))
         }
-        if (count != null) Text("$count", Modifier.align(Alignment.BottomCenter).padding(bottom = 9.dp), style = MaterialTheme.typography.labelSmall, color = foreground.copy(alpha = 0.84f))
-        Canvas(Modifier.fillMaxSize()) {
-            val x = 1.dp.toPx()
-            drawLine(Color.White.copy(alpha = if (selected) 0.32f else 0.2f), Offset(x, 10.dp.toPx()), Offset(x, size.height - 10.dp.toPx()), 1.dp.toPx())
-        }
+        Text(
+            name,
+            Modifier.weight(1f),
+            style = MaterialTheme.typography.bodyMedium,
+            color = if (selected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text("$count", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+private fun SidebarActionRow(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().height(48.dp).clip(RoundedCornerShape(24.dp)).clickable(onClick = onClick).padding(horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, contentDescription = null, modifier = Modifier.size(24.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.width(12.dp))
+        Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
     }
 }
 
@@ -1054,6 +1194,7 @@ private fun ContinueReadingCard(
     notebook: Notebook,
     subjectColor: Color,
     renderThumbnail: Boolean,
+    phoneLayout: Boolean,
     onOpen: () -> Unit,
 ) {
     val pages by repo.pages(notebook.id).collectAsState(initial = emptyList())
@@ -1066,13 +1207,17 @@ private fun ContinueReadingCard(
         label = "continue-press",
     )
     Surface(
-        modifier = Modifier.width(360.dp).height(150.dp).graphicsLayer { scaleX = scale; scaleY = scale }
+        modifier = Modifier.width(if (phoneLayout) 280.dp else 360.dp).height(150.dp).graphicsLayer { scaleX = scale; scaleY = scale }
             .combinedClickable(interactionSource = interaction, indication = null, onClick = onOpen),
-        shape = RoundedCornerShape(22.dp),
+        shape = RoundedCornerShape(16.dp),
         color = MaterialTheme.colorScheme.surfaceContainerLow,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.width(146.dp).fillMaxHeight().clip(RoundedCornerShape(topStart = 22.dp, bottomStart = 22.dp))) {
+            Box(
+                Modifier.width(if (phoneLayout) 92.dp else 120.dp).fillMaxHeight()
+                    .clip(RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp)),
+            ) {
                 PagePreview(
                     repo = repo,
                     page = page,
@@ -1080,20 +1225,26 @@ private fun ContinueReadingCard(
                         ?: MaterialTheme.colorScheme.surface,
                     modifier = Modifier.fillMaxSize(),
                     renderEnabled = renderThumbnail,
-                    cropScale = 3.5f,
+                    cropScale = 2.2f,
                     cropToContent = true,
                 )
                 Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.035f)))
             }
-            Column(Modifier.weight(1f).padding(horizontal = 16.dp, vertical = 14.dp), verticalArrangement = Arrangement.Center) {
+            Column(Modifier.fillMaxHeight().weight(1f).padding(horizontal = 12.dp, vertical = 14.dp)) {
                 Text(notebook.title, style = MaterialTheme.typography.titleMedium.copy(fontFamily = titleFontFamily(notebook.title)), fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Spacer(Modifier.height(5.dp))
-                Text(progressLabel(notebook.lastPageIndex, notebook.pageCount), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(recentlyOpenedLabel(notebook.lastOpenedAt), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "Page ${notebook.lastPageIndex + 1} of ${notebook.pageCount.coerceAtLeast(1)} · ${recentlyOpenedLabel(notebook.lastOpenedAt)}",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Spacer(Modifier.weight(1f))
                 LibraryProgressTrack(
                     ((notebook.lastPageIndex + 1f) / notebook.pageCount.coerceAtLeast(1)).coerceIn(0f, 1f),
                     subjectColor,
-                    Modifier.fillMaxWidth().padding(top = 9.dp),
+                    Modifier.fillMaxWidth(),
                 )
             }
         }

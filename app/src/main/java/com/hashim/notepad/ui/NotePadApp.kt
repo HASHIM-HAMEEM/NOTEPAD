@@ -18,9 +18,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Box
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Book
@@ -28,8 +31,8 @@ import androidx.compose.material.icons.outlined.Cloud
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationRail
-import androidx.compose.material3.NavigationRailItem
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
 import com.hashim.notepad.data.NotePadRepository
@@ -113,6 +116,11 @@ fun NotePadApp(
 ) {
     val context = LocalContext.current
     val repo = remember { NotePadRepository.get(context) }
+    val libraryPrefs = remember(context) { context.getSharedPreferences("notepad", 0) }
+    var selectedFolderId by rememberSaveable {
+        mutableStateOf(libraryPrefs.getString("library_folder", ALL_FOLDERS) ?: ALL_FOLDERS)
+    }
+    LaunchedEffect(selectedFolderId) { libraryPrefs.edit().putString("library_folder", selectedFolderId).apply() }
     val appScope = rememberCoroutineScope()
     val importer = remember { PdfImporter(context, repo) }
     val exporter = remember { com.hashim.notepad.export.PdfExporter(context, repo) }
@@ -206,7 +214,9 @@ fun NotePadApp(
     }
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        val showNavigationRail = maxWidth >= 840.dp && screen !is Screen.Editor && screen !is Screen.Read && screen !is Screen.Split
+        val showSidebar = maxWidth >= 840.dp && screen !is Screen.Editor && screen !is Screen.Split
+        val showNavigationBar = maxWidth < 600.dp &&
+            (screen == Screen.Notebooks || screen == Screen.Search || screen == Screen.Account)
         val screenContent: @Composable () -> Unit = {
             SharedTransitionLayout {
                 val sharedScope = this
@@ -251,8 +261,10 @@ fun NotePadApp(
                             }
                         },
                         onSearch = { screen = Screen.Search }, onAccount = { screen = Screen.Account },
+                        selectedFolderId = selectedFolderId,
+                        onSelectedFolderChange = { selectedFolderId = it },
                         themeMode = themeMode, dynamicColor = dynamicColor, onThemeChange = onThemeChange, onDynamicChange = onDynamicChange,
-                        showAccountButton = !showNavigationRail,
+                        showAccountButton = !showSidebar && !showNavigationBar,
                         sharedTransitionScope = sharedScope,
                         animatedVisibilityScope = visibilityScope,
                     )
@@ -328,32 +340,46 @@ fun NotePadApp(
             }
         }
 
-        if (showNavigationRail) {
+        if (showSidebar) {
             Row(Modifier.fillMaxSize()) {
-                NavigationRail(containerColor = MaterialTheme.colorScheme.background) {
-                    Spacer(Modifier.height(12.dp))
-                    NavigationRailItem(
-                        selected = screen == Screen.Notebooks || screen is Screen.Pages,
-                        onClick = { screen = Screen.Notebooks },
-                        icon = { Icon(Icons.Outlined.Book, contentDescription = null) },
-                        label = { Text("Library") },
-                    )
-                    NavigationRailItem(
-                        selected = screen == Screen.Search,
-                        onClick = { screen = Screen.Search },
-                        icon = { Icon(Icons.Outlined.Search, contentDescription = null) },
-                        label = { Text("Search") },
-                    )
-                    NavigationRailItem(
-                        selected = screen == Screen.Account,
-                        onClick = { screen = Screen.Account },
-                        icon = { Icon(Icons.Outlined.Cloud, contentDescription = null) },
-                        label = { Text("Sync") },
-                    )
-                }
-                VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                LibrarySidebar(
+                    repo = repo,
+                    selectedFolderId = selectedFolderId,
+                    onSelectFolder = { selectedFolderId = it; screen = Screen.Notebooks },
+                    screen = screen,
+                    onNavigate = { screen = it },
+                    themeMode = themeMode,
+                    dynamicColor = dynamicColor,
+                    onThemeChange = onThemeChange,
+                    onDynamicChange = onDynamicChange,
+                )
+                VerticalDivider(Modifier.fillMaxHeight(), thickness = 1.dp, color = MaterialTheme.colorScheme.outlineVariant)
                 Box(Modifier.weight(1f).fillMaxSize()) {
                     screenContent()
+                }
+            }
+        } else if (showNavigationBar) {
+            Column(Modifier.fillMaxSize()) {
+                Box(Modifier.weight(1f).fillMaxWidth()) { screenContent() }
+                NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
+                    NavigationBarItem(
+                        selected = screen == Screen.Notebooks,
+                        onClick = { screen = Screen.Notebooks },
+                        icon = { Icon(Icons.Outlined.Book, contentDescription = "Library") },
+                        label = { Text("Library") },
+                    )
+                    NavigationBarItem(
+                        selected = screen == Screen.Search,
+                        onClick = { screen = Screen.Search },
+                        icon = { Icon(Icons.Outlined.Search, contentDescription = "Search") },
+                        label = { Text("Search") },
+                    )
+                    NavigationBarItem(
+                        selected = screen == Screen.Account,
+                        onClick = { screen = Screen.Account },
+                        icon = { Icon(Icons.Outlined.Cloud, contentDescription = "Sync") },
+                        label = { Text("Sync") },
+                    )
                 }
             }
         } else {

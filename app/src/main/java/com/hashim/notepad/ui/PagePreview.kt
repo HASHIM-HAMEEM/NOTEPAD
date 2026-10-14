@@ -52,6 +52,7 @@ import com.hashim.notepad.pdf.PdfInvert
 import com.hashim.notepad.pdf.PdfPageSource
 import com.hashim.notepad.pdf.PdfMarkGeometry
 import com.hashim.notepad.pdf.PdfiumDispatcher
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.first
@@ -196,12 +197,13 @@ fun PagePreview(
     var compositeBitmap by remember(compositeKey) {
         mutableStateOf(compositeKey?.let { PreviewCache.composites.get(it) })
     }
+    var previewInputsLoaded by remember(page?.id, page?.updatedAt, renderWidth) { mutableStateOf(false) }
 
     LaunchedEffect(bitmapKey) {
         bitmapKey?.let { PreviewCache.bitmaps.get(it) }?.let { bitmap = it }
     }
 
-    LaunchedEffect(page?.id, page?.updatedAt, renderEnabled, renderWidth) {
+    LaunchedEffect(page?.id, page?.updatedAt, renderEnabled, renderWidth, targetWidthPx) {
         if (targetWidthPx == 0) return@LaunchedEffect
         val p = page ?: return@LaunchedEffect
         val key = "${p.id}:${p.updatedAt}"
@@ -226,10 +228,14 @@ fun PagePreview(
             PreviewCache.strokes.put(key, list)
             strokes = list
         }
-        if (p.kind == PageKind.PDF && p.assetId != null && bitmapKey != null && PreviewCache.bitmaps.get(bitmapKey) == null) {
-            val asset = repo.asset(p.assetId) ?: return@LaunchedEffect
-            val bmp = withContext(Dispatchers.Default) {
-                runCatching {
+        if (p.kind == PageKind.PDF && p.assetId != null && bitmapKey != null) {
+            val cachedBitmap = PreviewCache.bitmaps.get(bitmapKey)
+            if (cachedBitmap != null) {
+                bitmap = cachedBitmap
+            } else {
+                val asset = repo.asset(p.assetId) ?: return@LaunchedEffect
+                val bmp = try {
+                    withContext(Dispatchers.Default) {
                     val file = previewFile(context, p.assetId, p.pdfPageIndex ?: 0, renderWidth)
                     val cached = if (file.exists()) BitmapFactory.decodeFile(file.absolutePath) else null
                     cached ?: run {
@@ -246,17 +252,24 @@ fun PagePreview(
                         if (!temporary.renameTo(file)) temporary.delete()
                         rendered
                     }
-                }.getOrNull()
-            } ?: return@LaunchedEffect
-            PreviewCache.bitmaps.put(bitmapKey, bmp)
-            bitmap = bmp
+                    }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    android.util.Log.e("PagePreview", "Unable to load PDF preview for page ${p.id}", error)
+                    return@LaunchedEffect
+                }
+                PreviewCache.bitmaps.put(bitmapKey, bmp)
+                bitmap = bmp
+            }
         }
+        previewInputsLoaded = true
     }
 
-    LaunchedEffect(compositeKey, bitmap, strokes, pageImages, textBlocks, imageBitmaps, marks) {
+    LaunchedEffect(compositeKey, previewInputsLoaded, bitmap, strokes, pageImages, textBlocks, imageBitmaps, marks) {
         val p = page ?: return@LaunchedEffect
         val key = compositeKey ?: return@LaunchedEffect
-        if (!renderEnabled || targetWidthPx == 0) return@LaunchedEffect
+        if (!previewInputsLoaded || !renderEnabled || targetWidthPx == 0) return@LaunchedEffect
         compositeBitmap = PreviewCache.composites.get(key)
         if (compositeBitmap != null) return@LaunchedEffect
         val result = withContext(Dispatchers.Default) {

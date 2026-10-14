@@ -32,9 +32,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.systemGesturesPadding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.lazy.LazyColumn
@@ -43,6 +45,10 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.List
+import androidx.compose.material.icons.outlined.Bookmarks
+import androidx.compose.material.icons.outlined.ChevronLeft
+import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.rounded.ContentCopy
@@ -52,6 +58,8 @@ import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.StickyNote2
 import androidx.compose.material.icons.rounded.StrikethroughS
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -276,6 +284,7 @@ fun PdfReadScreen(
         val tabletWidth = maxWidth >= 840.dp
         val dockedSidebar = maxWidth >= 840.dp && sidebarOpen
         val sidebarWidth = if (dockedSidebar) 300.dp else 0.dp
+        val toolbarTitleWidth = (maxWidth - sidebarWidth - 304.dp).coerceIn(96.dp, 400.dp)
         val pageWidth = maxWidth - sidebarWidth - 32.dp
         val density = LocalDensity.current
         val pagePaper = if (MaterialTheme.colorScheme.background.luminance() < 0.5f) Color(0xFF202024) else Color.White
@@ -613,76 +622,90 @@ fun PdfReadScreen(
             visible = chromeVisible,
             enter = fadeIn(tween(Motion.chrome)) + slideInVertically(tween(Motion.chrome)) { -it },
             exit = fadeOut(tween(Motion.chrome)) + slideOutVertically(tween(Motion.chrome)) { -it },
-            modifier = Modifier.align(Alignment.TopCenter).padding(start = sidebarWidth),
+            modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth().padding(start = sidebarWidth),
         ) {
             Surface(
-                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.90f),
+                color = MaterialTheme.colorScheme.surface,
                 contentColor = MaterialTheme.colorScheme.onSurface,
-                shadowElevation = 4.dp,
+                shadowElevation = 0.dp,
             ) {
-                Row(
-                    Modifier.fillMaxWidth().padding(top = 24.dp, start = 12.dp, end = 12.dp, bottom = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
+                Column {
+                    Row(
+                        Modifier.fillMaxWidth().padding(top = 24.dp, start = 8.dp, end = 8.dp, bottom = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back", tint = MaterialTheme.colorScheme.onSurface)
                     }
-                    Text(
-                        notebook?.title.orEmpty(),
-                        Modifier.weight(1f),
-                        maxLines = 1,
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onSurface,
-                    )
-                    Text(
-                        "${currentIndex + 1} / ${pages.size}",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurface,
-                    )
+                    Column(Modifier.width(toolbarTitleWidth).padding(end = 8.dp)) {
+                        Text(
+                            notebook?.title.orEmpty(),
+                            Modifier.fillMaxWidth(),
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        Text(
+                            "Page ${currentIndex + 1} of ${pages.size.coerceAtLeast(1)}",
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Spacer(Modifier.weight(1f))
+                    val statusLabel = when {
+                        ocrWorkInfo != null -> "Recognizing $ocrProgress/$ocrTotal"
+                        modelWorkInfo != null -> "Downloading model"
+                        else -> null
+                    }
+                    statusLabel?.let { label ->
+                        AssistChip(
+                            onClick = {},
+                            label = { Text(label, maxLines = 1) },
+                            colors = AssistChipDefaults.assistChipColors(
+                                containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                labelColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                            ),
+                            modifier = Modifier.height(32.dp),
+                        )
+                    }
+                    if (searchResults.isNotEmpty()) {
+                        IconButton(onClick = { showSearchHit(searchHitIndex - 1) }) {
+                            Icon(Icons.Outlined.ChevronLeft, "Previous search result", modifier = Modifier.size(24.dp))
+                        }
+                        Text(
+                            "${(searchHitIndex + 1).coerceIn(1, searchResults.size)} / ${searchResults.size}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        IconButton(onClick = { showSearchHit(searchHitIndex + 1) }) {
+                            Icon(Icons.Outlined.ChevronRight, "Next search result", modifier = Modifier.size(24.dp))
+                        }
+                    }
+                    IconButton(onClick = { sidebarOpen = !sidebarOpen; chromeVisible = true }) {
+                        Icon(Icons.AutoMirrored.Outlined.List, "Contents", modifier = Modifier.size(24.dp))
+                    }
+                    IconButton(onClick = {
+                        selection?.text?.let { searchQuery = it }
+                        sidebarOpen = true
+                        chromeVisible = true
+                    }) {
+                        Icon(Icons.Outlined.Bookmarks, "Marks", modifier = Modifier.size(24.dp))
+                    }
                     AudioRecorderButton(
                         repo = repo,
                         notebookId = notebookId,
                         notebookTitle = notebook?.title ?: "Lecture",
                         onRecordingSelected = { selectedAudioRecordingId = it },
                     )
-                    if (searchResults.isNotEmpty()) {
-                        androidx.compose.material3.TextButton(onClick = { showSearchHit(searchHitIndex - 1) }) {
-                            Text("‹", color = MaterialTheme.colorScheme.onSurface)
-                        }
-                        Text(
-                            "${(searchHitIndex + 1).coerceAtLeast(0)} / ${searchResults.size}",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurface,
-                        )
-                        androidx.compose.material3.TextButton(onClick = { showSearchHit(searchHitIndex + 1) }) {
-                            Text("›", color = MaterialTheme.colorScheme.onSurface)
-                        }
-                    }
-                    androidx.compose.material3.TextButton(onClick = { sidebarOpen = !sidebarOpen; chromeVisible = true }) {
-                    Text("Contents", color = MaterialTheme.colorScheme.onSurface)
-                    }
-                    if (notebook?.documentKind == "pdf") {
-                        Text(
-                            when {
-                                ocrWorkInfo != null -> "OCR $ocrProgress/$ocrTotal"
-                                modelWorkInfo != null -> "Model download"
-                                else -> "OCR"
-                            },
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurface,
-                        )
-                    }
-                    androidx.compose.material3.TextButton(onClick = {
-                        selection?.text?.let { searchQuery = it }
-                        sidebarOpen = true
-                        chromeVisible = true
-                    }) { Text("Marks", color = MaterialTheme.colorScheme.onSurface) }
                     IconButton(onClick = { onWrite(pages.getOrNull(currentIndex)?.id ?: startPageId) }) {
-                        Icon(Icons.Outlined.Edit, "Write", tint = MaterialTheme.colorScheme.onSurface)
+                        Icon(Icons.Outlined.Edit, "Write", modifier = Modifier.size(24.dp))
                     }
-                    Box {
-                        IconButton(onClick = { showMenu = true }) {
-                            Icon(Icons.Outlined.MoreVert, "Reader options", tint = MaterialTheme.colorScheme.onSurface)
+                        Box {
+                            IconButton(onClick = { showMenu = true }) {
+                            Icon(Icons.Outlined.MoreVert, "More", modifier = Modifier.size(24.dp))
                         }
                         androidx.compose.material3.DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
                             if (notebook?.documentKind == "pdf") {
@@ -776,25 +799,31 @@ fun PdfReadScreen(
                             )
                         }
                     }
+                    Box(Modifier.fillMaxWidth().height(1.dp).background(MaterialTheme.colorScheme.outlineVariant))
                 }
             }
         }
+        }
 
-        AnimatedVisibility(
+        if (pages.size > 1) AnimatedVisibility(
             visible = chromeVisible,
             enter = fadeIn(tween(Motion.chrome)) + slideInVertically(tween(Motion.chrome)) { it },
             exit = fadeOut(tween(Motion.chrome)) + slideOutVertically(tween(Motion.chrome)) { it },
             modifier = Modifier.align(Alignment.BottomCenter).padding(start = sidebarWidth)
-                .navigationBarsPadding().systemGesturesPadding(),
+                .navigationBarsPadding().systemGesturesPadding().padding(bottom = 16.dp),
         ) {
             Surface(
-                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+                Modifier.fillMaxWidth().widthIn(max = 720.dp),
+                shape = RoundedCornerShape(28.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
                 contentColor = MaterialTheme.colorScheme.onSurface,
-                shadowElevation = 4.dp,
             ) {
-                Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp)) {
-                    if (scrubbing) Text("${scrubValue.toInt() + 1} / ${pages.size}", Modifier.align(Alignment.CenterHorizontally))
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
                     PageScrubber(
+                        modifier = Modifier.weight(1f),
                         value = scrubValue,
                         maxValue = (pages.size - 1).coerceAtLeast(0).toFloat(),
                         onValueChange = { scrubValue = it; scrubbing = true; chromeVisible = true },
@@ -805,6 +834,11 @@ fun PdfReadScreen(
                             if (kotlin.math.abs(next - old) > 3) backPage = old
                             scrubbing = false
                         },
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    Text(
+                        "${currentIndex + 1} / ${pages.size}",
+                        style = MaterialTheme.typography.labelMedium,
                     )
                 }
             }
@@ -1011,6 +1045,7 @@ fun PdfReadScreen(
 
 @Composable
 private fun PageScrubber(
+    modifier: Modifier = Modifier,
     value: Float,
     maxValue: Float,
     onValueChange: (Float) -> Unit,
@@ -1021,7 +1056,7 @@ private fun PageScrubber(
     val surface = MaterialTheme.colorScheme.surface
     val view = LocalView.current
     Canvas(
-        Modifier.fillMaxWidth().height(32.dp)
+        modifier.fillMaxWidth().height(32.dp)
             .systemGestureExclusion(view)
             .pointerInput(maxValue) {
                 detectTapGestures { point ->
