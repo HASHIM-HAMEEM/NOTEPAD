@@ -208,6 +208,14 @@ private const val SNIPPET_CONTEXT = 30
 fun findPdfTextHits(pageId: String, pageIndex: Int, source: String, query: String): List<PdfTextSearchHit> =
     findPdfTextHits(pageId, pageIndex, PdfGeometryText.order(source, emptyList()), query)
 
+fun findOcrWordHits(
+    pageId: String,
+    pageIndex: Int,
+    words: List<OcrWord>,
+    query: String,
+): List<PdfTextSearchHit> =
+    findPdfTextHits(pageId, pageIndex, OcrGeometry.toTextLayer(words), query)
+
 suspend fun searchPdfText(
     context: Context,
     assetId: String,
@@ -222,13 +230,16 @@ suspend fun searchPdfText(
         pages.forEachIndexed { pageNumber, page ->
             coroutineContext.ensureActive()
             val pdfIndex = page.pdfPageIndex ?: pageNumber
-            val layer = loadPdfTextLayer(
-                context,
-                assetId,
-                pdfIndex,
-                { loadOcrWords(page.id) },
-            ) { source.textGeometry(pdfIndex) }
-            findPdfTextHits(page.id, pdfIndex, layer, query).forEach { hit ->
+            val ocrWords = loadOcrWords(page.id)
+            val hits = if (ocrWords.isNotEmpty()) {
+                findOcrWordHits(page.id, pdfIndex, ocrWords, query)
+            } else {
+                val layer = PdfTextCache.getOrLoad(context, assetId, pdfIndex) {
+                    source.textGeometry(pdfIndex)
+                }
+                findPdfTextHits(page.id, pdfIndex, layer, query)
+            }
+            hits.forEach { hit ->
                 onHit(hit)
             }
         }

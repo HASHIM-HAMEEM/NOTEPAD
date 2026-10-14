@@ -35,4 +35,22 @@ class OcrGeometryTest {
         assertEquals(2, layer.rectsForRange(0, layer.text.length).size)
         assertTrue(layer.characters.all { it.box.right > it.box.left })
     }
+
+    @Test
+    fun ocrWordSearchFoldsArabicAndMatchesInsideAndAcrossWords() {
+        val words = listOf(
+            OcrWord("page", 0, "لُغَةٌ", 10f, 20f, 50f, 34f, 98f),
+            OcrWord("page", 1, "عَرَبِيَّةٌ", 55f, 20f, 120f, 34f, 98f),
+        )
+        val layer = OcrGeometry.toTextLayer(words)
+        val language = findOcrWordHits("page", 0, words, "لغة").single()
+        val arabic = findOcrWordHits("page", 0, words, "عربية").single()
+        val adjacentWords = findOcrWordHits("page", 0, words, "لغة عربية").single()
+
+        assertEquals("لُغَةٌ", layer.text.substring(language.matchStart, language.matchEnd))
+        assertEquals("عَرَبِيَّةٌ", layer.text.substring(arabic.matchStart, arabic.matchEnd))
+        assertEquals("لُغَةٌ عَرَبِيَّةٌ", layer.text.substring(adjacentWords.matchStart, adjacentWords.matchEnd))
+        assertEquals(1, findOcrWordHits("page", 0, words, "لغـه").size)
+        assertEquals(1, findOcrWordHits("page", 0, words, "عَرَبِیَّة").size)
+    }
 }

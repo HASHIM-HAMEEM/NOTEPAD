@@ -16,7 +16,9 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FastForward
@@ -247,11 +249,12 @@ internal fun AudioPlaybackBar(
 
     if (recordingId != null && recording != null) {
         Surface(
-            modifier = modifier.fillMaxWidth().navigationBarsPadding(),
+            modifier = modifier.fillMaxWidth().widthIn(max = 560.dp).padding(horizontal = 16.dp).navigationBarsPadding(),
+            shape = RoundedCornerShape(32.dp),
             color = MaterialTheme.colorScheme.surfaceContainer,
             shadowElevation = 8.dp,
         ) {
-            Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(recording.title, Modifier.weight(1f), maxLines = 1, style = MaterialTheme.typography.labelLarge)
                     Text(

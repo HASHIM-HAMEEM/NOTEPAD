@@ -974,7 +974,7 @@ fun EditorScreen(
         val toolbarHidden = toolbarAutoHidden && !toolbarPinned && !toolbarOverlayOpen
         val toolbarAlpha by animateFloatAsState(
             targetValue = if (toolbarHidden) 0f else 1f,
-            animationSpec = tween(if (toolbarHidden) 160 else 200),
+            animationSpec = tween(Motion.chrome),
             label = "toolbar-alpha",
         )
         val hideDistance = if (toolbarHidden) 24.dp else 0.dp
@@ -2507,14 +2507,39 @@ private fun BrushSettingsPopover(
             valueRange = 1f..10f,
             colors = sliderColors,
             thumb = { Box(Modifier.size(18.dp).background(MaterialTheme.colorScheme.onSurface, CircleShape)) },
-            track = {
-                SliderDefaults.Track(
-                    sliderState = it,
-                    modifier = Modifier.height(4.dp),
-                    colors = sliderColors,
-                    thumbTrackGapSize = 0.dp,
-                    drawStopIndicator = null,
-                )
+            track = { sliderState ->
+                val activeColor = MaterialTheme.colorScheme.onSurface
+                val inactiveColor = activeColor.copy(alpha = 0.16f)
+                Canvas(Modifier.fillMaxWidth().height(24.dp)) {
+                    val start = 2.dp.toPx()
+                    val end = size.width - start
+                    val centerY = size.height / 2f
+                    val minHalf = 1.dp.toPx()
+                    val maxHalf = 8.dp.toPx()
+                    val fraction = ((sliderState.value - sliderState.valueRange.start) /
+                        (sliderState.valueRange.endInclusive - sliderState.valueRange.start))
+                        .coerceIn(0f, 1f)
+                    val progressX = start + (end - start) * fraction
+                    val progressHalf = minHalf + (maxHalf - minHalf) * fraction
+                    val wedge = Path().apply {
+                        moveTo(start, centerY - minHalf)
+                        lineTo(end, centerY - maxHalf)
+                        lineTo(end, centerY + maxHalf)
+                        lineTo(start, centerY + minHalf)
+                        close()
+                    }
+                    drawPath(wedge, inactiveColor)
+                    if (fraction > 0f) {
+                        val selectedWedge = Path().apply {
+                            moveTo(start, centerY - minHalf)
+                            lineTo(progressX, centerY - progressHalf)
+                            lineTo(progressX, centerY + progressHalf)
+                            lineTo(start, centerY + minHalf)
+                            close()
+                        }
+                        drawPath(selectedWedge, activeColor)
+                    }
+                }
             },
         )
         if (showOpacity) {

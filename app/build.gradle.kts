@@ -8,6 +8,7 @@ plugins {
 android {
     namespace = "com.hashim.notepad"
     compileSdk = 37
+    testBuildType = "releaseTest"
 
     defaultConfig {
         val props = Properties().apply { rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use { load(it) } }
@@ -18,8 +19,8 @@ android {
         minSdk = 29
         targetSdk = 36
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        versionCode = 11
-        versionName = "0.11.0"
+        versionCode = 12
+        versionName = "0.12.0"
         ndk { abiFilters += listOf("arm64-v8a") }
     }
 
@@ -30,6 +31,12 @@ android {
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             // Test builds only: signed with the debug key until an upload keystore exists.
             signingConfig = signingConfigs.getByName("debug")
+        }
+        create("releaseTest") {
+            initWith(getByName("release"))
+            isMinifyEnabled = false
+            isShrinkResources = false
+            matchingFallbacks += listOf("release")
         }
     }
     compileOptions {

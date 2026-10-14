@@ -16,6 +16,7 @@ import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -1059,7 +1060,11 @@ private fun ContinueReadingCard(
     val page = pages.getOrNull(notebook.lastPageIndex)
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
-    val scale by animateFloatAsState(if (pressed) 0.98f else 1f, spring(stiffness = Spring.StiffnessMediumLow), label = "continue-press")
+    val scale by animateFloatAsState(
+        if (pressed) 0.98f else 1f,
+        tween(Motion.press, easing = Motion.emphasized),
+        label = "continue-press",
+    )
     Surface(
         modifier = Modifier.width(360.dp).height(150.dp).graphicsLayer { scaleX = scale; scaleY = scale }
             .combinedClickable(interactionSource = interaction, indication = null, onClick = onOpen),
@@ -1131,7 +1136,11 @@ private fun NotebookCard(
     val pages by repo.pages(notebook.id).collectAsState(initial = emptyList())
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
-    val scale by animateFloatAsState(if (pressed) 0.96f else 1f, spring(stiffness = Spring.StiffnessMediumLow), label = "press")
+    val scale by animateFloatAsState(
+        if (pressed) 0.96f else 1f,
+        tween(Motion.press, easing = Motion.emphasized),
+        label = "press",
+    )
     val cover = remember(notebook.id, notebook.coverColor) { bookCoverColor(notebook) }
     val tagNames = remember(tags, notebook.tagIds) { tags.filter { it.id in notebook.tagIds }.take(2).map { it.name } }
     val coverAspect = pages.firstOrNull()?.let { (it.displayWidthPt / it.displayHeightPt).coerceIn(0.58f, 1.3f) } ?: 0.72f
@@ -1141,6 +1150,7 @@ private fun NotebookCard(
             Modifier.sharedElement(
                 sharedContentState = rememberSharedContentState("notebook-cover-${notebook.id}"),
                 animatedVisibilityScope = animatedVisibilityScope,
+                boundsTransform = { _, _ -> tween(Motion.shared, easing = Motion.emphasized) },
             )
         }
     } else Modifier

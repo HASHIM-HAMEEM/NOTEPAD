@@ -215,12 +215,14 @@ fun NotePadApp(
                 contentKey = ::screenContentKey,
                 transitionSpec = {
                     val forward = depth(targetState) >= depth(initialState)
-                    val openingNotebook = (targetState is Screen.Pages || targetState is Screen.Editor) && initialState is Screen.Notebooks
+                    val openingNotebook = (
+                        targetState is Screen.Pages || targetState is Screen.Editor || targetState is Screen.Read
+                    ) && initialState is Screen.Notebooks
                     val enter = if (openingNotebook) {
-                        androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(Motion.medium, delayMillis = 40, easing = Motion.emphasizedDecelerate)) +
+                        androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(Motion.shared, easing = Motion.emphasized)) +
                             androidx.compose.animation.scaleIn(
                                 initialScale = 0.96f,
-                                animationSpec = androidx.compose.animation.core.tween(Motion.medium, easing = Motion.emphasizedDecelerate),
+                                animationSpec = androidx.compose.animation.core.tween(Motion.shared, easing = Motion.emphasized),
                             )
                     } else {
                         androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(Motion.medium, delayMillis = 40, easing = Motion.emphasizedDecelerate)) +
@@ -256,16 +258,32 @@ fun NotePadApp(
                     )
                     Screen.Account -> AccountScreen(onBack = { screen = Screen.Notebooks })
                     Screen.Search -> SearchScreen(repo = repo, onBack = { screen = Screen.Notebooks }, onOpenPage = ::openPage)
-                    is Screen.Pages -> PagesScreen(
-                        repo = repo, notebookId = s.notebookId, exporter = exporter, recognizer = recognizer, bundles = bundles,
-                        onBack = { screen = Screen.Notebooks },
-                        onOpenPage = { openPage(s.notebookId, it) },
-                    )
+                    is Screen.Pages -> {
+                        val sharedModifier = with(sharedScope) {
+                            Modifier.sharedElement(
+                                sharedContentState = rememberSharedContentState("notebook-cover-${s.notebookId}"),
+                                animatedVisibilityScope = visibilityScope,
+                                boundsTransform = { _, _ ->
+                                    androidx.compose.animation.core.tween(Motion.shared, easing = Motion.emphasized)
+                                },
+                            )
+                        }
+                        Box(sharedModifier.fillMaxSize()) {
+                            PagesScreen(
+                                repo = repo, notebookId = s.notebookId, exporter = exporter, recognizer = recognizer, bundles = bundles,
+                                onBack = { screen = Screen.Notebooks },
+                                onOpenPage = { openPage(s.notebookId, it) },
+                            )
+                        }
+                    }
                     is Screen.Editor -> {
                         val sharedModifier = with(sharedScope) {
                             Modifier.sharedElement(
                                 sharedContentState = rememberSharedContentState("notebook-cover-${s.notebookId}"),
                                 animatedVisibilityScope = visibilityScope,
+                                boundsTransform = { _, _ ->
+                                    androidx.compose.animation.core.tween(Motion.shared, easing = Motion.emphasized)
+                                },
                             )
                         }
                         Box(sharedModifier.fillMaxSize()) {
@@ -282,6 +300,9 @@ fun NotePadApp(
                             Modifier.sharedElement(
                                 sharedContentState = rememberSharedContentState("notebook-cover-${s.notebookId}"),
                                 animatedVisibilityScope = visibilityScope,
+                                boundsTransform = { _, _ ->
+                                    androidx.compose.animation.core.tween(Motion.shared, easing = Motion.emphasized)
+                                },
                             )
                         }
                         Box(sharedModifier.fillMaxSize()) {

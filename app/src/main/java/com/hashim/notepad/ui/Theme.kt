@@ -155,9 +155,12 @@ object Motion {
     val emphasizedDecelerate: Easing = CubicBezierEasing(0.05f, 0.7f, 0.1f, 1f)
     val emphasizedAccelerate: Easing = CubicBezierEasing(0.3f, 0f, 0.8f, 0.15f)
     val standard: Easing = CubicBezierEasing(0.2f, 0f, 0f, 1f)
-    const val short = 160
-    const val medium = 280
-    const val long = 420
+    const val short = 150
+    const val medium = 200
+    const val long = 300
+    const val press = 150
+    const val chrome = 200
+    const val shared = 300
 }
 
 /** Returns true when the active scheme is a dark one (so paper previews can pick contrasting defaults). */

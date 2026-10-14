@@ -16,6 +16,7 @@ import com.tom_roush.pdfbox.pdmodel.PDPageContentStream
 import com.tom_roush.pdfbox.pdmodel.common.PDRectangle
 import com.tom_roush.pdfbox.pdmodel.graphics.color.PDColor
 import com.tom_roush.pdfbox.pdmodel.graphics.color.PDDeviceRGB
+import com.tom_roush.pdfbox.pdmodel.font.PDType0Font
 import com.tom_roush.pdfbox.pdmodel.interactive.annotation.PDAnnotationTextMarkup
 import com.tom_roush.pdfbox.text.PDFTextStripper
 import com.hashim.notepad.pdf.PdfPageSource
@@ -255,7 +256,6 @@ class PdfBoxTextExportInstrumentedTest {
     fun exportedOcrTextIsSearchableButInvisible() = runBlocking {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
-        PDFBoxResourceLoader.init(context)
         val databaseName = "ocr-export-test.db"
         context.deleteDatabase(databaseName)
         val source = File(context.cacheDir, "ocr-export-input.pdf")
@@ -291,6 +291,11 @@ class PdfBoxTextExportInstrumentedTest {
             val output = PdfBoxExporter(context, repo).exportNotebook(notebookId, outputName)
             PDDocument.load(output).use { exported ->
                 assertTrue(PDFTextStripper().getText(exported).contains("InvisibleOCR"))
+                val resources = exported.getPage(0).resources
+                assertTrue(
+                    "OCR text must be encoded with an embedded Type0 font",
+                    resources.fontNames.any { resources.getFont(it) is PDType0Font },
+                )
             }
             val renderedSource = PdfPageSource(context, source).use { it.render(0, 600) }
             val renderedExport = PdfPageSource(context, output).use { it.render(0, 600) }

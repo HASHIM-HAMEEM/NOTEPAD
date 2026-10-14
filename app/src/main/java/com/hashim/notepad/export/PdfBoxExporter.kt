@@ -19,6 +19,7 @@ import com.tom_roush.pdfbox.pdmodel.graphics.image.PDImageXObject
 import com.tom_roush.pdfbox.pdmodel.graphics.state.PDExtendedGraphicsState
 import com.tom_roush.pdfbox.pdmodel.graphics.state.RenderingMode
 import com.tom_roush.pdfbox.pdmodel.font.PDType0Font
+import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import com.tom_roush.pdfbox.pdmodel.interactive.annotation.PDAnnotationTextMarkup
 import com.tom_roush.pdfbox.util.Matrix
 import androidx.ink.brush.StockBrushes
@@ -52,6 +53,7 @@ class PdfBoxExporter(private val context: Context, private val repo: NotePadRepo
         options: PdfExportOptions = PdfExportOptions(),
         onProgress: (Int, Int) -> Unit = { _, _ -> },
     ): File = withContext(Dispatchers.IO) {
+        PDFBoxResourceLoader.init(context.applicationContext)
         val allPages = repo.pages(notebookId).first()
         val pagePlan = planPdfExportPages(allPages, options.pageRange)
         val pages = pagePlan.map { it.page }

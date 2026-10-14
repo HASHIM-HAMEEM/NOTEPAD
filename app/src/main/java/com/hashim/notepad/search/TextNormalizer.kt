@@ -29,7 +29,6 @@ object TextNormalizer {
         val indices = ArrayList<Int>()
         var sourceIndex = 0
         var pendingSpaceAt: Int? = null
-        var previousWasTashkeel = false
 
         while (sourceIndex < value.length) {
             val originalIndex = sourceIndex
@@ -45,16 +44,13 @@ object TextNormalizer {
                 val normalizedPoint = compatibility.codePointAt(normalizedIndex)
                 normalizedIndex += Character.charCount(normalizedPoint)
                 if (Character.isWhitespace(normalizedPoint)) {
-                    if (text.isNotEmpty() && text.last() != ' ' && !previousWasTashkeel) {
+                    if (text.isNotEmpty() && text.last() != ' ') {
                         pendingSpaceAt = originalIndex
                     }
                     continue
                 }
                 if (isIgnored(normalizedPoint)) {
-                    if (isTashkeel(normalizedPoint)) {
-                        pendingSpaceAt = null
-                        previousWasTashkeel = true
-                    }
+                    if (isTashkeel(normalizedPoint)) pendingSpaceAt = null
                     continue
                 }
                 pendingSpaceAt?.let { spaceAt ->
@@ -66,7 +62,6 @@ object TextNormalizer {
                 val chars = String(Character.toChars(folded))
                 text.append(chars)
                 repeat(chars.length) { indices += originalIndex }
-                previousWasTashkeel = false
             }
         }
 

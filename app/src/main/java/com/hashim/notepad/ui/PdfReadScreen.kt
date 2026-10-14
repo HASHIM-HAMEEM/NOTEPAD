@@ -12,6 +12,7 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -35,6 +36,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.systemGesturesPadding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -43,6 +45,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.FormatUnderlined
+import androidx.compose.material.icons.rounded.Highlight
+import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.StickyNote2
+import androidx.compose.material.icons.rounded.StrikethroughS
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -603,8 +611,8 @@ fun PdfReadScreen(
 
         AnimatedVisibility(
             visible = chromeVisible,
-            enter = fadeIn(tween(200)) + slideInVertically(tween(200)) { -it },
-            exit = fadeOut(tween(200)) + slideOutVertically(tween(200)) { -it },
+            enter = fadeIn(tween(Motion.chrome)) + slideInVertically(tween(Motion.chrome)) { -it },
+            exit = fadeOut(tween(Motion.chrome)) + slideOutVertically(tween(Motion.chrome)) { -it },
             modifier = Modifier.align(Alignment.TopCenter).padding(start = sidebarWidth),
         ) {
             Surface(
@@ -774,8 +782,8 @@ fun PdfReadScreen(
 
         AnimatedVisibility(
             visible = chromeVisible,
-            enter = fadeIn(tween(200)) + slideInVertically(tween(200)) { it },
-            exit = fadeOut(tween(200)) + slideOutVertically(tween(200)) { it },
+            enter = fadeIn(tween(Motion.chrome)) + slideInVertically(tween(Motion.chrome)) { it },
+            exit = fadeOut(tween(Motion.chrome)) + slideOutVertically(tween(Motion.chrome)) { it },
             modifier = Modifier.align(Alignment.BottomCenter).padding(start = sidebarWidth)
                 .navigationBarsPadding().systemGesturesPadding(),
         ) {
@@ -834,32 +842,54 @@ fun PdfReadScreen(
                 shadowElevation = 8.dp,
             ) {
                 Row(
-                    Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     listOf(0x66FFF176, 0x6681C784, 0x6680DEEA, 0x66FF8A65, 0x66B39DDB).forEach { argb ->
+                        val selectedColor = selectedMarkColor == argb
                         Box(
-                            Modifier.width(20.dp).height(20.dp).clip(RoundedCornerShape(50))
-                                .background(Color(argb)).clickable { selectedMarkColor = argb },
+                            Modifier.width(24.dp).height(24.dp).clip(CircleShape)
+                                .background(Color(argb))
+                                .then(
+                                    if (selectedColor) Modifier.border(2.dp, MaterialTheme.colorScheme.onSurface, CircleShape)
+                                    else Modifier.border(1.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape),
+                                )
+                                .clickable(onClickLabel = "Select mark ink") { selectedMarkColor = argb },
                         )
                     }
                     TextButton(onClick = {
                         saveSelection(repo, scope, pages, notebookId, selected, PdfMarkKind.HIGHLIGHT, selectedMarkColor, onSaved = ::recordSavedMark)
                         selection = null
-                    }) { Text("Highlight") }
+                    }) {
+                        Icon(Icons.Rounded.Highlight, contentDescription = null, modifier = Modifier.width(18.dp).height(18.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Highlight")
+                    }
                     TextButton(onClick = {
                         saveSelection(repo, scope, pages, notebookId, selected, PdfMarkKind.UNDERLINE, selectedMarkColor, onSaved = ::recordSavedMark)
                         selection = null
-                    }) { Text("Underline") }
+                    }) {
+                        Icon(Icons.Rounded.FormatUnderlined, contentDescription = null, modifier = Modifier.width(18.dp).height(18.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Underline")
+                    }
                     TextButton(onClick = {
                         saveSelection(repo, scope, pages, notebookId, selected, PdfMarkKind.STRIKE, selectedMarkColor, onSaved = ::recordSavedMark)
                         selection = null
-                    }) { Text("Strike") }
+                    }) {
+                        Icon(Icons.Rounded.StrikethroughS, contentDescription = null, modifier = Modifier.width(18.dp).height(18.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Strike")
+                    }
                     TextButton(onClick = {
                         noteDraft = selected.mark?.note.orEmpty()
                         noteDialog = true
-                    }) { Text("Note") }
+                    }) {
+                        Icon(Icons.Rounded.StickyNote2, contentDescription = null, modifier = Modifier.width(18.dp).height(18.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Note")
+                    }
                     TextButton(onClick = {
                         clipboard.setText(
                             AnnotatedString(
@@ -867,12 +897,20 @@ fun PdfReadScreen(
                             ),
                         )
                         selection = null
-                    }) { Text("Copy") }
+                    }) {
+                        Icon(Icons.Rounded.ContentCopy, contentDescription = null, modifier = Modifier.width(18.dp).height(18.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Copy")
+                    }
                     TextButton(onClick = {
                         searchQuery = selected.text
                         sidebarOpen = true
                         selection = null
-                    }) { Text("Search") }
+                    }) {
+                        Icon(Icons.Rounded.Search, contentDescription = null, modifier = Modifier.width(18.dp).height(18.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Search")
+                    }
                     selected.mark?.let { mark ->
                         TextButton(onClick = {
                             scope.launch {

@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
@@ -126,41 +127,47 @@ fun SplitViewScreen(
         if (compact) {
             val selectedNotebook = if (compactPane) rightNotebook else leftNotebook
             val selectedPage = if (compactPane) rightPageId else leftPageId
-            SplitDocumentPane(
-                repo = repo,
-                notebookId = selectedNotebook.id,
-                initialPageId = selectedPage,
-                recognizer = recognizer,
-                onPageChange = { pageId ->
-                    if (compactPane) rightPageId = pageId else leftPageId = pageId
-                },
-                onClose = { onClose(selectedNotebook.id, selectedPage.orEmpty()) },
-            )
-            Surface(
-                modifier = Modifier.align(Alignment.TopEnd)
-                    .statusBarsPadding()
-                    .padding(top = 8.dp, end = 12.dp),
-                color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                shape = MaterialTheme.shapes.extraLarge,
-                tonalElevation = 4.dp,
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        leftNotebook.title,
-                        Modifier.clickable { compactPane = false }.padding(start = 14.dp, top = 10.dp, bottom = 10.dp),
-                        maxLines = 1,
-                        style = MaterialTheme.typography.labelLarge,
-                        color = if (!compactPane) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                    )
-                    Text(" · ", style = MaterialTheme.typography.labelLarge)
-                    Text(
-                        rightNotebook.title,
-                        Modifier.clickable { compactPane = true }.padding(end = 14.dp, top = 10.dp, bottom = 10.dp),
-                        maxLines = 1,
-                        style = MaterialTheme.typography.labelLarge,
-                        color = if (compactPane) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                    )
+            Column(Modifier.fillMaxSize().statusBarsPadding()) {
+                Surface(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    shape = MaterialTheme.shapes.extraLarge,
+                    tonalElevation = 4.dp,
+                ) {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            leftNotebook.title,
+                            Modifier.weight(1f).clickable { compactPane = false }
+                                .padding(horizontal = 12.dp, vertical = 12.dp),
+                            maxLines = 1,
+                            style = MaterialTheme.typography.labelLarge,
+                            color = if (!compactPane) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                        )
+                        Text("·", style = MaterialTheme.typography.labelLarge)
+                        Text(
+                            rightNotebook.title,
+                            Modifier.weight(1f).clickable { compactPane = true }
+                                .padding(horizontal = 12.dp, vertical = 12.dp),
+                            maxLines = 1,
+                            style = MaterialTheme.typography.labelLarge,
+                            color = if (compactPane) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
                 }
+                SplitDocumentPane(
+                    repo = repo,
+                    notebookId = selectedNotebook.id,
+                    initialPageId = selectedPage,
+                    recognizer = recognizer,
+                    modifier = Modifier.fillMaxWidth().weight(1f),
+                    onPageChange = { pageId ->
+                        if (compactPane) rightPageId = pageId else leftPageId = pageId
+                    },
+                    onClose = { onClose(selectedNotebook.id, selectedPage.orEmpty()) },
+                )
             }
         } else {
             Row(Modifier.fillMaxSize().onSizeChanged { containerSize = it }) {
@@ -218,7 +225,7 @@ private fun SplitDivider(
         onRatioChange((ratio + delta / (widthPx - dividerWidthPx).coerceAtLeast(1f)).coerceIn(0.25f, 0.75f))
     }
     Column(
-        Modifier.width(40.dp).fillMaxHeight().background(MaterialTheme.colorScheme.surfaceVariant)
+        Modifier.width(40.dp).fillMaxHeight()
             .draggable(
                 state = draggableState,
                 orientation = Orientation.Horizontal,
@@ -239,11 +246,7 @@ private fun SplitDivider(
         IconButton(onClick = onSwap) {
             Icon(Icons.Default.SwapHoriz, contentDescription = if (swapped) "Restore pane order" else "Swap panes")
         }
-        Surface(
-            Modifier.width(6.dp).height(56.dp),
-            shape = MaterialTheme.shapes.extraLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f),
-        ) {}
+        Box(Modifier.width(1.dp).height(56.dp).background(MaterialTheme.colorScheme.outlineVariant))
         IconButton(onClick = onClose) {
             Icon(Icons.Default.Close, contentDescription = "Close side-by-side view")
         }
