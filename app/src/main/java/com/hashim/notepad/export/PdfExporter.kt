@@ -39,7 +39,8 @@ class PdfExporter(private val context: Context, private val repo: NotePadReposit
         PdfBoxExporter(context, repo).exportNotebook(notebookId, title, options, onProgress)
     } catch (cancelled: kotlinx.coroutines.CancellationException) {
         throw cancelled
-    } catch (_: Throwable) {
+    } catch (failure: Throwable) {
+        if (repo.pdfMarks(notebookId).first().any { !it.deleted }) throw failure
         legacyExportNotebook(notebookId, title)
     }
 

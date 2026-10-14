@@ -25,6 +25,7 @@ import java.io.File
 import java.util.UUID
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -153,6 +154,23 @@ class PdfBoxTextExportInstrumentedTest {
             val repo = NotePadRepository(context, databaseName)
             try {
                 val pageSizes = PdfPageSource(context, source).use { it.pageSizesPt() }
+                val (pageWidth, pageHeight) = pageSizes.first()
+                PDDocument.load(source).use { imported ->
+                    val page = imported.getPage(0)
+                    val right = (pageWidth - 30f).coerceAtMost(300f)
+                    val top = pageHeight - 100f
+                    val annotation = PDAnnotationTextMarkup(PDAnnotationTextMarkup.SUB_TYPE_HIGHLIGHT).apply {
+                        quadPoints = floatArrayOf(30f, top, right, top, 30f, top - 12f, right, top - 12f)
+                        rectangle = PDRectangle(30f, top - 12f, right - 30f, 12f)
+                        color = PDColor(floatArrayOf(0.15f, 0.35f, 1f), PDDeviceRGB.INSTANCE)
+                        contents = "Existing PDF highlight"
+                        setPrinted(true)
+                        this.page = page
+                        constructAppearances(imported)
+                    }
+                    page.annotations.add(annotation)
+                    imported.save(source)
+                }
                 val asset = Asset(
                     id = UUID.randomUUID().toString(),
                     kind = "pdf",
@@ -184,12 +202,17 @@ class PdfBoxTextExportInstrumentedTest {
                 )
                 val exportedFile = PdfExporter(context, repo).exportNotebook(notebookId, "legacy-arabic-export")
                 PDDocument.load(exportedFile).use { exported ->
-                    val annotation = exported.getPage(0).annotations.single()
-                    assertTrue(annotation.isPrinted())
-                    assertNotNull(annotation.normalAppearanceStream)
+                    val annotations = exported.getPage(0).annotations
+                    assertEquals(2, annotations.size)
+                    assertTrue(annotations.any { it.contents == "Existing PDF highlight" })
+                    assertTrue(annotations.any { it.contents == "العربية" })
+                    annotations.forEach { annotation ->
+                        assertTrue(annotation.isPrinted())
+                        assertNotNull(annotation.normalAppearanceStream)
+                    }
                     Log.i(
                         "PdfAnnotsDump",
-                        "page=0 /Annots count=1 subtype=${annotation.subtype} contents=${annotation.contents} printed=${annotation.isPrinted()} appearance=${annotation.normalAppearanceStream != null}",
+                        "page=0 /Annots count=${annotations.size} ${annotations.joinToString { "${it.subtype}:${it.contents}:printed=${it.isPrinted()}:appearance=${it.normalAppearanceStream != null}" }}",
                     )
                 }
                 val sourceBitmap = PdfPageSource(context, source).use { it.render(0, 600) }
@@ -208,11 +231,21 @@ class PdfBoxTextExportInstrumentedTest {
                     }
                 }
                 assertTrue("Expected PDFium to render the exported Arabic highlight", tintedPixels > 0)
+                val invalidRangeExport = runCatching {
+                    PdfExporter(context, repo).exportNotebook(
+                        notebookId,
+                        "legacy-arabic-fallback-guard",
+                        PdfExportOptions(pageRange = 1..1),
+                    )
+                }
+                assertTrue("Marked exports must not use the lossy fallback", invalidRangeExport.isFailure)
+                assertFalse(File(context.cacheDir, "exports/legacy-arabic-fallback-guard.pdf").exists())
             } finally {
                 repo.helper.close()
                 context.deleteDatabase(databaseName)
                 source.delete()
                 File(context.cacheDir, "exports/legacy-arabic-export.pdf").delete()
+                File(context.cacheDir, "exports/legacy-arabic-fallback-guard.pdf").delete()
             }
         }
     }
