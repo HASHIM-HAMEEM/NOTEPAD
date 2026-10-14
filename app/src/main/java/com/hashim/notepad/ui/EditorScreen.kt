@@ -100,6 +100,8 @@ import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
 import androidx.ink.strokes.Stroke
 import com.hashim.notepad.data.NotePadRepository
+import com.hashim.notepad.audio.AudioPlaybackBar
+import com.hashim.notepad.audio.AudioRecorderButton
 import com.hashim.notepad.data.PageImage
 import com.hashim.notepad.data.Page
 import com.hashim.notepad.data.PageKind
@@ -277,6 +279,8 @@ fun EditorScreen(
     var tool by rememberSaveableTool()
     val preferences = remember(context) { context.getSharedPreferences("notepad", 0) }
     var pageSidebarOpen by rememberSaveable { mutableStateOf(false) }
+    var selectedAudioRecordingId by rememberSaveable(notebookId) { mutableStateOf<String?>(null) }
+    var requestedAudioSeekMs by remember { mutableStateOf<Long?>(null) }
     var toolbarEdge by remember(preferences) {
         mutableStateOf(
             runCatching {
@@ -406,6 +410,7 @@ fun EditorScreen(
     var dirtyPageImages by remember { mutableStateOf<Pair<String, List<PageImage>>?>(null) }
     var pageBitmap by remember { mutableStateOf<Bitmap?>(null) }
     val textBlocks by repo.textBlocks(pageId).collectAsState(initial = emptyList())
+    val audioObservedItemKeys = remember(pageId) { mutableSetOf<String>() }
     val pdfMarks by repo.pdfMarks(notebookId).collectAsState(initial = emptyList())
     var editingBlock by remember { mutableStateOf<TextBlock?>(null) }
     var newBlockAt by remember { mutableStateOf<Pair<Float, Float>?>(null) }
@@ -504,7 +509,10 @@ fun EditorScreen(
             }.onFailure { Toast.makeText(context, "Could not insert image: ${it.message}", Toast.LENGTH_LONG).show() }
         }
     }
-    LaunchedEffect(textBlocks, surface) { surface?.textBlocks = textBlocks }
+    LaunchedEffect(textBlocks, surface) {
+        surface?.textBlocks = textBlocks
+        audioObservedItemKeys.addAll(textBlocks.map { "text:${it.id}" })
+    }
     LaunchedEffect(pdfMarks, pageId, surface) { surface?.setPdfMarks(pdfMarks.filter { it.pageId == pageId }) }
     LaunchedEffect(page?.rotation, surface) { surface?.setPageRotation(page?.rotation ?: 0) }
 
@@ -512,6 +520,10 @@ fun EditorScreen(
     LaunchedEffect(surface, zoomBox, language) { surface?.setZoomBox(zoomBox, language != "en") }
     LaunchedEffect(surface, rulerVisible) { surface?.setRulerVisible(rulerVisible) }
     LaunchedEffect(surface, darkTheme) { surface?.setRulerDarkTheme(darkTheme) }
+    DisposableEffect(surface) {
+        surface?.onAudioSeekRequested = { requestedAudioSeekMs = it }
+        onDispose { surface?.onAudioSeekRequested = null }
+    }
     LaunchedEffect(surface, deskColor) { surface?.setDeskColor(deskColor.toArgb()) }
     LaunchedEffect(surface, alwaysStraight) { surface?.highlighterAlwaysStraight = alwaysStraight }
     LaunchedEffect(surface, shapeStraightening) { surface?.shapeStraightening = shapeStraightening }
@@ -534,6 +546,19 @@ fun EditorScreen(
         }
     }
 
+    fun recordAudioItem(pageId: String, kind: String, key: String) {
+        scope.launch(Dispatchers.IO) {
+            val recording = repo.activeAudioRecording(notebookId) ?: return@launch
+            repo.addInkTimestamp(
+                recording.id,
+                pageId,
+                kind,
+                key,
+                (System.currentTimeMillis() - recording.startedAt).coerceAtLeast(0),
+            )
+        }
+    }
+
     // Load page geometry + strokes once the surface exists.
     LaunchedEffect(page?.id, surface) {
         val p = page ?: return@LaunchedEffect
@@ -544,12 +569,42 @@ fun EditorScreen(
         s.setPageRotation(p.rotation)
         val bytes = repo.loadStrokes(p.id)
         val strokes = bytes?.let { b -> withContext(Dispatchers.Default) { runCatching { StrokeStore.decode(b) }.getOrElse { Log.e("NotePad", "decode", it); emptyList() } } } ?: emptyList()
+        audioObservedItemKeys.addAll(strokes.indices.map { "stroke:$it" })
         s.onStrokesChanged = null
         s.setStrokes(strokes)
-        s.onStrokesChanged = { dirtyStrokes = it }
-        s.onPageImagesChanged = { dirtyPageImages = p.id to it }
-        s.onTextBlocksChanged = { blocks -> scope.launch { repo.replacePageTextBlocks(p.id, blocks) } }
-        s.setPageImages(p.id, repo.pageImages(p.id).first())
+        var observedStrokeCount = strokes.size
+        s.onStrokesChanged = { changed ->
+            dirtyStrokes = changed
+            if (changed.size > observedStrokeCount) {
+                (observedStrokeCount until changed.size).forEach { index ->
+                    if (audioObservedItemKeys.add("stroke:$index")) {
+                        recordAudioItem(p.id, "stroke", "stroke:$index")
+                    }
+                }
+            }
+            observedStrokeCount = changed.size
+        }
+        s.onPageImagesChanged = { images ->
+            dirtyPageImages = p.id to images
+            images.forEach {
+                if (audioObservedItemKeys.add("image:${it.id}")) {
+                    recordAudioItem(p.id, "image", it.id)
+                }
+            }
+        }
+        s.onTextBlocksChanged = { blocks ->
+            blocks.forEach {
+                if (audioObservedItemKeys.add("text:${it.id}")) {
+                    recordAudioItem(p.id, "text", it.id)
+                }
+            }
+            scope.launch {
+                repo.replacePageTextBlocks(p.id, blocks)
+            }
+        }
+        val images = repo.pageImages(p.id).first()
+        audioObservedItemKeys.addAll(images.map { "image:${it.id}" })
+        s.setPageImages(p.id, images)
         loadedFor = p.id
         processedHighlighterStrokeCount = strokes.size
     }
@@ -612,6 +667,7 @@ fun EditorScreen(
         }
         if (created != null) {
             repo.savePdfMark(created)
+            recordAudioItem(created.pageId, "mark", created.id)
             val converted = target.convertLastStrokeToExternalUndo(stroke) {
                 scope.launch { repo.deletePdfMark(created.id) }
             }
@@ -1431,7 +1487,7 @@ fun EditorScreen(
         }
         Surface(
             modifier = Modifier.offset {
-                IntOffset((containerWidthPx - with(density) { 92.dp.roundToPx() }).coerceAtLeast(0), safeTopPx)
+                IntOffset((containerWidthPx - with(density) { 132.dp.roundToPx() }).coerceAtLeast(0), safeTopPx)
             }.graphicsLayer {
                 alpha = toolbarAlpha
                 translationX = toolbarShiftXPx
@@ -1443,6 +1499,13 @@ fun EditorScreen(
             shadowElevation = 6.dp,
         ) {
             Row(Modifier.height(40.dp), verticalAlignment = Alignment.CenterVertically) {
+                AudioRecorderButton(
+                    repo = repo,
+                    notebookId = notebookId,
+                    notebookTitle = notebook?.title ?: "Lecture",
+                    onRecordingSelected = { selectedAudioRecordingId = it },
+                    modifier = Modifier.size(40.dp),
+                )
                 IconButton(
                     onClick = {
                         scope.launch {
@@ -1632,6 +1695,23 @@ fun EditorScreen(
             modifier = Modifier.align(Alignment.BottomStart).navigationBarsPadding().padding(8.dp).background(MaterialTheme.colorScheme.surface.copy(alpha = 0.9f), MaterialTheme.shapes.small).padding(8.dp),
         )
 
+        AudioPlaybackBar(
+            repo = repo,
+            notebookId = notebookId,
+            pages = pages,
+            recordingId = selectedAudioRecordingId,
+            onRecordingIdChange = { selectedAudioRecordingId = it },
+            onPlaybackState = { recordingId, positionMs, timestamps ->
+                surface?.setAudioPlayback(
+                    pageId.takeIf { recordingId != null },
+                    positionMs.takeIf { recordingId != null },
+                    timestamps,
+                )
+            },
+            seekToMs = requestedAudioSeekMs,
+            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 64.dp),
+        )
+
         if (pageSidebarOpen && maxWidth >= 600.dp) {
             Box(Modifier.fillMaxSize()) {
                 Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.22f)).clickable { pageSidebarOpen = false })
@@ -1647,6 +1727,7 @@ fun EditorScreen(
                         onNavigateToPage,
                         { pageSidebarOpen = false },
                         Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.systemBars),
+                        onAudioRecordingSelected = { selectedAudioRecordingId = it; pageSidebarOpen = false },
                     )
                 }
             }
@@ -1659,6 +1740,7 @@ fun EditorScreen(
                 PageSidebar(
                     repo, pages, pageId, onNavigateToPage, { pageSidebarOpen = false },
                     Modifier.fillMaxWidth().heightIn(max = 520.dp),
+                    onAudioRecordingSelected = { selectedAudioRecordingId = it; pageSidebarOpen = false },
                 )
             }
         }

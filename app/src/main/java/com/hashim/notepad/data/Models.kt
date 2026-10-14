@@ -73,6 +73,43 @@ data class SplitPair(
     val swapped: Boolean,
 )
 
+data class AudioRecording(
+    val id: String,
+    val notebookId: String,
+    val title: String,
+    val startedAt: Long,
+    val durationMs: Long,
+    val segments: List<String>,
+    val deleted: Boolean = false,
+    val active: Boolean = false,
+)
+
+data class InkTimestamp(
+    val recordingId: String,
+    val pageId: String,
+    val itemKind: String,
+    val itemKey: String,
+    val timeMs: Long,
+)
+
+data class AudioMarker(
+    val id: String,
+    val recordingId: String,
+    val timeMs: Long,
+    val kind: String,
+)
+
+data class OcrWord(
+    val pageId: String,
+    val index: Int,
+    val text: String,
+    val left: Float,
+    val top: Float,
+    val right: Float,
+    val bottom: Float,
+    val confidence: Float,
+)
+
 val Page.displayWidthPt: Float get() = if (rotation % 180 == 90) heightPt else widthPt
 val Page.displayHeightPt: Float get() = if (rotation % 180 == 90) widthPt else heightPt
 

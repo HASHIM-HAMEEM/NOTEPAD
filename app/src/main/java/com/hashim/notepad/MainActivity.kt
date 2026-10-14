@@ -14,6 +14,7 @@ import androidx.compose.runtime.*
 import com.hashim.notepad.ui.NotePadApp
 import com.hashim.notepad.ui.NotePadTheme
 import com.hashim.notepad.ui.Settings
+import com.hashim.notepad.audio.AudioRecordingService
 import com.hashim.notepad.ink.StylusInputDiagnostics
 import com.hashim.notepad.pdf.PdfPageSource
 import com.hashim.notepad.pdf.PdfiumDispatcher
@@ -36,6 +37,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        AudioRecordingService.cleanupInterruptedFiles(applicationContext)
         if (BuildConfig.DEBUG && intent?.action == "com.hashim.notepad.DUMP_PDF_TEXT") {
             val file = File(intent.getStringExtra("path").orEmpty())
             val page = intent.getIntExtra("page", 0)

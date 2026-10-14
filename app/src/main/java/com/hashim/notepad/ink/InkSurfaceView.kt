@@ -38,6 +38,7 @@ import com.hashim.notepad.data.PdfMarkKind
 import com.hashim.notepad.pdf.PdfMarkGeometry
 import com.hashim.notepad.data.PageImage
 import com.hashim.notepad.data.TextBlock
+import com.hashim.notepad.data.InkTimestamp
 import androidx.ink.brush.Brush
 import androidx.ink.brush.ExperimentalInkCustomBrushApi
 import androidx.ink.brush.InputToolType
@@ -87,6 +88,11 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     var onDrawingActiveChanged: ((Boolean) -> Unit)? = null
     var onStrokesChanged: ((List<Stroke>) -> Unit)? = null
     private var pdfMarks: List<PdfMark> = emptyList()
+    private var audioPlaybackPageId: String? = null
+    private var audioPlaybackPositionMs: Long? = null
+    private var audioItemTimes = emptyMap<String, Long>()
+    private var audioLatestItemKey: String? = null
+    var onAudioSeekRequested: ((Long) -> Unit)? = null
     var onPageImagesChanged: ((List<PageImage>) -> Unit)? = null
     var onTextBlocksChanged: ((List<TextBlock>) -> Unit)? = null
     var onUndoRedoChanged: ((Boolean, Boolean) -> Unit)? = null
@@ -252,17 +258,8 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         canvas.save(); canvas.concat(zoomToView)
         drawPageImages(canvas)
         val zoomRevealedTapes = revealedTapeIndicesByPage[revealPageId].orEmpty()
-        drawStrokes(
-            canvas,
-            strokes,
-            renderer,
-            zoomToView,
-            paperPaint.color,
-            highlighterWet.takeIf { highlighterStartedInStrip },
-            zoomRevealedTapes,
-            canvasHasPageTransform = true,
-        )
-        for (b in textBlocks) TextBlockPainter.draw(canvas, b, false, paperPaint.color, context)
+        drawStrokesWithAudio(canvas, zoomToView, highlighterWet.takeIf { highlighterStartedInStrip }, zoomRevealedTapes)
+        for (b in textBlocks) drawTextBlockWithAudio(canvas, b, false)
         canvas.restore()
         canvas.restore()
         canvas.drawLine(0f, stripTop, width.toFloat(), stripTop, stripBorderPaint)
@@ -316,6 +313,8 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
             toggleDoubleTapZoom(event.x, event.y)
             return true
         }
+
+        override fun onSingleTapUp(event: MotionEvent): Boolean = seekAudioToItem(event.x, event.y)
     })
 
     // Lasso state (page coordinates)
@@ -428,16 +427,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
             drawPdfMarks(canvas)
             drawPageImages(canvas)
             val committedRevealedTapes = revealedTapeIndicesByPage[revealPageId].orEmpty()
-            drawStrokes(
-                canvas,
-                strokes,
-                renderer,
-                pageToView,
-                paperPaint.color,
-                highlighterWet.takeUnless { highlighterStartedInStrip },
-                committedRevealedTapes,
-                canvasHasPageTransform = true,
-            )
+            drawStrokesWithAudio(canvas, pageToView, highlighterWet.takeUnless { highlighterStartedInStrip }, committedRevealedTapes)
             canvas.restore()
             selectionBounds?.let { b ->
                 canvas.save(); canvas.concat(pageToView)
@@ -463,7 +453,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
             }
             if (textBlocks.isNotEmpty()) {
                 canvas.save(); canvas.concat(pageToView)
-                for (b in textBlocks) TextBlockPainter.draw(canvas, b, b.id == selectedTextBlockId, paperPaint.color, context)
+                for (b in textBlocks) drawTextBlockWithAudio(canvas, b, b.id == selectedTextBlockId)
                 canvas.restore()
             }
             canvas.restore()
@@ -808,35 +798,51 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
 
     fun setPage(bitmap: Bitmap?) { pageBitmap = bitmap; strokeLayer.invalidate() }
     fun setPdfMarks(marks: List<PdfMark>) { pdfMarks = marks.filterNot(PdfMark::deleted); strokeLayer.invalidate() }
+    fun setAudioPlayback(pageId: String?, positionMs: Long?, timestamps: List<InkTimestamp>) {
+        audioPlaybackPageId = pageId
+        audioPlaybackPositionMs = positionMs
+        audioItemTimes = timestamps.filter { it.pageId == pageId }
+            .associate { "${it.itemKind}:${it.itemKey}" to it.timeMs }
+        audioLatestItemKey = audioItemTimes.asSequence()
+            .filter { it.value <= (positionMs ?: -1L) }
+            .maxByOrNull { it.value }?.key
+        strokeLayer.invalidate()
+    }
     fun paperColorArgb(): Int = paperPaint.color
 
     private fun drawPdfMarks(canvas: Canvas) {
         pdfMarks.forEach { mark ->
-            val isHighlight = mark.kind == PdfMarkKind.HIGHLIGHT
-            val darkPaper = android.graphics.Color.luminance(paperPaint.color) < 0.5f
-            val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = if (isHighlight) PdfMarkGeometry.displayHighlightColor(mark.colorArgb, darkPaper) else mark.colorArgb
-                strokeWidth = 1.5f
-                style = if (isHighlight) Paint.Style.FILL else Paint.Style.STROKE
-            }
-            PdfMarkGeometry.quads(mark.quads).forEach { quad ->
-                val top = pageHeightPt - quad.bottom
-                val bottom = pageHeightPt - quad.top
-                when (mark.kind) {
-                    PdfMarkKind.HIGHLIGHT -> canvas.drawRect(quad.left, top, quad.right, bottom, paint)
-                    PdfMarkKind.UNDERLINE -> canvas.drawLine(quad.left, bottom, quad.right, bottom, paint)
-                    PdfMarkKind.STRIKE -> canvas.drawLine(quad.left, (top + bottom) / 2f, quad.right, (top + bottom) / 2f, paint)
-                    PdfMarkKind.SQUIGGLY -> {
-                        val path = Path()
-                        var x = quad.left
-                        var up = true
-                        path.moveTo(x, bottom)
-                        while (x < quad.right) {
-                            x = min(quad.right, x + 2f)
-                            path.lineTo(x, bottom + if (up) -1.5f else 1.5f)
-                            up = !up
+            drawWithAudioAlpha(canvas, "mark", mark.id) {
+                val isHighlight = mark.kind == PdfMarkKind.HIGHLIGHT
+                val darkPaper = android.graphics.Color.luminance(paperPaint.color) < 0.5f
+                val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = if (isHighlight) PdfMarkGeometry.displayHighlightColor(mark.colorArgb, darkPaper) else mark.colorArgb
+                    strokeWidth = 1.5f
+                    style = if (isHighlight) Paint.Style.FILL else Paint.Style.STROKE
+                }
+                PdfMarkGeometry.quads(mark.quads).forEach { quad ->
+                    val top = pageHeightPt - quad.bottom
+                    val bottom = pageHeightPt - quad.top
+                    if (audioLatestItemKey == "mark:${mark.id}") {
+                        glowPaint.color = 0x22FFD54F
+                        canvas.drawRoundRect(quad.left, top, quad.right, bottom, 2f, 2f, glowPaint)
+                    }
+                    when (mark.kind) {
+                        PdfMarkKind.HIGHLIGHT -> canvas.drawRect(quad.left, top, quad.right, bottom, paint)
+                        PdfMarkKind.UNDERLINE -> canvas.drawLine(quad.left, bottom, quad.right, bottom, paint)
+                        PdfMarkKind.STRIKE -> canvas.drawLine(quad.left, (top + bottom) / 2f, quad.right, (top + bottom) / 2f, paint)
+                        PdfMarkKind.SQUIGGLY -> {
+                            val path = Path()
+                            var x = quad.left
+                            var up = true
+                            path.moveTo(x, bottom)
+                            while (x < quad.right) {
+                                x = min(quad.right, x + 2f)
+                                path.lineTo(x, bottom + if (up) -1.5f else 1.5f)
+                                up = !up
+                            }
+                            canvas.drawPath(path, paint)
                         }
-                        canvas.drawPath(path, paint)
                     }
                 }
             }
@@ -883,10 +889,124 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
 
     private fun drawPageImages(canvas: Canvas) {
         pageImages.forEach { image ->
-            imageBitmaps[image.assetId]?.let {
-                canvas.drawBitmap(it, null, RectF(image.xPt, image.yPt, image.xPt + image.wPt, image.yPt + image.hPt), imagePaint)
+            drawWithAudioAlpha(canvas, "image", image.id) {
+                imageBitmaps[image.assetId]?.let {
+                    val bounds = RectF(image.xPt, image.yPt, image.xPt + image.wPt, image.yPt + image.hPt)
+                    if (audioLatestItemKey == "image:${image.id}") {
+                        glowPaint.color = 0x22FFD54F
+                        canvas.drawRoundRect(bounds, 3f, 3f, glowPaint)
+                    }
+                    canvas.drawBitmap(it, null, bounds, imagePaint)
+                }
             }
         }
+    }
+
+    private val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+
+    private fun drawWithAudioAlpha(canvas: Canvas, kind: String, key: String, draw: () -> Unit) {
+        val position = audioPlaybackPositionMs
+        val time = audioItemTimes["$kind:$key"]
+        if (position == null || audioPlaybackPageId != revealPageId || time == null || time <= position) {
+            draw()
+        } else {
+            val layer = canvas.saveLayer(null, Paint().apply { alpha = 77 })
+            draw()
+            canvas.restoreToCount(layer)
+        }
+    }
+
+    private fun drawStrokesWithAudio(
+        canvas: Canvas,
+        transform: Matrix,
+        wet: InProgressStroke?,
+        revealedTapes: Set<Int>,
+    ) {
+        if (audioPlaybackPositionMs == null || audioPlaybackPageId != revealPageId) {
+            drawStrokes(canvas, strokes, renderer, transform, paperPaint.color, wet, revealedTapes, canvasHasPageTransform = true)
+            return
+        }
+        strokes.forEachIndexed { index, stroke ->
+            val key = "stroke:$index"
+            val bounds = stroke.shape.computeBoundingBox()
+            if (audioLatestItemKey == "stroke:$key" && bounds != null) {
+                glowPaint.color = 0x22FFD54F
+                canvas.drawRoundRect(RectF(bounds.xMin, bounds.yMin, bounds.xMax, bounds.yMax), 3f, 3f, glowPaint)
+            }
+            drawWithAudioAlpha(canvas, "stroke", key) {
+                drawStrokes(
+                    canvas,
+                    listOf(stroke),
+                    renderer,
+                    transform,
+                    paperPaint.color,
+                    null,
+                    if (index in revealedTapes) setOf(0) else emptySet(),
+                    canvasHasPageTransform = true,
+                )
+            }
+        }
+        if (wet != null) drawStrokes(canvas, emptyList(), renderer, transform, paperPaint.color, wet, canvasHasPageTransform = true)
+    }
+
+    private fun drawTextBlockWithAudio(canvas: Canvas, block: TextBlock, selected: Boolean) {
+        drawWithAudioAlpha(canvas, "text", block.id) {
+            if (audioLatestItemKey == "text:${block.id}") {
+                glowPaint.color = 0x22FFD54F
+                canvas.drawRoundRect(
+                    block.xPt,
+                    block.yPt - block.fontSizePt * 1.8f,
+                    block.xPt + block.wPt,
+                    block.yPt + block.fontSizePt * 0.4f,
+                    3f,
+                    3f,
+                    glowPaint,
+                )
+            }
+            TextBlockPainter.draw(canvas, block, selected, paperPaint.color, context)
+        }
+    }
+
+    private fun seekAudioToItem(viewX: Float, viewY: Float): Boolean {
+        val playhead = audioPlaybackPositionMs ?: return false
+        if (audioPlaybackPageId != revealPageId) return false
+        val point = floatArrayOf(viewX, viewY)
+        viewToPage.mapPoints(point)
+        var nearestDistance = Float.MAX_VALUE
+        var nearestTime: Long? = null
+        fun consider(kind: String, key: String, rect: RectF) {
+            val time = audioItemTimes["$kind:$key"] ?: return
+            val dx = max(max(rect.left - point[0], 0f), point[0] - rect.right)
+            val dy = max(max(rect.top - point[1], 0f), point[1] - rect.bottom)
+            val distance = hypot(dx, dy)
+            if (distance < nearestDistance) {
+                nearestDistance = distance
+                nearestTime = time
+            }
+        }
+        strokes.forEachIndexed { index, stroke ->
+            stroke.shape.computeBoundingBox()?.let { bounds ->
+                consider("stroke", "stroke:$index", RectF(bounds.xMin, bounds.yMin, bounds.xMax, bounds.yMax))
+            }
+        }
+        textBlocks.forEach { block ->
+            consider(
+                "text",
+                block.id,
+                RectF(block.xPt, block.yPt - block.fontSizePt * 1.8f, block.xPt + block.wPt, block.yPt + block.fontSizePt * 0.4f),
+            )
+        }
+        pageImages.forEach { image ->
+            consider("image", image.id, RectF(image.xPt, image.yPt, image.xPt + image.wPt, image.yPt + image.hPt))
+        }
+        pdfMarks.forEach { mark ->
+            PdfMarkGeometry.quads(mark.quads).forEach { quad ->
+                consider("mark", mark.id, RectF(quad.left, pageHeightPt - quad.bottom, quad.right, pageHeightPt - quad.top))
+            }
+        }
+        val target = nearestTime?.takeIf { nearestDistance <= 28f } ?: return false
+        if (target != playhead) onAudioSeekRequested?.invoke(target)
+        return true
     }
 
     fun setStrokes(list: List<Stroke>) {

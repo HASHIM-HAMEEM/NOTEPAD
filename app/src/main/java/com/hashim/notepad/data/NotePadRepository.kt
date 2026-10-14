@@ -1262,6 +1262,201 @@ class NotePadRepository(context: Context, databaseName: String = "notepad.db") {
         mark("stroke_batches", pageId); mark("pages", pageId); notifyChanged()
     }
 
+    fun audioRecordings(notebookId: String): Flow<List<AudioRecording>> = flow {
+        emit(loadAudioRecordings(notebookId))
+        changes.collect { emit(loadAudioRecordings(notebookId)) }
+    }.flowOn(Dispatchers.IO)
+
+    private fun loadAudioRecordings(notebookId: String): List<AudioRecording> =
+        helper.readableDatabase.rawQuery(
+            """select id, notebook_id, title, started_at, duration_ms, segments, deleted, active
+               from recordings where notebook_id = ? and deleted = 0 order by started_at desc""",
+            arrayOf(notebookId),
+        ).use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) add(
+                    AudioRecording(
+                        id = cursor.getString(0),
+                        notebookId = cursor.getString(1),
+                        title = cursor.getString(2),
+                        startedAt = cursor.getLong(3),
+                        durationMs = cursor.getLong(4),
+                        segments = JSONArray(cursor.getString(5)).let { json ->
+                            List(json.length()) { index -> json.getString(index) }
+                        },
+                        deleted = cursor.getInt(6) != 0,
+                        active = cursor.getInt(7) != 0,
+                    ),
+                )
+            }
+        }
+
+    suspend fun createAudioRecording(
+        id: String,
+        notebookId: String,
+        title: String,
+        startedAt: Long = System.currentTimeMillis(),
+    ) = withContext(Dispatchers.IO) {
+        helper.writableDatabase.insertOrThrow("recordings", null, ContentValues().apply {
+            put("id", id)
+            put("notebook_id", notebookId)
+            put("title", title)
+            put("started_at", startedAt)
+            put("updated_at", startedAt)
+            put("segments", "[]")
+            put("active", 1)
+        })
+        notifyChanged()
+    }
+
+    suspend fun activeAudioRecordingId(notebookId: String): String? = withContext(Dispatchers.IO) {
+        helper.readableDatabase.rawQuery(
+            "select id from recordings where notebook_id = ? and active = 1 and deleted = 0 order by started_at desc limit 1",
+            arrayOf(notebookId),
+        ).use { if (it.moveToFirst()) it.getString(0) else null }
+    }
+
+    suspend fun activeAudioRecording(notebookId: String): AudioRecording? = withContext(Dispatchers.IO) {
+        loadAudioRecordings(notebookId).firstOrNull(AudioRecording::active)
+    }
+
+    suspend fun activeAudioRecordings(): List<AudioRecording> = withContext(Dispatchers.IO) {
+        val notebookIds = helper.readableDatabase.rawQuery(
+            "select distinct notebook_id from recordings where active = 1 and deleted = 0",
+            null,
+        ).use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.getString(0)) } }
+        notebookIds.flatMap(::loadAudioRecordings).filter(AudioRecording::active)
+    }
+
+    suspend fun appendAudioSegment(recordingId: String, segmentPath: String, durationMs: Long) =
+        withContext(Dispatchers.IO) {
+            val db = helper.writableDatabase
+            db.beginTransaction()
+            try {
+                val current = db.rawQuery(
+                    "select segments, duration_ms from recordings where id = ? and deleted = 0",
+                    arrayOf(recordingId),
+                ).use { cursor ->
+                    if (cursor.moveToFirst()) {
+                        val json = JSONArray(cursor.getString(0))
+                        val paths = List(json.length()) { json.getString(it) }
+                        paths to cursor.getLong(1)
+                    } else null
+                } ?: return@withContext
+                val paths = if (segmentPath in current.first) current.first else current.first + segmentPath
+                db.update(
+                    "recordings",
+                    ContentValues().apply {
+                        put("segments", JSONArray(paths).toString())
+                        put("duration_ms", current.second + durationMs.coerceAtLeast(0))
+                        put("updated_at", System.currentTimeMillis())
+                    },
+                    "id = ?",
+                    arrayOf(recordingId),
+                )
+                db.setTransactionSuccessful()
+            } finally {
+                db.endTransaction()
+            }
+            notifyChanged()
+        }
+
+    suspend fun finishAudioRecording(recordingId: String) = withContext(Dispatchers.IO) {
+        helper.writableDatabase.update(
+            "recordings",
+            ContentValues().apply { put("active", 0); put("updated_at", System.currentTimeMillis()) },
+            "id = ?",
+            arrayOf(recordingId),
+        )
+        notifyChanged()
+    }
+
+    suspend fun recoverInterruptedAudioRecordings() = withContext(Dispatchers.IO) {
+        helper.writableDatabase.update(
+            "recordings",
+            ContentValues().apply { put("active", 0); put("updated_at", System.currentTimeMillis()) },
+            "active = 1",
+            null,
+        )
+        notifyChanged()
+    }
+
+    suspend fun renameAudioRecording(recordingId: String, title: String) = withContext(Dispatchers.IO) {
+        helper.writableDatabase.update(
+            "recordings",
+            ContentValues().apply { put("title", title.trim().ifBlank { "Lecture recording" }); put("updated_at", System.currentTimeMillis()) },
+            "id = ?",
+            arrayOf(recordingId),
+        )
+        notifyChanged()
+    }
+
+    suspend fun setAudioRecordingDeleted(recordingId: String, deleted: Boolean) = withContext(Dispatchers.IO) {
+        helper.writableDatabase.update(
+            "recordings",
+            ContentValues().apply { put("deleted", if (deleted) 1 else 0); put("updated_at", System.currentTimeMillis()) },
+            "id = ?",
+            arrayOf(recordingId),
+        )
+        notifyChanged()
+    }
+
+    suspend fun addInkTimestamp(
+        recordingId: String,
+        pageId: String,
+        itemKind: String,
+        itemKey: String,
+        timeMs: Long,
+    ) = withContext(Dispatchers.IO) {
+        helper.writableDatabase.insertWithOnConflict(
+            "ink_timestamps",
+            null,
+            ContentValues().apply {
+                put("recording_id", recordingId)
+                put("page_id", pageId)
+                put("item_kind", itemKind)
+                put("item_key", itemKey)
+                put("t_ms", timeMs.coerceAtLeast(0))
+            },
+            SQLiteDatabase.CONFLICT_IGNORE,
+        )
+        notifyChanged()
+    }
+
+    suspend fun inkTimestamps(recordingId: String): List<InkTimestamp> = withContext(Dispatchers.IO) {
+        helper.readableDatabase.rawQuery(
+            "select recording_id, page_id, item_kind, item_key, t_ms from ink_timestamps where recording_id = ? order by t_ms, item_key",
+            arrayOf(recordingId),
+        ).use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) add(
+                    InkTimestamp(cursor.getString(0), cursor.getString(1), cursor.getString(2), cursor.getString(3), cursor.getLong(4)),
+                )
+            }
+        }
+    }
+
+    suspend fun addAudioMarker(recordingId: String, timeMs: Long, kind: String) = withContext(Dispatchers.IO) {
+        helper.writableDatabase.insert("audio_markers", null, ContentValues().apply {
+            put("id", UUID.randomUUID().toString())
+            put("recording_id", recordingId)
+            put("t_ms", timeMs.coerceAtLeast(0))
+            put("kind", kind)
+        })
+        notifyChanged()
+    }
+
+    suspend fun audioMarkers(recordingId: String): List<AudioMarker> = withContext(Dispatchers.IO) {
+        helper.readableDatabase.rawQuery(
+            "select id, recording_id, t_ms, kind from audio_markers where recording_id = ? order by t_ms",
+            arrayOf(recordingId),
+        ).use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) add(AudioMarker(cursor.getString(0), cursor.getString(1), cursor.getLong(2), cursor.getString(3)))
+            }
+        }
+    }
+
     private fun maxSortKey(notebookId: String): Double =
         helper.readableDatabase.rawQuery("select coalesce(max(sort_key), 0) from pages where notebook_id = ?", arrayOf(notebookId)).use { c -> if (c.moveToFirst()) c.getDouble(0) else 0.0 }
 

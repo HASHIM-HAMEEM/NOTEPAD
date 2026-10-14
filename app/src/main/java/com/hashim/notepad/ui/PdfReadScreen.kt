@@ -63,6 +63,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
@@ -89,9 +90,13 @@ import androidx.compose.ui.text.AnnotatedString
 import android.view.MotionEvent
 import androidx.compose.ui.unit.dp
 import com.hashim.notepad.data.NotePadRepository
+import com.hashim.notepad.audio.AudioPlaybackBar
+import com.hashim.notepad.audio.AudioRecorderButton
 import com.hashim.notepad.data.Page
 import com.hashim.notepad.data.PdfMark
 import com.hashim.notepad.data.PdfMarkKind
+import com.hashim.notepad.data.InkTimestamp
+import com.hashim.notepad.audio.AudioTimeline
 import com.hashim.notepad.data.displayHeightPt
 import com.hashim.notepad.data.displayWidthPt
 import com.hashim.notepad.pdf.PdfMarkGeometry
@@ -156,6 +161,10 @@ fun PdfReadScreen(
     var backPage by remember { mutableStateOf<Int?>(null) }
     var settledPages by remember { mutableStateOf(emptySet<Int>()) }
     var sidebarOpen by remember { mutableStateOf(false) }
+    var selectedAudioRecordingId by rememberSaveable(notebookId) { mutableStateOf<String?>(null) }
+    var audioPlaybackPositionMs by remember { mutableStateOf<Long?>(null) }
+    var audioPlaybackTimestamps by remember { mutableStateOf(emptyList<InkTimestamp>()) }
+    var requestedAudioSeekMs by remember { mutableStateOf<Long?>(null) }
     var currentHit by remember { mutableStateOf<PdfTextSearchHit?>(null) }
     var searchResults by remember { mutableStateOf(emptyList<PdfTextSearchHit>()) }
     var searchHitIndex by remember { mutableIntStateOf(-1) }
@@ -168,6 +177,18 @@ fun PdfReadScreen(
     var noteDraft by remember { mutableStateOf("") }
     val snackbarHost = remember { androidx.compose.material3.SnackbarHostState() }
     val clipboard = LocalClipboardManager.current
+    fun recordSavedMark(mark: com.hashim.notepad.data.PdfMark) {
+        scope.launch {
+            val recording = repo.activeAudioRecording(notebookId) ?: return@launch
+            repo.addInkTimestamp(
+                recording.id,
+                mark.pageId,
+                "mark",
+                mark.id,
+                (System.currentTimeMillis() - recording.startedAt).coerceAtLeast(0),
+            )
+        }
+    }
     val currentIndex by remember(listState, pages) {
         derivedStateOf {
             val info = listState.layoutInfo
@@ -357,6 +378,10 @@ fun PdfReadScreen(
                                             }
                                         }
                                     }
+                                    val audioItem = mark?.let { selected ->
+                                        audioPlaybackTimestamps.firstOrNull { it.itemKind == "mark" && it.itemKey == selected.id }
+                                    }
+                                    if (audioItem != null) requestedAudioSeekMs = audioItem.timeMs
                                     if (mark != null) {
                                         selection = PdfReadSelection(
                                             page.id, mark.charStart ?: 0, mark.charEnd ?: 0, mark.text,
@@ -389,6 +414,39 @@ fun PdfReadScreen(
                         precomposedOnly = true,
                         modifier = Modifier.fillMaxSize(),
                     )
+                    audioPlaybackPositionMs?.let { playhead ->
+                        Canvas(Modifier.fillMaxSize()) {
+                            val pageTimes = audioPlaybackTimestamps.filter { it.pageId == page.id }
+                            val latest = AudioTimeline.latestVisible(audioPlaybackTimestamps, page.id, playhead)
+                            val sx = size.width / page.displayWidthPt
+                            val sy = size.height / page.displayHeightPt
+                            marks.filter { it.pageId == page.id }.forEach { mark ->
+                                val itemTime = pageTimes.firstOrNull { it.itemKind == "mark" && it.itemKey == mark.id }?.timeMs
+                                    ?: return@forEach
+                                PdfMarkGeometry.quads(mark.quads).forEach { quad ->
+                                    val pageRect = android.graphics.RectF(
+                                        quad.left,
+                                        page.heightPt - quad.bottom,
+                                        quad.right,
+                                        page.heightPt - quad.top,
+                                    )
+                                    val shown = pageRectToDisplay(
+                                        page.widthPt,
+                                        page.heightPt,
+                                        page.rotation,
+                                        PdfTextRect(pageRect.left, pageRect.top, pageRect.right, pageRect.bottom),
+                                    )
+                                    val topLeft = Offset(shown.left * sx, shown.top * sy)
+                                    val rectSize = Size((shown.right - shown.left) * sx, (shown.bottom - shown.top) * sy)
+                                    if (itemTime > playhead) {
+                                        drawRect(Color.Black.copy(alpha = 0.55f), topLeft, rectSize)
+                                    } else if (latest?.itemKind == "mark" && latest.itemKey == mark.id) {
+                                        drawRect(Color(0x33FFD54F), topLeft, rectSize)
+                                    }
+                                }
+                            }
+                        }
+                    }
                     currentHit?.takeIf { it.pageId == page.id }?.let { hit ->
                         Canvas(Modifier.fillMaxSize()) {
                             hit.rects.forEach { rect ->
@@ -547,6 +605,12 @@ fun PdfReadScreen(
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurface,
                     )
+                    AudioRecorderButton(
+                        repo = repo,
+                        notebookId = notebookId,
+                        notebookTitle = notebook?.title ?: "Lecture",
+                        onRecordingSelected = { selectedAudioRecordingId = it },
+                    )
                     if (searchResults.isNotEmpty()) {
                         androidx.compose.material3.TextButton(onClick = { showSearchHit(searchHitIndex - 1) }) {
                             Text("‹", color = MaterialTheme.colorScheme.onSurface)
@@ -649,6 +713,19 @@ fun PdfReadScreen(
                 }
             }
         }
+        AudioPlaybackBar(
+            repo = repo,
+            notebookId = notebookId,
+            pages = pages,
+            recordingId = selectedAudioRecordingId,
+            onRecordingIdChange = { selectedAudioRecordingId = it },
+            onPlaybackState = { recordingId, positionMs, timestamps ->
+                audioPlaybackPositionMs = positionMs.takeIf { recordingId != null }
+                audioPlaybackTimestamps = if (recordingId != null) timestamps else emptyList()
+            },
+            seekToMs = requestedAudioSeekMs,
+            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 64.dp),
+        )
         selection?.takeUnless { draggingSelectionHandle }?.let { selected ->
             Surface(
                 Modifier.align(Alignment.BottomCenter).padding(bottom = if (chromeVisible) 118.dp else 24.dp),
@@ -668,15 +745,15 @@ fun PdfReadScreen(
                         )
                     }
                     TextButton(onClick = {
-                        saveSelection(repo, scope, pages, notebookId, selected, PdfMarkKind.HIGHLIGHT, selectedMarkColor)
+                        saveSelection(repo, scope, pages, notebookId, selected, PdfMarkKind.HIGHLIGHT, selectedMarkColor, onSaved = ::recordSavedMark)
                         selection = null
                     }) { Text("Highlight") }
                     TextButton(onClick = {
-                        saveSelection(repo, scope, pages, notebookId, selected, PdfMarkKind.UNDERLINE, selectedMarkColor)
+                        saveSelection(repo, scope, pages, notebookId, selected, PdfMarkKind.UNDERLINE, selectedMarkColor, onSaved = ::recordSavedMark)
                         selection = null
                     }) { Text("Underline") }
                     TextButton(onClick = {
-                        saveSelection(repo, scope, pages, notebookId, selected, PdfMarkKind.STRIKE, selectedMarkColor)
+                        saveSelection(repo, scope, pages, notebookId, selected, PdfMarkKind.STRIKE, selectedMarkColor, onSaved = ::recordSavedMark)
                         selection = null
                     }) { Text("Strike") }
                     TextButton(onClick = {
@@ -736,7 +813,7 @@ fun PdfReadScreen(
                         selection?.let {
                             saveSelection(
                                 repo, scope, pages, notebookId, it, it.mark?.kind ?: PdfMarkKind.HIGHLIGHT,
-                                selectedMarkColor, noteDraft,
+                                selectedMarkColor, noteDraft, ::recordSavedMark,
                             )
                         }
                         noteDialog = false
@@ -766,6 +843,7 @@ fun PdfReadScreen(
                     onSearchHit = { hit -> showSearchHit(searchResults.indexOf(hit).coerceAtLeast(0)) },
                     onSearchResults = ::acceptSearchResults,
                     initialQuery = searchQuery,
+                    onAudioRecordingSelected = { selectedAudioRecordingId = it; sidebarOpen = false },
                     modifier = Modifier.fillMaxSize(),
                 )
             }
@@ -785,6 +863,7 @@ fun PdfReadScreen(
                     onSearchHit = { hit -> showSearchHit(searchResults.indexOf(hit).coerceAtLeast(0)) },
                     onSearchResults = ::acceptSearchResults,
                     initialQuery = searchQuery,
+                    onAudioRecordingSelected = { selectedAudioRecordingId = it; sidebarOpen = false },
                     modifier = Modifier.fillMaxWidth().heightIn(max = 640.dp),
                 )
             }
@@ -940,6 +1019,7 @@ private fun saveSelection(
     kind: PdfMarkKind,
     colorArgb: Int,
     note: String? = selection.mark?.note,
+    onSaved: ((com.hashim.notepad.data.PdfMark) -> Unit)? = null,
 ) {
     val page = pages.firstOrNull { it.id == selection.pageId } ?: return
     val now = System.currentTimeMillis()
@@ -965,5 +1045,8 @@ private fun saveSelection(
         createdAt = now,
         updatedAt = now,
     )
-    scope.launch { repo.savePdfMark(mark) }
+    scope.launch {
+        repo.savePdfMark(mark)
+        onSaved?.invoke(mark)
+    }
 }

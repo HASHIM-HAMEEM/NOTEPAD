@@ -28,12 +28,15 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.Button
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -47,6 +50,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import com.hashim.notepad.data.NotePadRepository
+import com.hashim.notepad.data.AudioRecording
 import com.hashim.notepad.data.Page
 import com.hashim.notepad.data.displayHeightPt
 import com.hashim.notepad.data.displayWidthPt
@@ -70,6 +74,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.Date
+import java.text.DateFormat
+import kotlinx.coroutines.launch
 
 @Composable
 internal fun PageSidebar(
@@ -82,8 +89,10 @@ internal fun PageSidebar(
     onSearchHit: (PdfTextSearchHit) -> Unit = {},
     onSearchResults: (List<PdfTextSearchHit>) -> Unit = {},
     initialQuery: String = "",
+    onAudioRecordingSelected: (String) -> Unit = {},
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var selectedTab by remember { mutableIntStateOf(0) }
     var query by remember { mutableStateOf("") }
     var searchHits by remember { mutableStateOf(emptyList<PdfTextSearchHit>()) }
@@ -93,6 +102,9 @@ internal fun PageSidebar(
     var expandedPaths by remember { mutableStateOf(emptySet<List<Int>>()) }
     var marks by remember { mutableStateOf(emptyList<PdfMark>()) }
     var markColorFilter by remember { mutableStateOf<Int?>(null) }
+    var deletedAudio by remember { mutableStateOf<AudioRecording?>(null) }
+    var renamingAudioId by remember { mutableStateOf<String?>(null) }
+    var editedAudioTitle by remember { mutableStateOf("") }
     val tabListState = rememberLazyListState()
     LaunchedEffect(selectedTab) {
         tabListState.animateScrollToItem(selectedTab)
@@ -105,6 +117,9 @@ internal fun PageSidebar(
     }
     val assetId = pages.firstOrNull { it.kind == PageKind.PDF }?.assetId
     val currentPage = pages.firstOrNull { it.id == currentPageId }
+    val notebookId = pages.firstOrNull()?.notebookId
+    val audioRecordings by (notebookId?.let(repo::audioRecordings)
+        ?: remember { kotlinx.coroutines.flow.flowOf(emptyList()) }).collectAsState(initial = emptyList())
     val currentPdfIndex = currentPage?.pdfPageIndex ?: pages.indexOfFirst { it.id == currentPageId }
     val currentOutlinePath = outlinePathForPage(outline, currentPdfIndex)
     val activeChapter = chapterForPage(outline, currentPdfIndex)
@@ -199,7 +214,7 @@ internal fun PageSidebar(
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                itemsIndexed(listOf("Pages", "Contents", "Marks", "Bookmarks", "Search")) { index, title ->
+                itemsIndexed(listOf("Pages", "Contents", "Marks", "Bookmarks", "Search", "Audio")) { index, title ->
                     Column(
                         Modifier.clickable { selectedTab = index }.padding(horizontal = 8.dp, vertical = 10.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
@@ -340,6 +355,65 @@ internal fun PageSidebar(
                     }
                 }
             }
+            5 -> {
+                if (audioRecordings.isEmpty()) {
+                    EmptySidebar("No recordings yet")
+                } else {
+                    Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        deletedAudio?.let { deleted ->
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                Text("Recording deleted", Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                TextButton(onClick = {
+                                    scope.launch { repo.setAudioRecordingDeleted(deleted.id, false) }
+                                    deletedAudio = null
+                                }) { Text("Undo") }
+                            }
+                        }
+                        LazyColumn(Modifier.fillMaxSize()) {
+                            items(audioRecordings, key = { "audio:${it.id}" }) { recording ->
+                                Column(
+                                    Modifier.fillMaxWidth().clickable { onAudioRecordingSelected(recording.id) }
+                                        .padding(vertical = 6.dp),
+                                    verticalArrangement = Arrangement.spacedBy(3.dp),
+                                ) {
+                                    if (renamingAudioId == recording.id) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            OutlinedTextField(
+                                                value = editedAudioTitle,
+                                                onValueChange = { editedAudioTitle = it },
+                                                modifier = Modifier.weight(1f),
+                                                singleLine = true,
+                                            )
+                                            TextButton(onClick = {
+                                                scope.launch { repo.renameAudioRecording(recording.id, editedAudioTitle) }
+                                                renamingAudioId = null
+                                            }) { Text("Save") }
+                                        }
+                                    } else {
+                                        Text(recording.title, maxLines = 1, style = MaterialTheme.typography.bodyLarge)
+                                    }
+                                    Text(
+                                        "${DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(recording.startedAt))} · ${formatRecordingDuration(recording.durationMs)}",
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        style = MaterialTheme.typography.labelSmall,
+                                    )
+                                    Row {
+                                        TextButton(onClick = {
+                                            editedAudioTitle = recording.title
+                                            renamingAudioId = recording.id
+                                        }) { Text("Rename") }
+                                        TextButton(onClick = {
+                                            scope.launch { repo.setAudioRecordingDeleted(recording.id, true) }
+                                            deletedAudio = recording
+                                        }) { Text("Delete") }
+                                    }
+                                }
+                                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                            }
+                        }
+                    }
+                }
+            }
             else -> {
                 Column(Modifier.fillMaxSize().padding(12.dp)) {
                     OutlinedTextField(
@@ -383,6 +457,11 @@ internal fun PageSidebar(
             }
         }
     }
+}
+
+private fun formatRecordingDuration(timeMs: Long): String {
+    val totalSeconds = (timeMs.coerceAtLeast(0) / 1000).toInt()
+    return "${totalSeconds / 60}:${(totalSeconds % 60).toString().padStart(2, '0')}"
 }
 
 @Composable

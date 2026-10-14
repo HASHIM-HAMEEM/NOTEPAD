@@ -81,10 +81,21 @@ class NotePadDb(context: Context, name: String = "notepad.db") : SQLiteOpenHelpe
             db.execSQL(SPLIT_PAIRS)
             db.execSQL("create index if not exists split_pairs_right_idx on split_pairs(right_notebook_id)")
         }
+        if (oldVersion < 13) {
+            db.execSQL(RECORDINGS)
+            db.execSQL("create index if not exists recordings_notebook_idx on recordings(notebook_id, started_at)")
+            db.execSQL(INK_TIMESTAMPS)
+            db.execSQL("create index if not exists ink_timestamps_page_idx on ink_timestamps(recording_id, page_id, t_ms)")
+            db.execSQL(AUDIO_MARKERS)
+        }
+        if (oldVersion < 14) {
+            db.execSQL(OCR_WORDS)
+            db.execSQL("create index if not exists ocr_words_page_idx on ocr_words(page_id, word_index)")
+        }
     }
 
     companion object {
-        const val VERSION = 12
+        const val VERSION = 14
 
         /** Rows changed locally and not yet pushed. row_id is the page id for stroke_batches and recognition. */
         const val OUTBOX = "create table if not exists outbox (table_name text not null, row_id text not null, primary key (table_name, row_id))"
@@ -148,6 +159,42 @@ class NotePadDb(context: Context, name: String = "notepad.db") : SQLiteOpenHelpe
               swapped integer not null default 0,
               updated_at integer not null,
               check(left_notebook_id <> right_notebook_id)
+            )"""
+        private const val RECORDINGS = """create table if not exists recordings (
+              id text primary key,
+              notebook_id text not null references notebooks(id) on delete cascade,
+              title text not null,
+              started_at integer not null,
+              duration_ms integer not null default 0,
+              segments text not null default '[]',
+              deleted integer not null default 0,
+              active integer not null default 1,
+              updated_at integer not null
+            )"""
+        private const val INK_TIMESTAMPS = """create table if not exists ink_timestamps (
+              recording_id text not null references recordings(id) on delete cascade,
+              page_id text not null references pages(id) on delete cascade,
+              item_kind text not null,
+              item_key text not null,
+              t_ms integer not null,
+              primary key(recording_id, page_id, item_kind, item_key)
+            )"""
+        private const val AUDIO_MARKERS = """create table if not exists audio_markers (
+              id text primary key,
+              recording_id text not null references recordings(id) on delete cascade,
+              t_ms integer not null,
+              kind text not null
+            )"""
+        private const val OCR_WORDS = """create table if not exists ocr_words (
+              page_id text not null references pages(id) on delete cascade,
+              word_index integer not null,
+              text text not null,
+              left_pt real not null,
+              top_pt real not null,
+              right_pt real not null,
+              bottom_pt real not null,
+              confidence real not null,
+              primary key (page_id, word_index)
             )"""
 
         private val SCHEMA = """
@@ -231,6 +278,13 @@ class NotePadDb(context: Context, name: String = "notepad.db") : SQLiteOpenHelpe
             create index pdf_marks_notebook_idx on pdf_marks(notebook_id, page_id, updated_at);
             $SPLIT_PAIRS;
             create index split_pairs_right_idx on split_pairs(right_notebook_id);
+            $RECORDINGS;
+            create index recordings_notebook_idx on recordings(notebook_id, started_at);
+            $INK_TIMESTAMPS;
+            create index ink_timestamps_page_idx on ink_timestamps(recording_id, page_id, t_ms);
+            $AUDIO_MARKERS;
+            $OCR_WORDS;
+            create index ocr_words_page_idx on ocr_words(page_id, word_index);
             create table recognition (
               id text primary key,
               page_id text not null references pages(id) on delete cascade,
