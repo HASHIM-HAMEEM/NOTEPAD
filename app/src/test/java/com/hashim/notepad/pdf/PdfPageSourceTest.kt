@@ -3,6 +3,8 @@ package com.hashim.notepad.pdf
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 
 class PdfPageSourceTest {
     @Test
@@ -16,5 +18,13 @@ class PdfPageSourceTest {
     @Test
     fun renderSizeKeepsNormalRequestsAtRequestedWidth() {
         assertEquals(1200 to 1698, PdfPageSource.pdfBitmapSize(1200, 595, 842))
+    }
+
+    @Test
+    fun pdfiumDispatcherUsesOneDedicatedThread() = runBlocking {
+        val first = withContext(PdfiumDispatcher.dispatcher) { Thread.currentThread().id }
+        val second = withContext(PdfiumDispatcher.dispatcher) { Thread.currentThread().id }
+
+        assertEquals(first, second)
     }
 }

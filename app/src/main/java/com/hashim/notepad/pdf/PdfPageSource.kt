@@ -5,9 +5,10 @@ import android.graphics.Bitmap
 import android.os.ParcelFileDescriptor
 import io.legere.pdfiumandroid.PdfDocument
 import io.legere.pdfiumandroid.PdfiumCore
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.asCoroutineDispatcher
 import java.io.Closeable
 import java.io.File
+import java.util.concurrent.Executors
 import kotlin.math.sqrt
 
 /** Opens a PDF with PDFium and renders single pages to bitmaps sized to a target width. */
@@ -89,5 +90,6 @@ class PdfPageSource(context: Context, file: File, password: String? = null) : Cl
 }
 
 object PdfiumDispatcher {
-    val dispatcher = Dispatchers.IO.limitedParallelism(1)
+    val dispatcher = Executors.newSingleThreadExecutor { Thread(it, "NotePad-Pdfium").apply { isDaemon = true } }
+        .asCoroutineDispatcher()
 }
