@@ -65,6 +65,8 @@ object PdfGeometryText {
         val text: String,
         val sourceIndex: Int,
         val box: PdfTextRect,
+        val sourceIndices: List<Int> = listOf(sourceIndex),
+        val lineBox: PdfTextRect = box,
     )
 
     private data class Glyph(
@@ -72,6 +74,7 @@ object PdfGeometryText {
         val sourceIndices: List<Int>,
         val box: PdfTextRect,
         val direction: Direction,
+        val sourceIndex: Int,
     )
 
     private class Line {
@@ -84,11 +87,11 @@ object PdfGeometryText {
 
         fun add(char: RawChar) {
             if (chars.isEmpty()) {
-                top = char.box.top
-                bottom = char.box.bottom
-            } else if (char.box.isValid()) {
-                top = min(top, char.box.top)
-                bottom = max(bottom, char.box.bottom)
+                top = char.lineBox.top
+                bottom = char.lineBox.bottom
+            } else if (char.lineBox.isValid()) {
+                top = min(top, char.lineBox.top)
+                bottom = max(bottom, char.lineBox.bottom)
             }
             chars += char
         }
@@ -109,23 +112,28 @@ object PdfGeometryText {
             sourceIndex++
         }
 
-        val positioned = rawChars.filter { it.box.isValid() && it.text != "\r" && it.text != "\n" }
+        val lineChars = attachCombiningMarks(rawChars)
+        val positioned = lineChars.filter {
+            it.lineBox.isValid() && it.text.none(Char::isWhitespace)
+        }
         if (positioned.isEmpty()) return sourceOrderFallback(rawChars)
 
         val lines = mutableListOf<Line>()
-        positioned.sortedWith(compareBy<RawChar> { it.box.centerY() }.thenBy { it.box.left }).forEach { char ->
+        positioned.sortedWith(compareBy<RawChar> { it.lineBox.centerY() }.thenBy { it.lineBox.left }).forEach { char ->
             val candidate = lines
-                .map { line -> line to verticalOverlap(char.box, line) }
+                .map { line -> line to verticalOverlap(char.lineBox, line) }
                 .filter { it.second >= LINE_OVERLAP_THRESHOLD }
                 .maxByOrNull { it.second }
                 ?.first
             (candidate ?: Line().also(lines::add)).add(char)
         }
-        rawChars.filterNot { it.box.isValid() || it.text == "\r" || it.text == "\n" }.forEach { char ->
+        lineChars.filterNot { it.lineBox.isValid() && it.text.none(Char::isWhitespace) }
+            .filterNot { it.text == "\r" || it.text == "\n" }
+            .forEach { char ->
             val nearest = lines.minByOrNull { line ->
                 abs(line.chars.map { it.sourceIndex }.average() - char.sourceIndex)
             }
-            if (nearest != null && !char.text.all(Char::isWhitespace)) nearest.add(char)
+            if (nearest != null) nearest.add(char)
         }
 
         val orderedLines = lines.sortedWith(compareBy<Line> { it.top }.thenBy { it.chars.minOf { c -> c.sourceIndex } })
@@ -150,23 +158,10 @@ object PdfGeometryText {
     }
 
     private fun logicalLine(chars: List<RawChar>): List<Glyph> {
-        val bases = chars.filterNot { isCombiningMark(it.text.codePointAt(0)) }.map { char ->
-            Glyph(char.text, listOf(char.sourceIndex), char.box, direction(char.text))
+        val sourceSpaces = chars.filter { it.text.all(Char::isWhitespace) }
+        val bases = chars.filterNot { it.text.all(Char::isWhitespace) }.map { char ->
+            Glyph(char.text, char.sourceIndices, char.box, direction(char.text), char.sourceIndex)
         }.toMutableList()
-        val marks = chars.filter { isCombiningMark(it.text.codePointAt(0)) }
-        marks.forEach { mark ->
-            val baseIndex = bases.indices.maxByOrNull { index -> horizontalOverlap(mark.box, bases[index].box) }
-            if (baseIndex == null || horizontalOverlap(mark.box, bases[baseIndex].box) <= 0f) {
-                bases += Glyph(mark.text, listOf(mark.sourceIndex), mark.box, direction(mark.text))
-            } else {
-                val base = bases[baseIndex]
-                bases[baseIndex] = base.copy(
-                    text = base.text + mark.text,
-                    sourceIndices = base.sourceIndices + mark.sourceIndex,
-                    box = base.box.union(mark.box),
-                )
-            }
-        }
 
         val visual = bases.sortedWith(compareBy<Glyph> { it.box.left }.thenBy { it.box.right }.thenBy { it.sourceIndices.first() })
         val rtlCount = visual.count { it.direction == Direction.RTL }
@@ -184,9 +179,68 @@ object PdfGeometryText {
             runs.last().second += glyph
         }
         val logicalRuns = if (baseDirection == Direction.RTL) runs.asReversed() else runs
-        return logicalRuns.flatMap { (direction, run) ->
-            if (direction == Direction.RTL) run.asReversed() else run
+        val result = mutableListOf<Glyph>()
+        logicalRuns.forEach { (runDirection, run) ->
+            val logicalRun = if (runDirection == Direction.RTL) run.asReversed() else run
+            val widths = logicalRun.mapNotNull { glyph ->
+                (glyph.box.right - glyph.box.left).takeIf { glyph.box.isValid() && it > 0f }
+            }.sorted()
+            val medianWidth = widths.getOrNull(widths.size / 2) ?: 0f
+            logicalRun.forEachIndexed { index, glyph ->
+                val previous = logicalRun.getOrNull(index - 1)
+                if (previous != null) {
+                    val sourceMin = min(previous.sourceIndex, glyph.sourceIndex)
+                    val sourceMax = max(previous.sourceIndex, glyph.sourceIndex)
+                    val explicitSpaces = sourceSpaces
+                        .filter { it.sourceIndex in (sourceMin + 1) until sourceMax }
+                        .sortedBy { it.sourceIndex }
+                    val gap = if (runDirection == Direction.RTL) {
+                        previous.box.left - glyph.box.right
+                    } else {
+                        glyph.box.left - previous.box.right
+                    }
+                    val separatesGlyphs = medianWidth > 0f &&
+                        previous.box.isValid() && glyph.box.isValid() &&
+                        gap > medianWidth * SPACE_GAP_WIDTH_RATIO
+                    if (explicitSpaces.isNotEmpty()) {
+                        explicitSpaces.forEach { space ->
+                        result += Glyph(" ", listOf(space.sourceIndex), EMPTY_RECT, Direction.NEUTRAL, space.sourceIndex)
+                    }
+                } else if (explicitSpaces.isEmpty() && separatesGlyphs) {
+                    result += Glyph(" ", emptyList(), EMPTY_RECT, Direction.NEUTRAL, Int.MAX_VALUE)
+                }
+                }
+                result += glyph
+            }
         }
+        return result
+    }
+
+    private fun attachCombiningMarks(chars: List<RawChar>): List<RawChar> {
+        val bases = chars.filterNot {
+            it.text.all(Char::isWhitespace) || it.text == "\r" || it.text == "\n" ||
+                isCombiningMark(it.text.codePointAt(0))
+        }
+        if (bases.isEmpty()) return chars
+        val combined = bases.associateByTo(mutableMapOf()) { it.sourceIndex }
+        chars.filter { isCombiningMark(it.text.codePointAt(0)) }.forEach { mark ->
+            val nearest = bases.minByOrNull { base ->
+                if (mark.box.isValid() && base.box.isValid()) {
+                    horizontalGap(mark.box, base.box) + verticalGap(mark.box, base.box) +
+                        abs(mark.sourceIndex - base.sourceIndex) * 1.5f
+                } else {
+                    abs(mark.sourceIndex - base.sourceIndex).toFloat()
+                }
+            } ?: return@forEach
+            val base = combined.getValue(nearest.sourceIndex)
+            combined[base.sourceIndex] = base.copy(
+                text = base.text + mark.text,
+                sourceIndices = base.sourceIndices + mark.sourceIndex,
+                box = if (mark.box.isValid()) base.box.union(mark.box) else base.box,
+            )
+        }
+        return chars.filterNot { isCombiningMark(it.text.codePointAt(0)) || it.text == "\r" || it.text == "\n" }
+            .map { combined[it.sourceIndex] ?: it }
     }
 
     private fun sourceOrderFallback(chars: List<RawChar>): PdfGeometryTextLayer {
@@ -205,11 +259,14 @@ object PdfGeometryText {
         val shortest = min(box.bottom - box.top, line.bottom - line.top).coerceAtLeast(0.001f)
         val centerDistance = abs(box.centerY() - line.center)
         val height = max(box.bottom - box.top, line.bottom - line.top).coerceAtLeast(0.001f)
-        return max(intersection / shortest, if (centerDistance <= height * 0.38f) 0.36f else 0f)
+        return max(intersection / shortest, if (centerDistance <= max(height * 0.7f, 18f)) 0.36f else 0f)
     }
 
-    private fun horizontalOverlap(first: PdfTextRect, second: PdfTextRect): Float =
-        max(0f, min(first.right, second.right) - max(first.left, second.left))
+    private fun horizontalGap(first: PdfTextRect, second: PdfTextRect): Float =
+        max(0f, max(first.left - second.right, second.left - first.right))
+
+    private fun verticalGap(first: PdfTextRect, second: PdfTextRect): Float =
+        max(0f, max(first.top - second.bottom, second.top - first.bottom))
 
     private fun direction(text: String): Direction = when (Character.getDirectionality(text.codePointAt(0))) {
         Character.DIRECTIONALITY_RIGHT_TO_LEFT,
@@ -239,6 +296,7 @@ object PdfGeometryText {
     )
 
     private const val LINE_OVERLAP_THRESHOLD = 0.35f
+    private const val SPACE_GAP_WIDTH_RATIO = 0.5f
     private val EMPTY_RECT = PdfTextRect(0f, 0f, 0f, 0f)
 }
 

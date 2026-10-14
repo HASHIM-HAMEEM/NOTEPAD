@@ -43,7 +43,7 @@ class PdfPageSource(context: Context, file: File, password: String? = null) : Cl
             val (w, h) = pdfBitmapSize(targetWidthPx, wPt, hPt)
             val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
             bitmap.eraseColor(0xFFFFFFFF.toInt())
-            it.renderPageBitmap(bitmap, 0, 0, w, h, true, false)
+            it.renderPageBitmap(bitmap, 0, 0, w, h, true, true)
             bitmap
         }
     }

@@ -8,6 +8,40 @@ import java.text.Normalizer
 import java.util.Locale
 
 class PdfTextSearchTest {
+    @Test fun capturedArabicGeometryMatchesEveryNfcSourceLineAndCopiesTheWord() {
+        val (source, boxes) = PdfGeometryTestFixtures.load("arabic")
+        val layer = PdfGeometryText.order(source, boxes)
+        val expected = listOf(
+            "اختبار ترتيب العربية في ملف PDF",
+            "لُغَةٌ عَرَبِيَّةٌ جَمِيلَةٌ",
+        )
+
+        assertEquals(
+            expected.map { Normalizer.normalize(it, Normalizer.Form.NFC) },
+            layer.text.lines().map { Normalizer.normalize(it, Normalizer.Form.NFC) },
+        )
+        val plainHit = findPdfTextHits("arabic", 0, layer, "لغة").single()
+        val markedHit = findPdfTextHits("arabic", 0, layer, "لُغَة").single()
+        assertEquals(plainHit.matchStart, markedHit.matchStart)
+        assertEquals(plainHit.matchEnd, markedHit.matchEnd)
+
+        val word = PdfWordSnap.wordRange(layer.text, plainHit.matchStart, Locale("ar"))!!
+        assertEquals(
+            "لُغَةٌ",
+            Normalizer.normalize(layer.text.substring(word.start, word.end), Normalizer.Form.NFC),
+        )
+    }
+
+    @Test fun capturedUrduGeometrySearchAndCopyKeepTheWholeWord() {
+        val (source, boxes) = PdfGeometryTestFixtures.load("urdu")
+        val layer = PdfGeometryText.order(source, boxes)
+        val hit = findPdfTextHits("urdu", 0, layer, "کتاب").single()
+        val word = PdfWordSnap.wordRange(layer.text, hit.matchStart, Locale("ur"))!!
+
+        assertEquals("اُردو کی کتاب ہے", layer.text)
+        assertEquals("کتاب", layer.text.substring(word.start, word.end))
+    }
+
     @Test fun returnsOriginalCharacterRangeAndShortSnippet() {
         val text = "Intro ".repeat(10) + "اَلْعَرَبِي " + "end ".repeat(10)
         val hit = findPdfTextHits("page", 4, text, "العربي").single()
@@ -62,6 +96,55 @@ class PdfTextSearchTest {
             Normalizer.Form.NFC,
         )
         assertEquals("لُغَةٌ", copied)
+    }
+
+    @Test fun geometryPreservesEnglishPdfiumSpacesWithoutUsableBoxes() {
+        val source = "Release101 text survives"
+        var x = 0f
+        val boxes = source.map { character ->
+            if (character.isWhitespace()) {
+                x += 10f
+                PdfTextRect(0f, 0f, 0f, 0f)
+            } else {
+                PdfTextRect(x, 0f, x + 5f, 10f).also { x += 5f }
+            }
+        }
+
+        val layer = PdfGeometryText.order(source, boxes)
+
+        assertEquals(source, layer.text)
+        assertEquals(1, findPdfTextHits("page", 0, layer, "text survives").size)
+    }
+
+    @Test fun geometryKeepsArabicSourceSpacesBetweenRtlWords() {
+        val source = "مرحبا بالعالم"
+        var x = 120f
+        val boxes = source.map { character ->
+            if (character.isWhitespace()) {
+                x -= 10f
+                PdfTextRect(0f, 0f, 0f, 0f)
+            } else {
+                PdfTextRect(x - 5f, 0f, x, 10f).also { x -= 6f }
+            }
+        }
+
+        assertEquals(source, PdfGeometryText.order(source, boxes).text)
+    }
+
+    @Test fun geometrySynthesizesSpacesAtLargeGlyphGapsForMultiwordSearch() {
+        val source = "Release101textsurvives"
+        var x = 0f
+        val boxes = source.mapIndexed { index, _ ->
+            if (index == 10 || index == 14) x += 10f
+            PdfTextRect(x, 0f, x + 5f, 10f).also { x += 5f }
+        }
+
+        val layer = PdfGeometryText.order(source, boxes)
+        val hit = findPdfTextHits("page", 0, layer, "text survives")
+
+        assertEquals("Release101 text survives", layer.text)
+        assertEquals(1, hit.size)
+        assertEquals("text survives", layer.text.substring(hit.single().matchStart, hit.single().matchEnd))
     }
 
     @Test fun rtlSnippetsPreserveWordAndGraphemeBoundaries() {

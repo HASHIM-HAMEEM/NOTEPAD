@@ -99,6 +99,9 @@ class PdfBoxExporter(private val context: Context, private val repo: NotePadRepo
                             PDDeviceRGB.INSTANCE,
                         )
                         annotation.contents = mark.note ?: mark.text
+                        annotation.page = target
+                        annotation.setPrinted(true)
+                        annotation.constructAppearances(output)
                         annotations.add(annotation)
                     }
                 }

@@ -5,6 +5,20 @@ import org.junit.Test
 import java.util.Locale
 
 class PdfWordSnapTest {
+    @Test fun capturedArabicAndUrduWordsSnapWithoutNeighboringWords() {
+        val (arabic, arabicBoxes) = PdfGeometryTestFixtures.load("arabic")
+        val arabicLayer = PdfGeometryText.order(arabic, arabicBoxes)
+        val arabicStart = findPdfTextHits("arabic", 0, arabicLayer, "العربية").single().matchStart
+        val arabicRange = PdfWordSnap.wordRange(arabicLayer.text, arabicStart, Locale("ar"))!!
+        assertEquals("العربية", arabicLayer.text.substring(arabicRange.start, arabicRange.end))
+
+        val (urdu, urduBoxes) = PdfGeometryTestFixtures.load("urdu")
+        val urduLayer = PdfGeometryText.order(urdu, urduBoxes)
+        val urduStart = findPdfTextHits("urdu", 0, urduLayer, "کتاب").single().matchStart
+        val urduRange = PdfWordSnap.wordRange(urduLayer.text, urduStart, Locale("ur"))!!
+        assertEquals("کتاب", urduLayer.text.substring(urduRange.start, urduRange.end))
+    }
+
     @Test fun snapsWordsInLatinAndArabicScripts() {
         assertEquals(TextSelectionRange(0, 5), PdfWordSnap.wordRange("hello world", 2, Locale.ENGLISH))
         assertEquals(TextSelectionRange(0, 7), PdfWordSnap.wordRange("میخواهم کتاب", 2, Locale("fa")))
