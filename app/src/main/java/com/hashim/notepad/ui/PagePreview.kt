@@ -31,6 +31,8 @@ import com.hashim.notepad.data.NotePadRepository
 import com.hashim.notepad.data.Page
 import com.hashim.notepad.data.PageImage
 import com.hashim.notepad.data.PageKind
+import com.hashim.notepad.data.displayHeightPt
+import com.hashim.notepad.data.displayWidthPt
 import com.hashim.notepad.data.PdfMark
 import com.hashim.notepad.data.PdfMarkKind
 import com.hashim.notepad.data.TextBlock
@@ -192,11 +194,13 @@ fun PagePreview(
     val ruling = lineColor ?: if (paperColor.luminance() < 0.5f) Color(0xFF3A3A40) else Color(0xFFCDD1D8)
     Canvas(modifier.onSizeChanged { if (it.width > 0) targetWidthPx = it.width }.background(paperColor)) {
         val p = page ?: return@Canvas
-        val crop = contentBounds?.let { fitCropToAspect(it, p.widthPt, p.heightPt, size.width / size.height) }
+        val rotation = (p.rotation % 360 + 360) % 360
+        val crop = if (rotation == 0) contentBounds?.let { fitCropToAspect(it, p.widthPt, p.heightPt, size.width / size.height) } else null
         val fitWholePage = cropToContent && crop == null
         val scale = when {
             crop != null -> minOf(size.width / crop.width, size.height / crop.height)
             fitWholePage -> size.height / p.heightPt
+            rotation != 0 -> minOf(size.width / p.displayWidthPt, size.height / p.displayHeightPt)
             else -> size.width / p.widthPt * cropScale.coerceAtLeast(1f)
         }
         val tx = when {
@@ -204,12 +208,22 @@ fun PagePreview(
             fitWholePage -> (size.width - p.widthPt * scale) / 2f
             else -> -p.widthPt * cropStartFraction * scale
         }
-        val ty = if (crop != null) (size.height - crop.height * scale) / 2f - crop.top * scale else 0f
+        val ty = when {
+            crop != null -> (size.height - crop.height * scale) / 2f - crop.top * scale
+            rotation != 0 -> (size.height - p.displayHeightPt * scale) / 2f
+            else -> 0f
+        }
+        val displayX = if (rotation == 0) tx else (size.width - p.displayWidthPt * scale) / 2f
         drawIntoCanvas { c ->
             val n = c.nativeCanvas
             n.save()
             val toScreen = Matrix().apply {
-                setValues(floatArrayOf(scale, 0f, tx, 0f, scale, ty, 0f, 0f, 1f))
+                setValues(when (rotation) {
+                    90 -> floatArrayOf(0f, -scale, scale * p.heightPt + displayX, scale, 0f, ty, 0f, 0f, 1f)
+                    180 -> floatArrayOf(-scale, 0f, scale * p.widthPt + displayX, 0f, -scale, scale * p.heightPt + ty, 0f, 0f, 1f)
+                    270 -> floatArrayOf(0f, scale, displayX, -scale, 0f, scale * p.widthPt + ty, 0f, 0f, 1f)
+                    else -> floatArrayOf(scale, 0f, tx, 0f, scale, ty, 0f, 0f, 1f)
+                })
             }
             n.concat(toScreen)
             val composite = compositeBitmap
@@ -221,7 +235,7 @@ fun PagePreview(
                     alpha = 40
                     colorFilter = PorterDuffColorFilter(paperColor.toArgbInt(), PorterDuff.Mode.MULTIPLY)
                 }
-                n.drawRect(0f, 0f, size.width, size.height, texturePaint)
+                n.drawRect(0f, 0f, p.widthPt, p.heightPt, texturePaint)
                 val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = ruling.toArgbInt(); strokeWidth = 0.8f }
                 PageTemplateRenderer.draw(n, paint, p.widthPt, p.heightPt, p.kind)
                 bitmap?.let { b ->

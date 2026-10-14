@@ -33,6 +33,9 @@ import android.graphics.Region
 import java.util.concurrent.TimeUnit
 import androidx.input.motionprediction.MotionEventPredictor
 import com.hashim.notepad.data.PageKind
+import com.hashim.notepad.data.PdfMark
+import com.hashim.notepad.data.PdfMarkKind
+import com.hashim.notepad.pdf.PdfMarkGeometry
 import com.hashim.notepad.data.PageImage
 import com.hashim.notepad.data.TextBlock
 import androidx.ink.brush.Brush
@@ -83,6 +86,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     var onSample: ((PointerSample) -> Unit)? = null
     var onDrawingActiveChanged: ((Boolean) -> Unit)? = null
     var onStrokesChanged: ((List<Stroke>) -> Unit)? = null
+    private var pdfMarks: List<PdfMark> = emptyList()
     var onPageImagesChanged: ((List<PageImage>) -> Unit)? = null
     var onTextBlocksChanged: ((List<TextBlock>) -> Unit)? = null
     var onUndoRedoChanged: ((Boolean, Boolean) -> Unit)? = null
@@ -97,6 +101,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
 
     var pageWidthPt = 595f; private set
     var pageHeightPt = 842f; private set
+    private var pageRotation = 0
     private var pageKind = PageKind.BLANK
     private var hasPageGeometry = false
 
@@ -140,7 +145,12 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     private var revealPageId = ""
     private val revealedTapeIndicesByPage = HashMap<String, MutableSet<Int>>()
     private var tapeRevealGesture = false
-    private data class Snapshot(val strokes: List<Stroke>, val images: List<PageImage>, val textBlocks: List<TextBlock>)
+    private data class Snapshot(
+        val strokes: List<Stroke>,
+        val images: List<PageImage>,
+        val textBlocks: List<TextBlock>,
+        val externalUndo: (() -> Unit)? = null,
+    )
     private val history = ArrayList<Snapshot>()
     private val future = ArrayList<Snapshot>()
     private var eraseDirty = false
@@ -415,6 +425,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
                 canvas.drawBitmap(bmp, m, bitmapPaint)
             }
             canvas.save(); canvas.concat(pageToView)
+            drawPdfMarks(canvas)
             drawPageImages(canvas)
             val committedRevealedTapes = revealedTapeIndicesByPage[revealPageId].orEmpty()
             drawStrokes(
@@ -768,6 +779,12 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         placeRulerIfNeeded()
     }
 
+    fun setPageRotation(rotation: Int) {
+        pageRotation = ((rotation % 360) + 360) % 360
+        fitToWidth()
+        strokeLayer.invalidate()
+    }
+
     fun setPaperColor(argb: Int) {
         paperPaint.color = argb
         bitmapPaint.colorFilter = if (android.graphics.Color.luminance(argb) < 0.5f) PdfInvert.darkPaperFilter else null
@@ -790,7 +807,40 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     }
 
     fun setPage(bitmap: Bitmap?) { pageBitmap = bitmap; strokeLayer.invalidate() }
+    fun setPdfMarks(marks: List<PdfMark>) { pdfMarks = marks.filterNot(PdfMark::deleted); strokeLayer.invalidate() }
     fun paperColorArgb(): Int = paperPaint.color
+
+    private fun drawPdfMarks(canvas: Canvas) {
+        pdfMarks.forEach { mark ->
+            val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = mark.colorArgb
+                strokeWidth = 1.5f
+                style = if (mark.kind == PdfMarkKind.HIGHLIGHT) Paint.Style.FILL else Paint.Style.STROKE
+                if (mark.kind == PdfMarkKind.HIGHLIGHT) xfermode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.MULTIPLY)
+            }
+            PdfMarkGeometry.quads(mark.quads).forEach { quad ->
+                val top = pageHeightPt - quad.bottom
+                val bottom = pageHeightPt - quad.top
+                when (mark.kind) {
+                    PdfMarkKind.HIGHLIGHT -> canvas.drawRect(quad.left, top, quad.right, bottom, paint)
+                    PdfMarkKind.UNDERLINE -> canvas.drawLine(quad.left, bottom, quad.right, bottom, paint)
+                    PdfMarkKind.STRIKE -> canvas.drawLine(quad.left, (top + bottom) / 2f, quad.right, (top + bottom) / 2f, paint)
+                    PdfMarkKind.SQUIGGLY -> {
+                        val path = Path()
+                        var x = quad.left
+                        var up = true
+                        path.moveTo(x, bottom)
+                        while (x < quad.right) {
+                            x = min(quad.right, x + 2f)
+                            path.lineTo(x, bottom + if (up) -1.5f else 1.5f)
+                            up = !up
+                        }
+                        canvas.drawPath(path, paint)
+                    }
+                }
+            }
+        }
+    }
 
     fun setPageImages(pageId: String, images: List<PageImage>) {
         if (imagePageId != pageId) {
@@ -852,7 +902,24 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     fun undo() {
         if (history.isEmpty()) return
         future.add(Snapshot(ArrayList(strokes), ArrayList(pageImages), ArrayList(textBlocks)))
-        restoreSnapshot(history.removeAt(history.size - 1))
+        val target = history.removeAt(history.size - 1)
+        if (target.externalUndo != null) {
+            target.externalUndo.invoke()
+            notifyUndoRedoChanged()
+        } else {
+            restoreSnapshot(target)
+        }
+    }
+    fun convertLastStrokeToExternalUndo(stroke: Stroke, undoAction: () -> Unit): Boolean {
+        if (strokes.lastOrNull() != stroke) return false
+        if (history.isNotEmpty()) history.removeAt(history.lastIndex)
+        strokes.removeAt(strokes.lastIndex)
+        future.clear()
+        history.add(Snapshot(ArrayList(strokes), ArrayList(pageImages), ArrayList(textBlocks), undoAction))
+        strokeLayer.invalidate()
+        notifyChanged()
+        notifyUndoRedoChanged()
+        return true
     }
     fun redo() {
         if (future.isEmpty()) return
@@ -1213,7 +1280,10 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         placeRulerIfNeeded()
     }
 
-    private fun minScale(): Float = if (width > 0) (width - 2 * MARGIN_PX) / pageWidthPt else 1f
+    private fun displayPageWidth(): Float = if (pageRotation % 180 == 90) pageHeightPt else pageWidthPt
+    private fun displayPageHeight(): Float = if (pageRotation % 180 == 90) pageWidthPt else pageHeightPt
+
+    private fun minScale(): Float = if (width > 0) (width - 2 * MARGIN_PX) / displayPageWidth() else 1f
 
     private fun fitToWidth() {
         if (width == 0) return
@@ -1249,13 +1319,18 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     }
 
     private fun clampPan() {
-        val pageW = pageWidthPt * scale; val pageH = pageHeightPt * scale
+        val pageW = displayPageWidth() * scale; val pageH = displayPageHeight() * scale
         panX = if (pageW <= width) (width - pageW) / 2f else panX.coerceIn(width - pageW - MARGIN_PX, MARGIN_PX)
         panY = if (pageH <= height - 2 * MARGIN_PX) MARGIN_PX else panY.coerceIn(height - pageH - MARGIN_PX, MARGIN_PX)
     }
 
     private fun updateMatrices() {
-        pageToView.reset(); pageToView.postScale(scale, scale); pageToView.postTranslate(panX, panY)
+        pageToView.setValues(when (pageRotation) {
+            90 -> floatArrayOf(0f, -scale, panX + pageHeightPt * scale, scale, 0f, panY, 0f, 0f, 1f)
+            180 -> floatArrayOf(-scale, 0f, panX + pageWidthPt * scale, 0f, -scale, panY + pageHeightPt * scale, 0f, 0f, 1f)
+            270 -> floatArrayOf(0f, scale, panX, -scale, 0f, panY + pageWidthPt * scale, 0f, 0f, 1f)
+            else -> floatArrayOf(scale, 0f, panX, 0f, scale, panY, 0f, 0f, 1f)
+        })
         pageToView.invert(viewToPage)
         onSelectionBoundsChanged?.invoke(selectionBounds?.let { RectF(it).also(pageToView::mapRect) })
         updateZoom()

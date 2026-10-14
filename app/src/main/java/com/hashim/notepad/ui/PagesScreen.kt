@@ -1,6 +1,8 @@
 package com.hashim.notepad.ui
 
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
@@ -25,8 +27,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.MoreHoriz
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.RotateRight
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.DragHandle
@@ -48,13 +51,23 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.hashim.notepad.data.NotePadRepository
+import com.hashim.notepad.data.Asset
 import com.hashim.notepad.data.Page
+import com.hashim.notepad.data.displayHeightPt
+import com.hashim.notepad.data.displayWidthPt
 import com.hashim.notepad.data.PageKind
 import com.hashim.notepad.export.BundleCodec
 import com.hashim.notepad.export.PdfExporter
+import com.hashim.notepad.export.PdfExportOptions
 import com.hashim.notepad.ink.StrokeStore
+import com.hashim.notepad.pdf.PdfPageSource
+import com.hashim.notepad.pdf.PdfiumDispatcher
 import com.hashim.notepad.recognition.InkRecognizer
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
+import java.security.MessageDigest
+import java.util.UUID
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyGridState
 
@@ -68,6 +81,14 @@ private val PAGE_TEMPLATES = listOf(
 )
 
 private data class PageTemplateRequest(val page: Page, val insertAfter: Boolean)
+
+@Composable
+private fun ExportOption(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+        Checkbox(checked = checked, onCheckedChange = onChange)
+    }
+}
 
 /** One notebook: its pages as live thumbnails. */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
@@ -89,6 +110,16 @@ fun PagesScreen(
     val paper = notebook?.let { paperOf(it) } ?: Color.White
     var showAdd by remember { mutableStateOf(false) }
     var showMore by remember { mutableStateOf(false) }
+    var showExportOptions by remember { mutableStateOf(false) }
+    var showExtractRange by remember { mutableStateOf(false) }
+    var extractTitle by remember { mutableStateOf("") }
+    var exportFrom by remember { mutableStateOf("1") }
+    var exportTo by remember { mutableStateOf(pages.size.coerceAtLeast(1).toString()) }
+    var includeInk by remember { mutableStateOf(true) }
+    var includeImages by remember { mutableStateOf(true) }
+    var includeText by remember { mutableStateOf(true) }
+    var includeMarks by remember { mutableStateOf(true) }
+    var flattenMarks by remember { mutableStateOf(false) }
     var managePage by remember { mutableStateOf<Page?>(null) }
     var templateRequest by remember { mutableStateOf<PageTemplateRequest?>(null) }
     var deletePage by remember { mutableStateOf<Page?>(null) }
@@ -103,6 +134,34 @@ fun PagesScreen(
 
     fun run(label: String, block: suspend () -> Unit) {
         scope.launch { busy = label; runCatching { block() }.onFailure { Toast.makeText(context, "${label.trimEnd('…')} failed: ${it.message}", Toast.LENGTH_LONG).show() }; busy = null }
+    }
+
+    val appendPdfPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) run("Appending PDF…") {
+            val file = File(File(context.filesDir, "assets").apply { mkdirs() }, "${UUID.randomUUID()}.pdf")
+            try {
+                context.contentResolver.openInputStream(uri)?.use { input -> file.outputStream().use(input::copyTo) }
+                    ?: error("Cannot read selected PDF")
+                val sizes = withContext(PdfiumDispatcher.dispatcher) {
+                    PdfPageSource(context, file).use { it.pageSizesPt() }
+                }
+                val hash = MessageDigest.getInstance("SHA-256")
+                file.inputStream().use { input ->
+                    val buffer = ByteArray(32 * 1024)
+                    while (true) {
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        hash.update(buffer, 0, count)
+                    }
+                }
+                val digest = hash.digest().joinToString("") { "%02x".format(it) }
+                val asset = Asset(UUID.randomUUID().toString(), "pdf", file.absolutePath, file.length(), digest, sizes.size, uri.lastPathSegment)
+                repo.addPdfPages(notebookId, asset, sizes)
+            } catch (error: Throwable) {
+                file.delete()
+                throw error
+            }
+        }
     }
 
     Scaffold(
@@ -196,7 +255,18 @@ fun PagesScreen(
         }
         SheetRow(Icons.Outlined.IosShare, "Export as PDF", "Flattened, opens anywhere") {
             showMore = false
-            run("Exporting…") { exporter.share(exporter.exportNotebook(notebookId, title)) }
+            exportTo = pages.size.coerceAtLeast(1).toString()
+            showExportOptions = true
+        }
+        SheetRow(Icons.Default.Add, "Append PDF", "Add pages from another PDF") {
+            showMore = false
+            appendPdfPicker.launch(arrayOf("application/pdf"))
+        }
+        SheetRow(Icons.Outlined.ContentCopy, "Extract page range", "Create a notebook from selected pages") {
+            showMore = false
+            exportTo = pages.size.coerceAtLeast(1).toString()
+            extractTitle = "$title excerpt"
+            showExtractRange = true
         }
         SheetRow(Icons.Outlined.Archive, "Export notebook bundle", "Lossless .notepad.zip") {
             showMore = false
@@ -211,6 +281,71 @@ fun PagesScreen(
         }
         Spacer(Modifier.height(24.dp))
     }
+
+    if (showExportOptions) AlertDialog(
+        onDismissRequest = { showExportOptions = false },
+        title = { Text("Export PDF") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("Page range (1–${pages.size})")
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(exportFrom, { exportFrom = it }, Modifier.weight(1f), label = { Text("From") }, singleLine = true)
+                    OutlinedTextField(exportTo, { exportTo = it }, Modifier.weight(1f), label = { Text("To") }, singleLine = true)
+                }
+                ExportOption("Ink", includeInk) { includeInk = it }
+                ExportOption("Images", includeImages) { includeImages = it }
+                ExportOption("Text", includeText) { includeText = it }
+                ExportOption("Marks", includeMarks) { includeMarks = it }
+                ExportOption("Flatten marks", flattenMarks) { flattenMarks = it }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                val first = exportFrom.toIntOrNull()
+                val last = exportTo.toIntOrNull()
+                if (first == null || last == null || first !in 1..pages.size || last !in first..pages.size) {
+                    Toast.makeText(context, "Choose a valid page range", Toast.LENGTH_SHORT).show()
+                } else {
+                    showExportOptions = false
+                    run("Exporting…") {
+                        val options = PdfExportOptions((first - 1)..(last - 1), includeInk, includeImages, includeText, includeMarks, flattenMarks)
+                        val output = exporter.exportNotebook(notebookId, title, options) { completed, total ->
+                            if (completed == total || completed % 10 == 0) scope.launch { busy = "Exporting $completed / $total…" }
+                        }
+                        exporter.share(output)
+                    }
+                }
+            }) { Text("Export") }
+        },
+        dismissButton = { TextButton(onClick = { showExportOptions = false }) { Text("Cancel") } },
+    )
+
+    if (showExtractRange) AlertDialog(
+        onDismissRequest = { showExtractRange = false },
+        title = { Text("Extract pages") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(extractTitle, { extractTitle = it }, label = { Text("Notebook name") }, singleLine = true)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(exportFrom, { exportFrom = it }, Modifier.weight(1f), label = { Text("From") }, singleLine = true)
+                    OutlinedTextField(exportTo, { exportTo = it }, Modifier.weight(1f), label = { Text("To") }, singleLine = true)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                val first = exportFrom.toIntOrNull()
+                val last = exportTo.toIntOrNull()
+                if (first == null || last == null || first !in 1..pages.size || last !in first..pages.size) {
+                    Toast.makeText(context, "Choose a valid page range", Toast.LENGTH_SHORT).show()
+                } else {
+                    showExtractRange = false
+                    run("Extracting pages…") { repo.extractPageRange(notebookId, first, last, extractTitle) }
+                }
+            }) { Text("Extract") }
+        },
+        dismissButton = { TextButton(onClick = { showExtractRange = false }) { Text("Cancel") } },
+    )
 
     managePage?.let { page ->
         val number = displayedPages.indexOfFirst { it.id == page.id } + 1
@@ -235,6 +370,10 @@ fun PagesScreen(
             if (page.kind != PageKind.PDF) SheetRow(Icons.Outlined.Palette, "Change template") {
                 templateRequest = PageTemplateRequest(page, insertAfter = false)
                 managePage = null
+            }
+            if (page.kind == PageKind.PDF) SheetRow(Icons.Default.RotateRight, "Rotate 90°", "Rotate this page in reader and export") {
+                managePage = null
+                run("Rotating page…") { repo.setPageRotation(page.id, page.rotation + 90) }
             }
             SheetRow(Icons.Outlined.DeleteOutline, "Delete", "Remove this page and its content", MaterialTheme.colorScheme.error) {
                 deletePage = page
@@ -336,7 +475,7 @@ private fun PageTile(
     val scale by animateFloatAsState(if (pressed) 0.96f else 1f, spring(stiffness = Spring.StiffnessMediumLow), label = "press")
     Column(modifier.graphicsLayer { scaleX = scale; scaleY = scale }, horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
-            Modifier.fillMaxWidth().aspectRatio(page.widthPt / page.heightPt)
+            Modifier.fillMaxWidth().aspectRatio(page.displayWidthPt / page.displayHeightPt)
                 .shadow(5.dp, RoundedCornerShape(12.dp), spotColor = Color.Black.copy(alpha = 0.22f))
                 .clip(RoundedCornerShape(12.dp))
                 .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(12.dp))

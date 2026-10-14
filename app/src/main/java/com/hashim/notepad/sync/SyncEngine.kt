@@ -143,6 +143,9 @@ class SyncEngine(private val context: Context, private val repo: NotePadReposito
                 val bookmarked = if (r.has("bookmarked")) r.optBoolean("bookmarked", false) else
                     db.rawQuery("select bookmarked from pages where id = ?", arrayOf(id)).use { if (it.moveToFirst()) it.getInt(0) != 0 else false }
                 cv.put("bookmarked", if (bookmarked) 1 else 0)
+                val rotation = if (r.has("rotation")) r.optInt("rotation", 0) else
+                    db.rawQuery("select rotation from pages where id = ?", arrayOf(id)).use { c -> if (c.moveToFirst()) c.getInt(0) else 0 }
+                cv.put("rotation", rotation)
                 cv.put("deleted_at", msOrNull(r, "deleted_at")); cv.put("created_at", ms(r.getString("created_at"))); cv.put("updated_at", remoteUpdated)
             }
             "stroke_batches" -> {
@@ -188,6 +191,14 @@ class SyncEngine(private val context: Context, private val repo: NotePadReposito
                 cv.put("id", id); cv.put("page_id", r.getString("page_id")); cv.put("source", r.getString("source")); cv.put("language", str(r, "language"))
                 cv.put("text", decText(k, r, "text_enc") ?: ""); cv.put("updated_at", remoteUpdated)
                 db.delete("recognition", "page_id = ? and source = ? and id <> ?", arrayOf(r.getString("page_id"), r.getString("source"), id))
+            }
+            "pdf_marks" -> {
+                cv.put("notebook_id", r.getString("notebook_id")); cv.put("page_id", r.getString("page_id"))
+                cv.put("kind", r.getString("kind")); cv.put("color_argb", r.optInt("color_argb"))
+                cv.put("quads", r.getString("quads")); if (r.isNull("char_start")) cv.putNull("char_start") else cv.put("char_start", r.getInt("char_start"))
+                if (r.isNull("char_end")) cv.putNull("char_end") else cv.put("char_end", r.getInt("char_end"))
+                cv.put("text", decText(k, r, "text_enc") ?: ""); if (r.isNull("note_enc")) cv.putNull("note") else cv.put("note", decText(k, r, "note_enc"))
+                cv.put("created_at", ms(r.getString("created_at"))); cv.put("updated_at", remoteUpdated); cv.put("deleted", if (r.optBoolean("deleted")) 1 else 0)
             }
         }
         db.insertWithOnConflict(table, null, cv, SQLiteDatabase.CONFLICT_REPLACE)
@@ -287,6 +298,7 @@ class SyncEngine(private val context: Context, private val repo: NotePadReposito
                 o.put("notebook_id", m["notebook_id"]); o.put("sort_key", m["sort_key"]); o.put("kind", m["kind"]); o.put("asset_id", m["asset_id"] ?: JSONObject.NULL)
                 o.put("pdf_page_index", m["pdf_page_index"] ?: JSONObject.NULL); o.put("width_pt", m["width_pt"]); o.put("height_pt", m["height_pt"])
                 o.put("bookmarked", (m["bookmarked"] as? Number)?.toInt()?.let { it != 0 } ?: false)
+                o.put("rotation", m["rotation"] ?: 0)
                 o.put("deleted_at", ts("deleted_at") ?: JSONObject.NULL); o.put("created_at", ts("created_at")); o.put("updated_at", ts("updated_at"))
             }
             "stroke_batches" -> {
@@ -319,6 +331,13 @@ class SyncEngine(private val context: Context, private val repo: NotePadReposito
             "recognition" -> {
                 o.put("page_id", m["page_id"]); o.put("source", m["source"]); o.put("language", m["language"] ?: JSONObject.NULL)
                 o.put("text_enc", hex(Crypto.encryptText(k, m["text"] as String))); o.put("updated_at", ts("updated_at"))
+            }
+            "pdf_marks" -> {
+                o.put("notebook_id", m["notebook_id"]); o.put("page_id", m["page_id"]); o.put("kind", m["kind"])
+                o.put("color_argb", m["color_argb"]); o.put("quads", m["quads"]); o.put("char_start", m["char_start"] ?: JSONObject.NULL)
+                o.put("char_end", m["char_end"] ?: JSONObject.NULL); o.put("text_enc", hex(Crypto.encryptText(k, m["text"] as String)))
+                o.put("note_enc", (m["note"] as? String)?.let { hex(Crypto.encryptText(k, it)) } ?: JSONObject.NULL)
+                o.put("created_at", ts("created_at")); o.put("updated_at", ts("updated_at")); o.put("deleted", (m["deleted"] as? Number)?.toInt() != 0)
             }
         }
         return o
@@ -359,16 +378,16 @@ class SyncEngine(private val context: Context, private val repo: NotePadReposito
     companion object {
         private const val TAG = "SyncEngine"
         private const val PAGE = 500
-        private val SCHEMA_OPTIONAL_TABLES = setOf("folders", "tags", "notebook_tags", "page_images")
+        private val SCHEMA_OPTIONAL_TABLES = setOf("folders", "tags", "notebook_tags", "page_images", "pdf_marks")
         private val OPTIONAL_COLUMNS_BY_TABLE = mapOf(
             "notebooks" to listOf("folder_id", "document_kind", "last_page_index", "last_opened_at", "file_asset_id", "file_mime_type", "original_filename"),
-            "pages" to listOf("bookmarked"),
+            "pages" to listOf("bookmarked", "rotation"),
             "text_blocks" to listOf("color_argb"),
         )
         /** Parent tables first so foreign keys resolve on pull. */
         val TABLES = listOf(
             "assets", "folders", "tags", "notebooks", "pages", "notebook_tags",
-            "stroke_batches", "text_blocks", "page_images", "recognition",
+            "stroke_batches", "text_blocks", "page_images", "recognition", "pdf_marks",
         )
 
         fun iso(ms: Long): String = Instant.ofEpochMilli(ms).toString()

@@ -43,6 +43,8 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import com.hashim.notepad.data.NotePadRepository
 import com.hashim.notepad.data.Page
+import com.hashim.notepad.data.displayHeightPt
+import com.hashim.notepad.data.displayWidthPt
 import com.hashim.notepad.data.PageKind
 import com.hashim.notepad.data.PdfMark
 import com.hashim.notepad.pdf.PdfOutlineItem
@@ -56,6 +58,8 @@ import com.hashim.notepad.pdf.chapterForPage
 import com.hashim.notepad.pdf.flattenOutline
 import com.hashim.notepad.pdf.outlinePathForPage
 import com.hashim.notepad.pdf.searchPdfText
+import com.hashim.notepad.pdf.PdfWordSnap
+import com.hashim.notepad.search.TextNormalizer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -71,6 +75,7 @@ internal fun PageSidebar(
     modifier: Modifier = Modifier,
     onSearchHit: (PdfTextSearchHit) -> Unit = {},
     onSearchResults: (List<PdfTextSearchHit>) -> Unit = {},
+    initialQuery: String = "",
 ) {
     val context = LocalContext.current
     var selectedTab by remember { mutableIntStateOf(0) }
@@ -82,6 +87,12 @@ internal fun PageSidebar(
     var expandedPaths by remember { mutableStateOf(emptySet<List<Int>>()) }
     var marks by remember { mutableStateOf(emptyList<PdfMark>()) }
     var markColorFilter by remember { mutableStateOf<Int?>(null) }
+    LaunchedEffect(initialQuery) {
+        if (initialQuery.isNotBlank()) {
+            query = initialQuery
+            selectedTab = 4
+        }
+    }
     val assetId = pages.firstOrNull { it.kind == PageKind.PDF }?.assetId
     val currentPage = pages.firstOrNull { it.id == currentPageId }
     val currentPdfIndex = currentPage?.pdfPageIndex ?: pages.indexOfFirst { it.id == currentPageId }
@@ -113,7 +124,7 @@ internal fun PageSidebar(
         val notebookId = pages.firstOrNull()?.notebookId ?: return@LaunchedEffect
         repo.pdfMarks(notebookId).collect { marks = it.filterNot(PdfMark::deleted) }
     }
-    LaunchedEffect(query, assetId, pages) {
+    LaunchedEffect(query, assetId, pages, marks) {
         searchHits = emptyList()
         onSearchResults(emptyList())
         val id = assetId ?: return@LaunchedEffect
@@ -132,6 +143,31 @@ internal fun PageSidebar(
             ) { hit ->
                 withContext(Dispatchers.Main.immediate) {
                     searchHits = searchHits + hit
+                    onSearchResults(searchHits)
+                }
+            }
+            val normalizedQuery = TextNormalizer.normalize(query).text
+            if (normalizedQuery.isNotEmpty()) {
+                val markHits = marks.asSequence().filterNot(PdfMark::deleted).mapNotNull { mark ->
+                    val combined = listOf(mark.text, mark.note.orEmpty()).filter(String::isNotBlank).joinToString(" ")
+                    val normalized = TextNormalizer.normalize(combined)
+                    val at = normalized.text.indexOf(normalizedQuery)
+                    if (mark.pageId.isBlank() || at < 0) null else {
+                        val pageIndex = pages.indexOfFirst { it.id == mark.pageId }.coerceAtLeast(0)
+                        PdfTextSearchHit(
+                            pageId = mark.pageId,
+                            pageIndex = pageIndex,
+                            snippet = combined,
+                            matchStart = mark.charStart ?: at,
+                            matchEnd = mark.charEnd ?: at + normalizedQuery.length,
+                            snippetMatchStart = at,
+                            snippetMatchEnd = at + normalizedQuery.length,
+                            rects = PdfWordSnap.topLeftRects(mark.quads, pages.getOrNull(pageIndex)?.heightPt ?: 0f),
+                        )
+                    }
+                }.toList()
+                if (markHits.isNotEmpty()) {
+                    searchHits = searchHits + markHits
                     onSearchResults(searchHits)
                 }
             }
@@ -182,7 +218,7 @@ internal fun PageSidebar(
                                     repo = repo,
                                     page = page,
                                     paperColor = MaterialTheme.colorScheme.background,
-                                    modifier = Modifier.fillMaxWidth().aspectRatio(page.widthPt / page.heightPt)
+                                    modifier = Modifier.fillMaxWidth().aspectRatio(page.displayWidthPt / page.displayHeightPt)
                                         .clip(RoundedCornerShape(4.dp))
                                         .border(
                                             if (page.id == currentPageId) 2.dp else 1.dp,

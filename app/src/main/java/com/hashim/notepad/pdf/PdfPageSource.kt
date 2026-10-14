@@ -85,6 +85,19 @@ class PdfPageSource(context: Context, file: File, password: String? = null) : Cl
         }
     }
 
+    fun textCharBoxes(pageIndex: Int): List<PdfTextRect> = synchronized(pdfiumLock) {
+        val page = document.openPage(pageIndex) ?: return@synchronized emptyList()
+        page.use { pg ->
+            pg.openTextPage().use { textPage ->
+                List(textPage.textPageCountChars()) { index ->
+                    textPage.textPageGetCharBox(index)?.let {
+                        PdfTextRect(it.left, it.top, it.right, it.bottom)
+                    } ?: PdfTextRect(0f, 0f, 0f, 0f)
+                }
+            }
+        }
+    }
+
     fun tableOfContents(): List<PdfOutlineItem> = synchronized(pdfiumLock) {
         fun convert(items: List<io.legere.pdfiumandroid.api.Bookmark>): List<PdfOutlineItem> =
             items.map { bookmark ->

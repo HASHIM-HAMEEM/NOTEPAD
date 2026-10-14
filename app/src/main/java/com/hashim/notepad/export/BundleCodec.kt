@@ -51,6 +51,7 @@ class BundleCodec(private val context: Context, private val repo: NotePadReposit
             root.put("text_blocks", rows(db, "select t.* from text_blocks t join pages p on p.id = t.page_id where p.notebook_id = ? and t.deleted_at is null", arrayOf(notebookId)))
             root.put("page_images", rows(db, "select i.* from page_images i join pages p on p.id = i.page_id where p.notebook_id = ? and p.deleted_at is null and i.deleted_at is null", arrayOf(notebookId)))
             root.put("recognition", rows(db, "select r.* from recognition r join pages p on p.id = r.page_id where p.notebook_id = ?", arrayOf(notebookId)))
+            root.put("pdf_marks", rows(db, "select m.* from pdf_marks m where m.notebook_id = ?", arrayOf(notebookId)))
             val assets = rows(
                 db,
                 """select distinct a.* from assets a where a.id in (
@@ -125,6 +126,10 @@ class BundleCodec(private val context: Context, private val repo: NotePadReposit
             json.optJSONArray("page_images")?.forEachObject { i ->
                 db.insertWithOnConflict("page_images", null, i.toValues(), SQLiteDatabase.CONFLICT_REPLACE)
                 db.execSQL("insert or ignore into outbox(table_name, row_id) values ('page_images', ?)", arrayOf(i.getString("id")))
+            }
+            json.optJSONArray("pdf_marks")?.forEachObject { m ->
+                db.insertWithOnConflict("pdf_marks", null, m.toValues(), SQLiteDatabase.CONFLICT_REPLACE)
+                db.execSQL("insert or ignore into outbox(table_name, row_id) values ('pdf_marks', ?)", arrayOf(m.getString("id")))
             }
             json.getJSONArray("recognition").forEachObject { r ->
                 db.delete("recognition", "page_id = ? and source = ?", arrayOf(r.getString("page_id"), r.getString("source")))

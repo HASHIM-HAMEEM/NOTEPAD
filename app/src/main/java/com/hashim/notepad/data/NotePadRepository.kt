@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.withContext
 import com.hashim.notepad.search.TextNormalizer
@@ -137,7 +138,8 @@ class NotePadRepository(context: Context) {
     }
 
     suspend fun page(pageId: String): Page? = withContext(Dispatchers.IO) {
-        helper.readableDatabase.rawQuery(
+        val database = helper.readableDatabase
+        database.rawQuery(
             """select id, notebook_id, sort_key, kind, asset_id, pdf_page_index, width_pt, height_pt, created_at, updated_at, bookmarked, rotation
                from pages where id = ?""", arrayOf(pageId)
         ).use { c ->
@@ -615,7 +617,8 @@ class NotePadRepository(context: Context) {
     suspend fun search(query: String): List<SearchHit> = withContext(Dispatchers.IO) {
         val q = TextNormalizer.normalize(query).text
         if (q.isEmpty()) return@withContext emptyList()
-        helper.readableDatabase.rawQuery(
+        val database = helper.readableDatabase
+        val recognitionHits = database.rawQuery(
             """select r.page_id, p.notebook_id, n.title, r.text, r.source,
                       (select count(*) from pages p2 where p2.notebook_id = p.notebook_id and p2.sort_key <= p.sort_key and p2.deleted_at is null) as idx
                from recognition r join pages p on p.id = r.page_id join notebooks n on n.id = p.notebook_id
@@ -636,6 +639,30 @@ class NotePadRepository(context: Context) {
                 }
             }
         }
+        if (recognitionHits.size >= 100) return@withContext recognitionHits
+        val markHits = database.rawQuery(
+            """select m.page_id, p.notebook_id, n.title, m.text, m.note,
+                      (select count(*) from pages p2 where p2.notebook_id = p.notebook_id and p2.sort_key <= p.sort_key and p2.deleted_at is null) as idx
+               from pdf_marks m join pages p on p.id = m.page_id join notebooks n on n.id = p.notebook_id
+               where m.deleted = 0 and p.deleted_at is null and n.deleted_at is null
+               order by m.updated_at desc limit 1000""",
+            emptyArray(),
+        ).use { c ->
+            buildList {
+                while (c.moveToNext() && recognitionHits.size + size < 100) {
+                    val content = listOf(c.getString(3), c.getString(4).orEmpty()).filter(String::isNotBlank).joinToString(" ")
+                    val normalized = TextNormalizer.normalize(content)
+                    val at = normalized.text.indexOf(q)
+                    if (at >= 0) {
+                        val (start, end) = normalized.sourceRange(content, at, at + q.length)
+                        val snippet = content.substring((start - 40).coerceAtLeast(0), (end + 60).coerceAtMost(content.length))
+                            .replace('\n', ' ')
+                        add(SearchHit(c.getString(0), c.getString(1), c.getString(2), c.getInt(5), snippet, "pdf_mark"))
+                    }
+                }
+            }
+        }
+        return@withContext (recognitionHits + markHits).take(100)
     }
 
     suspend fun renameNotebook(id: String, title: String) = withContext(Dispatchers.IO) {
@@ -711,6 +738,7 @@ class NotePadRepository(context: Context) {
                 put("id", newId); put("notebook_id", source.notebookId); put("sort_key", insertPlan.sortKey)
                 put("kind", source.kind.db); put("asset_id", source.assetId); put("pdf_page_index", source.pdfPageIndex)
                 put("width_pt", source.widthPt); put("height_pt", source.heightPt); put("bookmarked", if (source.bookmarked) 1 else 0)
+                put("rotation", source.rotation)
                 put("created_at", now); put("updated_at", now)
             })
             mark("pages", newId)
@@ -790,6 +818,140 @@ class NotePadRepository(context: Context) {
         notifyChanged()
         newId
     }
+
+    suspend fun extractPageRange(notebookId: String, firstPage: Int, lastPage: Int, title: String): String =
+        withContext(Dispatchers.IO) {
+            val sourcePages = pages(notebookId).first()
+            require(firstPage in 1..sourcePages.size && lastPage in firstPage..sourcePages.size) {
+                "Choose a valid page range"
+            }
+            val sourceNotebook = notebooks().first().firstOrNull { it.id == notebookId }
+                ?: error("Notebook not found")
+            val selected = sourcePages.subList(firstPage - 1, lastPage)
+            val db = helper.writableDatabase
+            val now = System.currentTimeMillis()
+            val newNotebookId = UUID.randomUUID().toString()
+            db.beginTransaction()
+            try {
+                db.insertOrThrow("notebooks", null, ContentValues().apply {
+                    put("id", newNotebookId)
+                    put("title", title.trim().ifBlank { "${sourceNotebook.title} (pages $firstPage-$lastPage)" })
+                    put("folder_id", sourceNotebook.folderId)
+                    put("document_kind", if (selected.all { it.kind == PageKind.PDF }) "pdf" else "notes")
+                    put("cover_color", sourceNotebook.coverColor)
+                    put("language", sourceNotebook.language)
+                    put("sort_order", 0)
+                    put("created_at", now)
+                    put("updated_at", now)
+                })
+                mark("notebooks", newNotebookId)
+                selected.forEachIndexed { index, page ->
+                    val newPageId = UUID.randomUUID().toString()
+                    db.insertOrThrow("pages", null, ContentValues().apply {
+                        put("id", newPageId)
+                        put("notebook_id", newNotebookId)
+                        put("sort_key", index + 1.0)
+                        put("kind", page.kind.db)
+                        put("asset_id", page.assetId)
+                        put("pdf_page_index", page.pdfPageIndex)
+                        put("width_pt", page.widthPt)
+                        put("height_pt", page.heightPt)
+                        put("rotation", page.rotation)
+                        put("bookmarked", if (page.bookmarked) 1 else 0)
+                        put("created_at", now)
+                        put("updated_at", now)
+                    })
+                    mark("pages", newPageId)
+
+                    db.rawQuery(
+                        "select layer, revision, stroke_count, data from stroke_batches where page_id = ?",
+                        arrayOf(page.id),
+                    ).use { cursor ->
+                        while (cursor.moveToNext()) {
+                            db.insertOrThrow("stroke_batches", null, ContentValues().apply {
+                                put("id", UUID.randomUUID().toString())
+                                put("page_id", newPageId)
+                                put("layer", cursor.getInt(0))
+                                put("revision", cursor.getInt(1))
+                                put("stroke_count", cursor.getInt(2))
+                                put("data", cursor.getBlob(3))
+                                put("updated_at", now)
+                            })
+                            mark("stroke_batches", newPageId)
+                        }
+                    }
+                    db.rawQuery(
+                        "select x_pt, y_pt, w_pt, direction, content, font_size_pt, color_argb from text_blocks where page_id = ? and deleted_at is null",
+                        arrayOf(page.id),
+                    ).use { cursor ->
+                        while (cursor.moveToNext()) {
+                            val id = UUID.randomUUID().toString()
+                            db.insertOrThrow("text_blocks", null, ContentValues().apply {
+                                put("id", id)
+                                put("page_id", newPageId)
+                                put("x_pt", cursor.getFloat(0))
+                                put("y_pt", cursor.getFloat(1))
+                                put("w_pt", cursor.getFloat(2))
+                                put("direction", cursor.getString(3))
+                                put("content", cursor.getString(4))
+                                put("font_size_pt", cursor.getFloat(5))
+                                if (cursor.isNull(6)) putNull("color_argb") else put("color_argb", cursor.getInt(6))
+                                put("updated_at", now)
+                            })
+                            mark("text_blocks", id)
+                        }
+                    }
+                    db.rawQuery(
+                        "select asset_id, x_pt, y_pt, w_pt, h_pt from page_images where page_id = ? and deleted_at is null",
+                        arrayOf(page.id),
+                    ).use { cursor ->
+                        while (cursor.moveToNext()) {
+                            val id = UUID.randomUUID().toString()
+                            db.insertOrThrow("page_images", null, ContentValues().apply {
+                                put("id", id)
+                                put("page_id", newPageId)
+                                put("asset_id", cursor.getString(0))
+                                put("x_pt", cursor.getFloat(1))
+                                put("y_pt", cursor.getFloat(2))
+                                put("w_pt", cursor.getFloat(3))
+                                put("h_pt", cursor.getFloat(4))
+                                put("updated_at", now)
+                            })
+                            mark("page_images", id)
+                        }
+                    }
+                    db.rawQuery(
+                        "select kind, color_argb, quads, char_start, char_end, text, note, created_at from pdf_marks where page_id = ? and deleted = 0",
+                        arrayOf(page.id),
+                    ).use { cursor ->
+                        while (cursor.moveToNext()) {
+                            val id = UUID.randomUUID().toString()
+                            db.insertOrThrow("pdf_marks", null, ContentValues().apply {
+                                put("id", id)
+                                put("notebook_id", newNotebookId)
+                                put("page_id", newPageId)
+                                put("kind", cursor.getString(0))
+                                put("color_argb", cursor.getInt(1))
+                                put("quads", cursor.getString(2))
+                                if (cursor.isNull(3)) putNull("char_start") else put("char_start", cursor.getInt(3))
+                                if (cursor.isNull(4)) putNull("char_end") else put("char_end", cursor.getInt(4))
+                                put("text", cursor.getString(5))
+                                put("note", cursor.getString(6))
+                                put("created_at", cursor.getLong(7))
+                                put("updated_at", now)
+                                put("deleted", 0)
+                            })
+                            mark("pdf_marks", id)
+                        }
+                    }
+                }
+                db.setTransactionSuccessful()
+            } finally {
+                db.endTransaction()
+            }
+            notifyChanged()
+            newNotebookId
+        }
 
     suspend fun movePage(pageId: String, toIndex: Int) = withContext(Dispatchers.IO) {
         val db = helper.writableDatabase

@@ -13,6 +13,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -27,6 +28,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -41,6 +43,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -67,16 +70,43 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.text.AnnotatedString
 import android.view.MotionEvent
 import androidx.compose.ui.unit.dp
 import com.hashim.notepad.data.NotePadRepository
 import com.hashim.notepad.data.Page
+import com.hashim.notepad.data.PdfMark
+import com.hashim.notepad.data.PdfMarkKind
+import com.hashim.notepad.data.displayHeightPt
+import com.hashim.notepad.data.displayWidthPt
+import com.hashim.notepad.pdf.PdfMarkGeometry
+import com.hashim.notepad.pdf.PdfPageSource
+import com.hashim.notepad.pdf.PdfPasswordVault
+import com.hashim.notepad.pdf.PdfTextCache
+import com.hashim.notepad.pdf.PdfTextRect
 import com.hashim.notepad.pdf.PdfTextSearchHit
+import com.hashim.notepad.pdf.PdfWordSnap
+import com.hashim.notepad.pdf.PdfiumDispatcher
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
+import java.util.Locale
+import java.util.UUID
+
+private data class PdfReadSelection(
+    val pageId: String,
+    val start: Int,
+    val end: Int,
+    val text: String,
+    val rects: List<PdfTextRect>,
+    val mark: PdfMark? = null,
+)
 
 @Composable
 @OptIn(ExperimentalMaterial3Api::class)
@@ -91,6 +121,7 @@ fun PdfReadScreen(
     val notebooks by repo.notebooks().collectAsState(initial = emptyList())
     val notebook = notebooks.firstOrNull { it.id == notebookId }
     val pages by repo.pages(notebookId).collectAsState(initial = emptyList())
+    val marks by repo.pdfMarks(notebookId).collectAsState(initial = emptyList())
     val initialIndex = pages.indexOfFirst { it.id == startPageId }.coerceAtLeast(0)
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
@@ -111,6 +142,13 @@ fun PdfReadScreen(
     var currentHit by remember { mutableStateOf<PdfTextSearchHit?>(null) }
     var searchResults by remember { mutableStateOf(emptyList<PdfTextSearchHit>()) }
     var searchHitIndex by remember { mutableIntStateOf(-1) }
+    var selection by remember { mutableStateOf<PdfReadSelection?>(null) }
+    var searchQuery by remember { mutableStateOf("") }
+    var selectedMarkColor by remember { mutableIntStateOf(0x66FFF176) }
+    var noteDialog by remember { mutableStateOf(false) }
+    var noteDraft by remember { mutableStateOf("") }
+    val snackbarHost = remember { androidx.compose.material3.SnackbarHostState() }
+    val clipboard = LocalClipboardManager.current
     val currentIndex by remember(listState, pages) {
         derivedStateOf {
             val info = listState.layoutInfo
@@ -196,10 +234,67 @@ fun PdfReadScreen(
             ) { index, page ->
                 Box(
                     Modifier.width(
-                        if (fitPage) minOf(pageWidth, maxHeight * page.widthPt / page.heightPt) else pageWidth,
-                    ).aspectRatio(page.widthPt / page.heightPt)
+                        if (fitPage) minOf(pageWidth, maxHeight * page.displayWidthPt / page.displayHeightPt) else pageWidth,
+                    ).aspectRatio(page.displayWidthPt / page.displayHeightPt)
                         .clip(RoundedCornerShape(4.dp))
                         .clickable { chromeVisible = !chromeVisible }
+                        .pointerInput(page.id, page.rotation, marks, notebook?.language) {
+                            detectTapGestures(
+                                onLongPress = { point ->
+                                    scope.launch {
+                                        val assetId = page.assetId ?: return@launch
+                                        val asset = repo.asset(assetId) ?: return@launch
+                                        val viewX = point.x / size.width * page.displayWidthPt
+                                        val viewY = point.y / size.height * page.displayHeightPt
+                                        val pagePoint = displayToPagePoint(page.widthPt, page.heightPt, page.rotation, viewX, viewY)
+                                        val pdfIndex = page.pdfPageIndex ?: index
+                                        val found = withContext(PdfiumDispatcher.dispatcher) {
+                                            PdfPageSource(context, File(asset.localPath), PdfPasswordVault(context).read(asset.id)).use { source ->
+                                                val text = PdfTextCache.getOrLoad(context, asset.id, pdfIndex) { source.text(pdfIndex) }
+                                                val charIndex = PdfWordSnap.nearestCharacterIndex(
+                                                    source.textCharBoxes(pdfIndex),
+                                                    pagePoint.x,
+                                                    pagePoint.y,
+                                                    page.widthPt * 4f / size.width,
+                                                    page.heightPt * 12f / size.height,
+                                                ) ?: return@use null
+                                                val range = PdfWordSnap.wordRange(
+                                                    text, charIndex, Locale.forLanguageTag(notebook?.language ?: "und"),
+                                                ) ?: return@use null
+                                                PdfReadSelection(
+                                                    page.id,
+                                                    range.start,
+                                                    range.end,
+                                                    text.substring(range.start, range.end),
+                                                    source.textLineRects(pdfIndex, range.start, range.end),
+                                                )
+                                            }
+                                        }
+                                        if (found != null) {
+                                            selection = found
+                                            chromeVisible = true
+                                        }
+                                    }
+                                },
+                                onTap = { point ->
+                                    val viewX = point.x / size.width * page.displayWidthPt
+                                    val viewY = point.y / size.height * page.displayHeightPt
+                                    val pagePoint = displayToPagePoint(page.widthPt, page.heightPt, page.rotation, viewX, viewY)
+                                    val mark = marks.firstOrNull { item ->
+                                        item.pageId == page.id && PdfWordSnap.topLeftRects(item.quads, page.heightPt).any {
+                                            pagePoint.x in it.left..it.right && pagePoint.y in it.top..it.bottom
+                                        }
+                                    }
+                                    if (mark != null) {
+                                        selection = PdfReadSelection(
+                                            page.id, mark.charStart ?: 0, mark.charEnd ?: 0, mark.text,
+                                            PdfWordSnap.topLeftRects(mark.quads, page.heightPt), mark,
+                                        )
+                                        chromeVisible = true
+                                    }
+                                },
+                            )
+                        }
                         .pointerInteropFilter { event ->
                             if (event.actionMasked == MotionEvent.ACTION_UP &&
                                 event.pointerCount > 0 &&
@@ -222,13 +317,28 @@ fun PdfReadScreen(
                     )
                     currentHit?.takeIf { it.pageId == page.id }?.let { hit ->
                         Canvas(Modifier.fillMaxSize()) {
-                            val sx = size.width / page.widthPt
-                            val sy = size.height / page.heightPt
                             hit.rects.forEach { rect ->
+                                val shown = pageRectToDisplay(page.widthPt, page.heightPt, page.rotation, rect)
+                                val sx = size.width / page.displayWidthPt
+                                val sy = size.height / page.displayHeightPt
                                 drawRect(
                                     Color(0xFFFFD54F).copy(alpha = 0.35f),
-                                    Offset(rect.left * sx, rect.top * sy),
-                                    Size((rect.right - rect.left) * sx, (rect.bottom - rect.top) * sy),
+                                    Offset(shown.left * sx, shown.top * sy),
+                                    Size((shown.right - shown.left) * sx, (shown.bottom - shown.top) * sy),
+                                )
+                            }
+                        }
+                    }
+                    selection?.takeIf { it.pageId == page.id }?.let { selected ->
+                        Canvas(Modifier.fillMaxSize()) {
+                            val sx = size.width / page.displayWidthPt
+                            val sy = size.height / page.displayHeightPt
+                            selected.rects.forEach { rect ->
+                                val shown = pageRectToDisplay(page.widthPt, page.heightPt, page.rotation, rect)
+                                drawRect(
+                                    Color(0x664A90E2),
+                                    Offset(shown.left * sx, shown.top * sy),
+                                    Size((shown.right - shown.left) * sx, (shown.bottom - shown.top) * sy),
                                 )
                             }
                         }
@@ -259,6 +369,11 @@ fun PdfReadScreen(
                     androidx.compose.material3.TextButton(onClick = { sidebarOpen = !sidebarOpen; chromeVisible = true }) {
                         Text("Contents")
                     }
+                    androidx.compose.material3.TextButton(onClick = {
+                        selection?.text?.let { searchQuery = it }
+                        sidebarOpen = true
+                        chromeVisible = true
+                    }) { Text("Marks") }
                     IconButton(onClick = { onWrite(pages.getOrNull(currentIndex)?.id ?: startPageId) }) {
                         Icon(Icons.Outlined.Edit, "Write")
                     }
@@ -270,6 +385,15 @@ fun PdfReadScreen(
                                 onClick = {
                                     fitPage = !fitPage
                                     preferences.edit().putBoolean("pdf_fit_page_$notebookId", fitPage).apply()
+                                    showMenu = false
+                                },
+                            )
+                            androidx.compose.material3.DropdownMenuItem(
+                                text = { Text("Rotate page 90°") },
+                                onClick = {
+                                    pages.getOrNull(currentIndex)?.let { page ->
+                                        scope.launch { repo.setPageRotation(page.id, page.rotation + 90) }
+                                    }
                                     showMenu = false
                                 },
                             )
@@ -315,6 +439,96 @@ fun PdfReadScreen(
                 }
             }
         }
+        selection?.let { selected ->
+            Surface(
+                Modifier.align(Alignment.BottomCenter).padding(bottom = if (chromeVisible) 118.dp else 24.dp),
+                shape = RoundedCornerShape(24.dp),
+                color = MaterialTheme.colorScheme.surface,
+                shadowElevation = 8.dp,
+            ) {
+                Row(
+                    Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    listOf(0x66FFF176, 0x6681C784, 0x6680DEEA, 0x66FF8A65, 0x66B39DDB).forEach { argb ->
+                        Box(
+                            Modifier.width(20.dp).height(20.dp).clip(RoundedCornerShape(50))
+                                .background(Color(argb)).clickable { selectedMarkColor = argb },
+                        )
+                    }
+                    TextButton(onClick = {
+                        saveSelection(repo, scope, pages, notebookId, selected, PdfMarkKind.HIGHLIGHT, selectedMarkColor)
+                        selection = null
+                    }) { Text("Highlight") }
+                    TextButton(onClick = {
+                        saveSelection(repo, scope, pages, notebookId, selected, PdfMarkKind.UNDERLINE, selectedMarkColor)
+                        selection = null
+                    }) { Text("Underline") }
+                    TextButton(onClick = {
+                        saveSelection(repo, scope, pages, notebookId, selected, PdfMarkKind.STRIKE, selectedMarkColor)
+                        selection = null
+                    }) { Text("Strike") }
+                    TextButton(onClick = {
+                        noteDraft = selected.mark?.note.orEmpty()
+                        noteDialog = true
+                    }) { Text("Note") }
+                    TextButton(onClick = { clipboard.setText(AnnotatedString(selected.text)); selection = null }) { Text("Copy") }
+                    TextButton(onClick = {
+                        searchQuery = selected.text
+                        sidebarOpen = true
+                        selection = null
+                    }) { Text("Search") }
+                    selected.mark?.let { mark ->
+                        TextButton(onClick = {
+                            scope.launch {
+                                repo.deletePdfMark(mark.id)
+                                val result = snackbarHost.showSnackbar("Mark deleted", "Undo")
+                                if (result == androidx.compose.material3.SnackbarResult.ActionPerformed) {
+                                    repo.savePdfMark(mark.copy(updatedAt = System.currentTimeMillis(), deleted = false))
+                                }
+                            }
+                            selection = null
+                        }) { Text("Delete") }
+                    }
+                    TextButton(onClick = { selection = null }) { Text("×") }
+                }
+            }
+        }
+        androidx.compose.material3.SnackbarHost(
+            hostState = snackbarHost,
+            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 56.dp),
+        )
+        if (noteDialog) {
+            AlertDialog(
+                onDismissRequest = { noteDialog = false },
+                title = { Text("Mark note") },
+                text = {
+                    OutlinedTextField(
+                        value = noteDraft,
+                        onValueChange = { noteDraft = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        minLines = 3,
+                        textStyle = MaterialTheme.typography.bodyMedium.copy(
+                            textDirection = androidx.compose.ui.text.style.TextDirection.Content,
+                        ),
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        selection?.let {
+                            saveSelection(
+                                repo, scope, pages, notebookId, it, it.mark?.kind ?: PdfMarkKind.HIGHLIGHT,
+                                selectedMarkColor, noteDraft,
+                            )
+                        }
+                        noteDialog = false
+                        selection = null
+                    }) { Text("Save") }
+                },
+                dismissButton = { TextButton(onClick = { noteDialog = false }) { Text("Cancel") } },
+            )
+        }
         if (dockedSidebar) {
             Surface(
                 Modifier.align(Alignment.CenterStart).width(sidebarWidth).fillMaxSize(),
@@ -334,6 +548,7 @@ fun PdfReadScreen(
                     onClose = { sidebarOpen = false },
                     onSearchHit = { hit -> showSearchHit(searchResults.indexOf(hit).coerceAtLeast(0)) },
                     onSearchResults = ::acceptSearchResults,
+                    initialQuery = searchQuery,
                     modifier = Modifier.fillMaxSize(),
                 )
             }
@@ -352,6 +567,7 @@ fun PdfReadScreen(
                     onClose = { sidebarOpen = false },
                     onSearchHit = { hit -> showSearchHit(searchResults.indexOf(hit).coerceAtLeast(0)) },
                     onSearchResults = ::acceptSearchResults,
+                    initialQuery = searchQuery,
                     modifier = Modifier.fillMaxWidth().heightIn(max = 640.dp),
                 )
             }
@@ -400,4 +616,66 @@ private fun PageScrubber(
         drawCircle(surface, 6.dp.toPx(), Offset(x, y))
         drawCircle(primary, 6.dp.toPx(), Offset(x, y), style = Stroke(2.dp.toPx()))
     }
+}
+
+private fun displayToPagePoint(
+    pageWidth: Float,
+    pageHeight: Float,
+    rotation: Int,
+    x: Float,
+    y: Float,
+): Offset = when ((rotation % 360 + 360) % 360) {
+    90 -> Offset(y, pageHeight - x)
+    180 -> Offset(pageWidth - x, pageHeight - y)
+    270 -> Offset(pageWidth - y, x)
+    else -> Offset(x, y)
+}
+
+private fun pageRectToDisplay(
+    pageWidth: Float,
+    pageHeight: Float,
+    rotation: Int,
+    rect: PdfTextRect,
+): androidx.compose.ui.geometry.Rect = when ((rotation % 360 + 360) % 360) {
+    90 -> androidx.compose.ui.geometry.Rect(pageHeight - rect.bottom, rect.left, pageHeight - rect.top, rect.right)
+    180 -> androidx.compose.ui.geometry.Rect(pageWidth - rect.right, pageHeight - rect.bottom, pageWidth - rect.left, pageHeight - rect.top)
+    270 -> androidx.compose.ui.geometry.Rect(rect.top, pageWidth - rect.right, rect.bottom, pageWidth - rect.left)
+    else -> androidx.compose.ui.geometry.Rect(rect.left, rect.top, rect.right, rect.bottom)
+}
+
+private fun saveSelection(
+    repo: NotePadRepository,
+    scope: kotlinx.coroutines.CoroutineScope,
+    pages: List<Page>,
+    notebookId: String,
+    selection: PdfReadSelection,
+    kind: PdfMarkKind,
+    colorArgb: Int,
+    note: String? = selection.mark?.note,
+) {
+    val page = pages.firstOrNull { it.id == selection.pageId } ?: return
+    val now = System.currentTimeMillis()
+    val mark = selection.mark?.copy(
+        kind = kind,
+        colorArgb = colorArgb,
+        quads = PdfWordSnap.quadPoints(selection.rects, page.heightPt),
+        text = selection.text,
+        note = note?.takeIf(String::isNotBlank),
+        updatedAt = now,
+        deleted = false,
+    ) ?: PdfMark(
+        id = UUID.randomUUID().toString(),
+        notebookId = notebookId,
+        pageId = page.id,
+        kind = kind,
+        colorArgb = colorArgb,
+        quads = PdfWordSnap.quadPoints(selection.rects, page.heightPt),
+        charStart = selection.start,
+        charEnd = selection.end,
+        text = selection.text,
+        note = note?.takeIf(String::isNotBlank),
+        createdAt = now,
+        updatedAt = now,
+    )
+    scope.launch { repo.savePdfMark(mark) }
 }

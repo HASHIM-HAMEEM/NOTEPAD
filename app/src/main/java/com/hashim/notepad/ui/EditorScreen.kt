@@ -102,6 +102,8 @@ import com.hashim.notepad.data.NotePadRepository
 import com.hashim.notepad.data.PageImage
 import com.hashim.notepad.data.Page
 import com.hashim.notepad.data.PageKind
+import com.hashim.notepad.data.PdfMark
+import com.hashim.notepad.data.PdfMarkKind
 import com.hashim.notepad.data.TextBlock
 import com.hashim.notepad.export.PdfExporter
 import com.hashim.notepad.ink.BrushSpec
@@ -115,6 +117,8 @@ import com.hashim.notepad.ink.StylusInputDiagnostics
 import com.hashim.notepad.ink.StrokeStore
 import com.hashim.notepad.ink.StylusDetector
 import com.hashim.notepad.pdf.PdfPageSource
+import com.hashim.notepad.pdf.PdfTextCache
+import com.hashim.notepad.pdf.PdfWordSnap
 import com.hashim.notepad.pdf.PdfiumDispatcher
 import com.hashim.notepad.pdf.PageImageImporter
 import com.hashim.notepad.recognition.InkRecognizer
@@ -136,6 +140,8 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import java.io.File
 import kotlin.math.roundToInt
+import java.util.Locale
+import java.util.UUID
 
 private val PALETTE = listOf(
     0xFF000000, 0xFF4A4A4A, 0xFF8E8E93, 0xFFC7C7CC, 0xFFFFFFFF, 0xFF1B2A4E,
@@ -307,6 +313,12 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
         mutableStateOf(readBrushSettings(preferences, "tape", ToolBrushSettings(TAPE_COLORS.first(), 24f, 1f)))
     }
     var alwaysStraight by remember(preferences) { mutableStateOf(preferences.getBoolean("highlighter.alwaysStraight", false)) }
+    var snapHighlighterToText by remember(preferences) {
+        mutableStateOf(preferences.getBoolean("highlighter.snapToText", true))
+    }
+    LaunchedEffect(snapHighlighterToText) {
+        preferences.edit().putBoolean("highlighter.snapToText", snapHighlighterToText).apply()
+    }
     var shapeStraightening by remember(preferences) { mutableStateOf(preferences.getBoolean("shape.straightening", true)) }
     var recentColors by remember { mutableStateOf(emptyList<Int>()) }
     var fingerDraws by remember { mutableStateOf(!StylusDetector.hasStylus(context)) }
@@ -380,9 +392,11 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
     var surfaceWidth by remember { mutableIntStateOf(0) }
     var loadedFor by remember { mutableStateOf<String?>(null) }
     var dirtyStrokes by remember { mutableStateOf<List<Stroke>?>(null) }
+    var processedHighlighterStrokeCount by remember(page?.id) { mutableIntStateOf(-1) }
     var dirtyPageImages by remember { mutableStateOf<Pair<String, List<PageImage>>?>(null) }
     var pageBitmap by remember { mutableStateOf<Bitmap?>(null) }
     val textBlocks by repo.textBlocks(pageId).collectAsState(initial = emptyList())
+    val pdfMarks by repo.pdfMarks(notebookId).collectAsState(initial = emptyList())
     var editingBlock by remember { mutableStateOf<TextBlock?>(null) }
     var newBlockAt by remember { mutableStateOf<Pair<Float, Float>?>(null) }
     val scope = rememberCoroutineScope()
@@ -481,6 +495,8 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
         }
     }
     LaunchedEffect(textBlocks, surface) { surface?.textBlocks = textBlocks }
+    LaunchedEffect(pdfMarks, pageId, surface) { surface?.setPdfMarks(pdfMarks.filter { it.pageId == pageId }) }
+    LaunchedEffect(page?.rotation, surface) { surface?.setPageRotation(page?.rotation ?: 0) }
 
     val spec = BrushSpec(tool, color, size, pen, activeBrushSettings.opacity)
     LaunchedEffect(surface, zoomBox, language) { surface?.setZoomBox(zoomBox, language != "en") }
@@ -515,6 +531,7 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
         if (loadedFor == p.id) return@LaunchedEffect
         s.setRevealPage(p.id)
         s.setPageGeometry(p.widthPt, p.heightPt, p.kind)
+        s.setPageRotation(p.rotation)
         val bytes = repo.loadStrokes(p.id)
         val strokes = bytes?.let { b -> withContext(Dispatchers.Default) { runCatching { StrokeStore.decode(b) }.getOrElse { Log.e("NotePad", "decode", it); emptyList() } } } ?: emptyList()
         s.onStrokesChanged = null
@@ -524,6 +541,68 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
         s.onTextBlocksChanged = { blocks -> scope.launch { repo.replacePageTextBlocks(p.id, blocks) } }
         s.setPageImages(p.id, repo.pageImages(p.id).first())
         loadedFor = p.id
+        processedHighlighterStrokeCount = strokes.size
+    }
+    LaunchedEffect(dirtyStrokes, page?.id, loadedFor, snapHighlighterToText, tool, surface) {
+        val strokes = dirtyStrokes ?: return@LaunchedEffect
+        val currentPage = page ?: return@LaunchedEffect
+        val target = surface ?: return@LaunchedEffect
+        if (loadedFor != currentPage.id) return@LaunchedEffect
+        if (currentPage.kind != PageKind.PDF || !snapHighlighterToText || tool != InkTool.HIGHLIGHTER) {
+            processedHighlighterStrokeCount = strokes.size
+            return@LaunchedEffect
+        }
+        if (processedHighlighterStrokeCount < 0) {
+            processedHighlighterStrokeCount = strokes.size
+            return@LaunchedEffect
+        }
+        if (strokes.size <= processedHighlighterStrokeCount) {
+            processedHighlighterStrokeCount = strokes.size
+            return@LaunchedEffect
+        }
+        val stroke = strokes.lastOrNull() ?: return@LaunchedEffect
+        if (stroke.inputs.isEmpty()) return@LaunchedEffect
+        processedHighlighterStrokeCount = strokes.size
+        val assetId = currentPage.assetId ?: return@LaunchedEffect
+        val asset = repo.asset(assetId) ?: return@LaunchedEffect
+        val created = withContext(PdfiumDispatcher.dispatcher) {
+            PdfPageSource(context, File(asset.localPath), com.hashim.notepad.pdf.PdfPasswordVault(context).read(asset.id)).use { source ->
+                val pdfIndex = currentPage.pdfPageIndex ?: pages.indexOf(currentPage)
+                val text = PdfTextCache.getOrLoad(context, asset.id, pdfIndex) { source.text(pdfIndex) }
+                val boxes = source.textCharBoxes(pdfIndex)
+                val first = stroke.inputs[0]
+                val last = stroke.inputs[stroke.inputs.size - 1]
+                val startIndex = PdfWordSnap.nearestCharacterIndex(boxes, first.x, first.y, 3f, 12f)
+                    ?: return@use null
+                val endIndex = PdfWordSnap.nearestCharacterIndex(boxes, last.x, last.y, 3f, 12f) ?: startIndex
+                val startRange = PdfWordSnap.wordRange(text, startIndex, Locale.forLanguageTag(language)) ?: return@use null
+                val endRange = PdfWordSnap.wordRange(text, endIndex, Locale.forLanguageTag(language)) ?: startRange
+                val start = minOf(startRange.start, endRange.start)
+                val end = maxOf(startRange.end, endRange.end)
+                val rects = source.textLineRects(pdfIndex, start, end)
+                if (rects.isEmpty()) return@use null
+                PdfMark(
+                    id = UUID.randomUUID().toString(),
+                    notebookId = notebookId,
+                    pageId = currentPage.id,
+                    kind = PdfMarkKind.HIGHLIGHT,
+                    colorArgb = stroke.brush.colorIntArgb,
+                    quads = PdfWordSnap.quadPoints(rects, currentPage.heightPt),
+                    charStart = start,
+                    charEnd = end,
+                    text = text.substring(start, end),
+                    note = null,
+                    createdAt = System.currentTimeMillis(),
+                    updatedAt = System.currentTimeMillis(),
+                )
+            }
+        }
+        if (created != null) {
+            repo.savePdfMark(created)
+            target.convertLastStrokeToExternalUndo(stroke) {
+                scope.launch { repo.deletePdfMark(created.id) }
+            }
+        }
     }
 
     // Render the PDF page bitmap for PDF pages.
@@ -913,22 +992,31 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
                     edge = toolbarEdge,
                     onDismissRequest = { highlighterPopover = false },
                 ) {
-                    BrushSettingsPopover(
-                        title = "Highlighter",
-                        favoritePresets = favoritePresets,
-                        onAddFavorite = { addFavorite(InkTool.HIGHLIGHTER, pen, highlighterSettings) },
-                        onSelectFavorite = ::applyFavorite,
-                        onRemoveFavorite = ::removeFavorite,
-                        color = highlighterSettings.color,
-                        brushSize = highlighterSettings.size,
-                        previewStrokeSize = highlighterSettings.size * 4f,
-                        onSizeChange = { value -> updateActiveBrushSettings { it.copy(size = value) } },
-                        opacity = highlighterSettings.opacity,
-                        onOpacityChange = { value -> updateActiveBrushSettings { it.copy(opacity = value) } },
-                        showOpacity = true,
-                        alwaysStraight = alwaysStraight,
-                        onAlwaysStraightChange = ::setAlwaysStraight,
-                    )
+                    Column {
+                        BrushSettingsPopover(
+                            title = "Highlighter",
+                            favoritePresets = favoritePresets,
+                            onAddFavorite = { addFavorite(InkTool.HIGHLIGHTER, pen, highlighterSettings) },
+                            onSelectFavorite = ::applyFavorite,
+                            onRemoveFavorite = ::removeFavorite,
+                            color = highlighterSettings.color,
+                            brushSize = highlighterSettings.size,
+                            previewStrokeSize = highlighterSettings.size * 4f,
+                            onSizeChange = { value -> updateActiveBrushSettings { it.copy(size = value) } },
+                            opacity = highlighterSettings.opacity,
+                            onOpacityChange = { value -> updateActiveBrushSettings { it.copy(opacity = value) } },
+                            showOpacity = true,
+                            alwaysStraight = alwaysStraight,
+                            onAlwaysStraightChange = ::setAlwaysStraight,
+                        )
+                        Row(
+                            Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text("Snap to text", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                            Switch(checked = snapHighlighterToText, onCheckedChange = { snapHighlighterToText = it })
+                        }
+                    }
                 }
             }
             Box {

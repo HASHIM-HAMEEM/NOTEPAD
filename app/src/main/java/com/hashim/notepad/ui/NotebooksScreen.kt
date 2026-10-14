@@ -67,6 +67,8 @@ import com.hashim.notepad.data.Notebook
 import com.hashim.notepad.data.NotePadRepository
 import com.hashim.notepad.data.PageKind
 import com.hashim.notepad.data.Tag
+import com.hashim.notepad.data.displayWidthPt
+import com.hashim.notepad.data.displayHeightPt
 import com.hashim.notepad.export.BundleCodec
 import com.hashim.notepad.export.PdfExporter
 import com.hashim.notepad.pdf.PdfImporter
@@ -1076,7 +1078,7 @@ private fun NotebookCard(
     val scale by animateFloatAsState(if (pressed) 0.96f else 1f, spring(stiffness = Spring.StiffnessMediumLow), label = "press")
     val cover = remember(notebook.id, notebook.coverColor) { bookCoverColor(notebook) }
     val tagNames = remember(tags, notebook.tagIds) { tags.filter { it.id in notebook.tagIds }.take(2).map { it.name } }
-    val coverAspect = pages.firstOrNull()?.let { (it.widthPt / it.heightPt).coerceIn(0.58f, 1.3f) } ?: 0.72f
+    val coverAspect = pages.firstOrNull()?.let { (it.displayWidthPt / it.displayHeightPt).coerceIn(0.58f, 1.3f) } ?: 0.72f
     val radius = RoundedCornerShape(topStart = 4.dp, bottomStart = 4.dp, topEnd = 10.dp, bottomEnd = 10.dp)
     val sharedModifier = if (sharedTransitionScope != null && animatedVisibilityScope != null) {
         with(sharedTransitionScope) {

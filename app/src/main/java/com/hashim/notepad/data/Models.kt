@@ -65,6 +65,9 @@ data class Page(
     val rotation: Int = 0,
 )
 
+val Page.displayWidthPt: Float get() = if (rotation % 180 == 90) heightPt else widthPt
+val Page.displayHeightPt: Float get() = if (rotation % 180 == 90) widthPt else heightPt
+
 enum class PdfMarkKind(val db: String) {
     HIGHLIGHT("highlight"), UNDERLINE("underline"), STRIKE("strike"), SQUIGGLY("squiggly");
     companion object { fun from(value: String) = entries.firstOrNull { it.db == value } ?: HIGHLIGHT }
