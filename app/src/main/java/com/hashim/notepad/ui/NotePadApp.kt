@@ -45,6 +45,7 @@ sealed interface Screen {
     data class Pages(val notebookId: String) : Screen
     data class Editor(val notebookId: String, val pageId: String, val returnToRead: Boolean = false) : Screen
     data class Read(val notebookId: String, val pageId: String) : Screen
+    data class Split(val notebookId: String, val pageId: String) : Screen
     data object Search : Screen
     data object Account : Screen
 }
@@ -53,8 +54,11 @@ internal fun screenContentKey(screen: Screen): Any =
     when (screen) {
         is Screen.Editor -> "editor:${screen.notebookId}"
         is Screen.Read -> "read:${screen.notebookId}"
+        is Screen.Split -> "split:${screen.notebookId}"
         else -> screen
     }
+
+private data class SplitRequest(val notebookId: String, val pageId: String)
 
 @Composable
 @OptIn(ExperimentalSharedTransitionApi::class)
@@ -75,7 +79,33 @@ fun NotePadApp(
     val recognizer = remember { com.hashim.notepad.recognition.InkRecognizer() }
     val bundles = remember { com.hashim.notepad.export.BundleCodec(context, repo) }
     var screen by remember { mutableStateOf<Screen>(Screen.Notebooks) }
+    var splitRequest by remember { mutableStateOf<SplitRequest?>(null) }
     var importing by rememberSaveable { mutableStateOf(false) }
+
+    suspend fun destinationForPage(notebookId: String, pageId: String): Screen {
+        if (repo.splitPair(notebookId) != null) return Screen.Split(notebookId, pageId)
+        val page = repo.page(pageId) ?: return Screen.Pages(notebookId)
+        return if (page.kind == com.hashim.notepad.data.PageKind.PDF) {
+            Screen.Read(notebookId, pageId)
+        } else {
+            Screen.Editor(notebookId, pageId)
+        }
+    }
+
+    fun openPage(notebookId: String, pageId: String) {
+        appScope.launch { screen = destinationForPage(notebookId, pageId) }
+    }
+
+    fun openSinglePage(notebookId: String, pageId: String) {
+        appScope.launch {
+            val page = repo.page(pageId)
+            screen = if (page?.kind == com.hashim.notepad.data.PageKind.PDF) {
+                Screen.Read(notebookId, pageId)
+            } else {
+                Screen.Editor(notebookId, pageId)
+            }
+        }
+    }
 
     LaunchedEffect(repo) {
         withContext(Dispatchers.IO) {
@@ -126,12 +156,16 @@ fun NotePadApp(
         screen = when (val s = screen) {
             is Screen.Editor -> if (s.returnToRead) Screen.Read(s.notebookId, s.pageId) else Screen.Pages(s.notebookId)
             is Screen.Read -> Screen.Notebooks
+            is Screen.Split -> {
+                openSinglePage(s.notebookId, s.pageId)
+                s
+            }
             else -> Screen.Notebooks
         }
     }
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        val showNavigationRail = maxWidth >= 840.dp && screen !is Screen.Editor && screen !is Screen.Read && screen !is Screen.Read
+        val showNavigationRail = maxWidth >= 840.dp && screen !is Screen.Editor && screen !is Screen.Read && screen !is Screen.Split
         val screenContent: @Composable () -> Unit = {
             SharedTransitionLayout {
                 val sharedScope = this
@@ -167,10 +201,7 @@ fun NotePadApp(
                         onContinueAtPosition = { notebookId, pageIndex ->
                             appScope.launch {
                                 val targetPage = repo.pages(notebookId).first().getOrNull(pageIndex)
-                                screen = targetPage?.let {
-                                    if (it.kind == com.hashim.notepad.data.PageKind.PDF) Screen.Read(notebookId, it.id)
-                                    else Screen.Editor(notebookId, it.id)
-                                } ?: Screen.Pages(notebookId)
+                                screen = targetPage?.let { destinationForPage(notebookId, it.id) } ?: Screen.Pages(notebookId)
                             }
                         },
                         onSearch = { screen = Screen.Search }, onAccount = { screen = Screen.Account },
@@ -180,11 +211,11 @@ fun NotePadApp(
                         animatedVisibilityScope = visibilityScope,
                     )
                     Screen.Account -> AccountScreen(onBack = { screen = Screen.Notebooks })
-                    Screen.Search -> SearchScreen(repo = repo, onBack = { screen = Screen.Notebooks }, onOpenPage = { nb, page -> screen = Screen.Editor(nb, page) })
+                    Screen.Search -> SearchScreen(repo = repo, onBack = { screen = Screen.Notebooks }, onOpenPage = ::openPage)
                     is Screen.Pages -> PagesScreen(
                         repo = repo, notebookId = s.notebookId, exporter = exporter, recognizer = recognizer, bundles = bundles,
                         onBack = { screen = Screen.Notebooks },
-                        onOpenPage = { screen = Screen.Editor(s.notebookId, it) },
+                        onOpenPage = { openPage(s.notebookId, it) },
                     )
                     is Screen.Editor -> {
                         val sharedModifier = with(sharedScope) {
@@ -198,6 +229,7 @@ fun NotePadApp(
                                 repo = repo, notebookId = s.notebookId, pageId = s.pageId, recognizer = recognizer,
                                 onBack = { screen = if (s.returnToRead) Screen.Read(s.notebookId, s.pageId) else Screen.Pages(s.notebookId) },
                                 onNavigateToPage = { screen = Screen.Editor(s.notebookId, it, s.returnToRead) },
+                                onOpenSideBySide = { notebookId, pageId -> splitRequest = SplitRequest(notebookId, pageId) },
                             )
                         }
                     }
@@ -215,9 +247,17 @@ fun NotePadApp(
                                 startPageId = s.pageId,
                                 onBack = { screen = Screen.Notebooks },
                                 onWrite = { screen = Screen.Editor(s.notebookId, it, returnToRead = true) },
+                                onOpenSideBySide = { notebookId, pageId -> splitRequest = SplitRequest(notebookId, pageId) },
                             )
                         }
                     }
+                    is Screen.Split -> SplitViewScreen(
+                        repo = repo,
+                        recognizer = recognizer,
+                        openedNotebookId = s.notebookId,
+                        openedPageId = s.pageId,
+                        onClose = ::openSinglePage,
+                    )
                 }
             }
             }
@@ -254,10 +294,43 @@ fun NotePadApp(
         } else {
             screenContent()
         }
+
+        splitRequest?.let { request ->
+            SplitPairPickerSheet(
+                repo = repo,
+                primaryNotebookId = request.notebookId,
+                onDismiss = { splitRequest = null },
+                onSelectNotebook = { secondaryId ->
+                    appScope.launch {
+                        val notebooks = repo.notebooks().first()
+                        val primary = notebooks.firstOrNull { it.id == request.notebookId }
+                        val secondaryPage = repo.pages(secondaryId).first().firstOrNull()
+                        if (primary != null && secondaryPage != null) {
+                            repo.saveSplitPair(primary.id, secondaryId)
+                            screen = Screen.Split(request.notebookId, request.pageId)
+                        }
+                        splitRequest = null
+                    }
+                },
+                onNewLectureNotes = {
+                    appScope.launch {
+                        val primary = repo.notebooks().first().firstOrNull { it.id == request.notebookId }
+                        if (primary != null) {
+                            val notesId = repo.createNotebook("${primary.title} — notes", primary.coverColor, primary.folderId)
+                            repo.setNotebookLanguage(notesId, primary.language)
+                            repo.addPage(notesId, com.hashim.notepad.data.PageKind.BLANK)
+                            repo.saveSplitPair(primary.id, notesId)
+                            screen = Screen.Split(request.notebookId, request.pageId)
+                        }
+                        splitRequest = null
+                    }
+                },
+            )
+        }
     }
 }
 
-private fun depth(s: Screen) = when (s) { Screen.Notebooks -> 0; Screen.Search, Screen.Account -> 1; is Screen.Pages -> 1; is Screen.Editor, is Screen.Read -> 2 }
+private fun depth(s: Screen) = when (s) { Screen.Notebooks -> 0; Screen.Search, Screen.Account -> 1; is Screen.Pages -> 1; is Screen.Editor, is Screen.Read, is Screen.Split -> 2 }
 
 private fun parseAuthCallback(fragment: String): Map<String, String> =
     fragment.split('&').mapNotNull { parameter ->

@@ -8,6 +8,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
+import kotlinx.coroutines.runBlocking
 
 @RunWith(AndroidJUnit4::class)
 class NotePadDbMigrationTest {
@@ -62,6 +63,7 @@ class NotePadDbMigrationTest {
             found
         })
         assertTrue(upgraded.rawQuery("select 1 from sqlite_master where type='table' and name='pdf_marks'", null).use { it.moveToFirst() })
+        assertTrue(upgraded.rawQuery("select 1 from sqlite_master where type='table' and name='split_pairs'", null).use { it.moveToFirst() })
         upgraded.rawQuery("select document_kind,last_page_index from notebooks where id='legacy'", null).use {
             assertTrue(it.moveToFirst())
             assertEquals("pdf", it.getString(0))
@@ -78,5 +80,28 @@ class NotePadDbMigrationTest {
         }
         upgraded.close()
         context.deleteDatabase(name)
+    }
+
+    @Test
+    fun splitPairPersistsForEitherDocumentAndKeepsDividerState() {
+        runBlocking {
+            val context = InstrumentationRegistry.getInstrumentation().targetContext
+            val name = "notepad-split-pair-test.db"
+            context.deleteDatabase(name)
+            val repo = NotePadRepository(context, name)
+            val left = repo.createNotebook("Slides", null)
+            val right = repo.createNotebook("Notes", null)
+            val saved = repo.saveSplitPair(left, right, dividerRatio = 0.67f)
+
+            assertEquals(saved, repo.splitPair(left))
+            assertEquals(saved, repo.splitPair(right))
+
+            repo.updateSplitPair(saved.id, dividerRatio = 0.33f, swapped = true)
+            val updated = repo.splitPair(right)
+            assertEquals(0.33f, updated?.dividerRatio ?: 0f, 0f)
+            assertEquals(true, updated?.swapped)
+            repo.helper.close()
+            context.deleteDatabase(name)
+        }
     }
 }

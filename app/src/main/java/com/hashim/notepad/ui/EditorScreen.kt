@@ -237,7 +237,15 @@ private fun writeFavoritePresets(preferences: android.content.SharedPreferences,
 
 @Composable
 @OptIn(ExperimentalMaterial3Api::class)
-fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, recognizer: InkRecognizer, onBack: () -> Unit, onNavigateToPage: (String) -> Unit) {
+fun EditorScreen(
+    repo: NotePadRepository,
+    notebookId: String,
+    pageId: String,
+    recognizer: InkRecognizer,
+    onBack: () -> Unit,
+    onNavigateToPage: (String) -> Unit,
+    onOpenSideBySide: ((String, String) -> Unit)? = null,
+) {
     val context = LocalContext.current
     val notebooks by repo.notebooks().collectAsState(initial = emptyList())
     val notebook = notebooks.firstOrNull { it.id == notebookId }
@@ -831,6 +839,7 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
         Modifier.fillMaxSize().background(toolbarColor)
             .onGloballyPositioned { editorOriginInRoot = it.localToRoot(Offset.Zero) },
     ) {
+        val tabletWidth = maxWidth >= 840.dp
         val density = androidx.compose.ui.platform.LocalDensity.current
         val verticalToolbar = toolbarEdge == EditorToolbarEdge.START || toolbarEdge == EditorToolbarEdge.END
         val narrowToolbar = maxWidth < 600.dp
@@ -1462,6 +1471,15 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
                         shape = RoundedCornerShape(22.dp),
                         containerColor = MaterialTheme.colorScheme.surfaceContainer,
                     ) {
+                        if (tabletWidth && onOpenSideBySide != null) {
+                            DropdownMenuItem(
+                                text = { Text("Open side by side") },
+                                onClick = {
+                                    morePop = false
+                                    onOpenSideBySide(notebookId, pageId)
+                                },
+                            )
+                        }
                         DropdownMenuItem(
                             text = { Text(if (page?.bookmarked == true) "Remove bookmark" else "Bookmark page") },
                             leadingIcon = { Icon(Icons.Default.Bookmark, null) },

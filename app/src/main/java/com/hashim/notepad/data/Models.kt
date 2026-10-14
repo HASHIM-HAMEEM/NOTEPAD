@@ -65,6 +65,14 @@ data class Page(
     val rotation: Int = 0,
 )
 
+data class SplitPair(
+    val id: String,
+    val leftNotebookId: String,
+    val rightNotebookId: String,
+    val dividerRatio: Float,
+    val swapped: Boolean,
+)
+
 val Page.displayWidthPt: Float get() = if (rotation % 180 == 90) heightPt else widthPt
 val Page.displayHeightPt: Float get() = if (rotation % 180 == 90) widthPt else heightPt
 

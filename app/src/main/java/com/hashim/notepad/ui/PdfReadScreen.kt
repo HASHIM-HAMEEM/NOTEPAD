@@ -132,6 +132,7 @@ fun PdfReadScreen(
     startPageId: String,
     onBack: () -> Unit,
     onWrite: (String) -> Unit,
+    onOpenSideBySide: ((String, String) -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val notebooks by repo.notebooks().collectAsState(initial = emptyList())
@@ -219,6 +220,7 @@ fun PdfReadScreen(
     }
 
     BoxWithConstraints(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+        val tabletWidth = maxWidth >= 840.dp
         val dockedSidebar = maxWidth >= 840.dp && sidebarOpen
         val sidebarWidth = if (dockedSidebar) 300.dp else 0.dp
         val pageWidth = maxWidth - sidebarWidth - 32.dp
@@ -548,6 +550,15 @@ fun PdfReadScreen(
                     Box {
                         IconButton(onClick = { showMenu = true }) { Icon(Icons.Outlined.MoreVert, "Reader options") }
                         androidx.compose.material3.DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                            if (tabletWidth && onOpenSideBySide != null) {
+                                androidx.compose.material3.DropdownMenuItem(
+                                    text = { Text("Open side by side") },
+                                    onClick = {
+                                        showMenu = false
+                                        pages.getOrNull(currentIndex)?.let { onOpenSideBySide(notebookId, it.id) }
+                                    },
+                                )
+                            }
                             androidx.compose.material3.DropdownMenuItem(
                                 text = { Text(if (fitPage) "Fit width" else "Fit page") },
                                 onClick = {

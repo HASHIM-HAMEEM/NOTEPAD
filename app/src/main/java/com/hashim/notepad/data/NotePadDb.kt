@@ -77,10 +77,14 @@ class NotePadDb(context: Context, name: String = "notepad.db") : SQLiteOpenHelpe
         if (oldVersion < 11) {
             db.execSQL("alter table text_blocks add column rotation_degrees real not null default 0")
         }
+        if (oldVersion < 12) {
+            db.execSQL(SPLIT_PAIRS)
+            db.execSQL("create index if not exists split_pairs_right_idx on split_pairs(right_notebook_id)")
+        }
     }
 
     companion object {
-        const val VERSION = 11
+        const val VERSION = 12
 
         /** Rows changed locally and not yet pushed. row_id is the page id for stroke_batches and recognition. */
         const val OUTBOX = "create table if not exists outbox (table_name text not null, row_id text not null, primary key (table_name, row_id))"
@@ -135,6 +139,15 @@ class NotePadDb(context: Context, name: String = "notepad.db") : SQLiteOpenHelpe
               created_at integer not null,
               updated_at integer not null,
               deleted integer not null default 0
+            )"""
+        private const val SPLIT_PAIRS = """create table if not exists split_pairs (
+              id text primary key,
+              left_notebook_id text not null references notebooks(id) on delete cascade,
+              right_notebook_id text not null references notebooks(id) on delete cascade,
+              divider_ratio real not null default 0.5,
+              swapped integer not null default 0,
+              updated_at integer not null,
+              check(left_notebook_id <> right_notebook_id)
             )"""
 
         private val SCHEMA = """
@@ -216,6 +229,8 @@ class NotePadDb(context: Context, name: String = "notepad.db") : SQLiteOpenHelpe
             create index page_images_page_idx on page_images(page_id);
             $PDF_MARKS;
             create index pdf_marks_notebook_idx on pdf_marks(notebook_id, page_id, updated_at);
+            $SPLIT_PAIRS;
+            create index split_pairs_right_idx on split_pairs(right_notebook_id);
             create table recognition (
               id text primary key,
               page_id text not null references pages(id) on delete cascade,

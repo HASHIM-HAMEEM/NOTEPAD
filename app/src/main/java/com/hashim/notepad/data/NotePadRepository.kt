@@ -201,6 +201,70 @@ class NotePadRepository(context: Context, databaseName: String = "notepad.db") {
         mark("pages", pageId); notifyChanged()
     }
 
+    suspend fun splitPair(notebookId: String): SplitPair? = withContext(Dispatchers.IO) {
+        helper.readableDatabase.rawQuery(
+            """select id, left_notebook_id, right_notebook_id, divider_ratio, swapped
+               from split_pairs where left_notebook_id = ? or right_notebook_id = ?
+               order by updated_at desc limit 1""",
+            arrayOf(notebookId, notebookId),
+        ).use { cursor ->
+            if (cursor.moveToFirst()) {
+                SplitPair(
+                    cursor.getString(0),
+                    cursor.getString(1),
+                    cursor.getString(2),
+                    cursor.getFloat(3),
+                    cursor.getInt(4) != 0,
+                )
+            } else null
+        }
+    }
+
+    suspend fun saveSplitPair(
+        leftNotebookId: String,
+        rightNotebookId: String,
+        dividerRatio: Float = 0.5f,
+        swapped: Boolean = false,
+    ): SplitPair = withContext(Dispatchers.IO) {
+        require(leftNotebookId != rightNotebookId)
+        val database = helper.writableDatabase
+        val id = UUID.randomUUID().toString()
+        val now = System.currentTimeMillis()
+        database.beginTransaction()
+        try {
+            database.delete(
+                "split_pairs",
+                "left_notebook_id in (?, ?) or right_notebook_id in (?, ?)",
+                arrayOf(leftNotebookId, rightNotebookId, leftNotebookId, rightNotebookId),
+            )
+            database.insertOrThrow("split_pairs", null, ContentValues().apply {
+                put("id", id)
+                put("left_notebook_id", leftNotebookId)
+                put("right_notebook_id", rightNotebookId)
+                put("divider_ratio", dividerRatio.coerceIn(0.33f, 0.67f))
+                put("swapped", if (swapped) 1 else 0)
+                put("updated_at", now)
+            })
+            database.setTransactionSuccessful()
+        } finally {
+            database.endTransaction()
+        }
+        SplitPair(id, leftNotebookId, rightNotebookId, dividerRatio.coerceIn(0.33f, 0.67f), swapped)
+    }
+
+    suspend fun updateSplitPair(id: String, dividerRatio: Float, swapped: Boolean) = withContext(Dispatchers.IO) {
+        helper.writableDatabase.update(
+            "split_pairs",
+            ContentValues().apply {
+                put("divider_ratio", dividerRatio.coerceIn(0.33f, 0.67f))
+                put("swapped", if (swapped) 1 else 0)
+                put("updated_at", System.currentTimeMillis())
+            },
+            "id = ?",
+            arrayOf(id),
+        )
+    }
+
     suspend fun setPageBookmarked(pageId: String, bookmarked: Boolean) = withContext(Dispatchers.IO) {
         val now = System.currentTimeMillis()
         helper.writableDatabase.update(
