@@ -37,7 +37,7 @@ internal object PdfSearchResultKey {
 }
 
 object PdfTextCache {
-    const val GEOMETRY_CACHE_VERSION = 2
+    const val GEOMETRY_CACHE_VERSION = 3
 
     private val memory = object : LruCache<String, PdfGeometryTextLayer>(16 * 1024) {
         override fun sizeOf(key: String, value: PdfGeometryTextLayer): Int =

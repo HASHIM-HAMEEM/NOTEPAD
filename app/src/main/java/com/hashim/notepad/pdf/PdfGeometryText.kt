@@ -136,14 +136,25 @@ object PdfGeometryText {
             if (lineIndex > 0) output.append('\n')
             val ordered = logicalClusters(line.clusters)
             val spacesAfter = mutableMapOf<Cluster, MutableList<RawChar>>()
-            sourceSpaces.forEach { space ->
+            val sourceSpacesOnLine = sourceSpaces.filter { space ->
                 val previous = sourceToCluster[space.sourceIndex - 1]
                 val following = sourceToCluster[space.sourceIndex + 1]
-                val target = previous ?: following ?: return@forEach
-                val targetLine = clusterToLine[target] ?: return@forEach
-                if (targetLine == lineIndex) spacesAfter.getOrPut(target) { mutableListOf() } += space
+                val target = previous ?: following
+                target != null && clusterToLine[target] == lineIndex
             }
-            val lineHasSourceSpaces = spacesAfter.isNotEmpty()
+            sourceSpacesOnLine.forEach { space ->
+                val target = sourceToCluster[space.sourceIndex - 1] ?: sourceToCluster[space.sourceIndex + 1]
+                if (target != null) spacesAfter.getOrPut(target) { mutableListOf() } += space
+            }
+            val lineHasSourceSpaces = sourceSpacesOnLine.isNotEmpty()
+            val lineHeights = line.clusters.map { it.height }.filter { it > 0f }.sorted()
+            val medianLineHeight = if (lineHeights.size % 2 == 0) {
+                lineHeights.getOrNull(lineHeights.size / 2 - 1)?.let { lower ->
+                    (lower + lineHeights[lineHeights.size / 2]) * 0.5f
+                } ?: 0f
+            } else {
+                lineHeights.getOrNull(lineHeights.size / 2) ?: 0f
+            }
             val lineGlyphs = mutableListOf<OutputGlyph>()
             ordered.forEachIndexed { index, item ->
                 val cluster = item.cluster
@@ -152,9 +163,9 @@ object PdfGeometryText {
                 val isLast = index == ordered.lastIndex
                 if (explicitSpaces.isNotEmpty()) {
                     if (!isLast) explicitSpaces.forEach { lineGlyphs += OutputGlyph(" ", listOf(it.sourceIndex), EMPTY_RECT) }
-                } else if (!isLast && !(lineHasSourceSpaces && item.runDirection == Direction.RTL)) {
+                } else if (!isLast && !lineHasSourceSpaces) {
                     val next = ordered[index + 1]
-                    if (item.runIndex == next.runIndex && shouldSynthesizeSpace(cluster, next.cluster, item.runDirection, line.clusters)) {
+                    if (item.runIndex == next.runIndex && shouldSynthesizeSpace(cluster, next.cluster, item.runDirection, medianLineHeight)) {
                         lineGlyphs += OutputGlyph(" ", emptyList(), EMPTY_RECT)
                     }
                 }
@@ -313,17 +324,11 @@ object PdfGeometryText {
         first: Cluster,
         second: Cluster,
         runDirection: Direction,
-        lineClusters: List<Cluster>,
+        medianLineHeight: Float,
     ): Boolean {
-        val widths = lineClusters.map { it.box.right - it.box.left }.filter { it > 0f }.sorted()
-        if (widths.isEmpty()) return false
-        val medianWidth = if (widths.size % 2 == 0) {
-            (widths[widths.size / 2 - 1] + widths[widths.size / 2]) * 0.5f
-        } else {
-            widths[widths.size / 2]
-        }
+        if (medianLineHeight <= 0f) return false
         val gap = if (runDirection == Direction.RTL) first.box.left - second.box.right else second.box.left - first.box.right
-        return gap > medianWidth * SPACE_GAP_WIDTH_RATIO
+        return gap > medianLineHeight * SPACE_GAP_HEIGHT_RATIO
     }
 
     private fun verticalIntersection(box: PdfTextRect, top: Float, bottom: Float): Float =
@@ -379,7 +384,7 @@ object PdfGeometryText {
         max(bottom, other.bottom),
     )
 
-    private const val SPACE_GAP_WIDTH_RATIO = 0.25f
+    private const val SPACE_GAP_HEIGHT_RATIO = 0.3f
     private val EMPTY_RECT = PdfTextRect(0f, 0f, 0f, 0f)
 }
 

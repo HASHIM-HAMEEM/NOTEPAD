@@ -2,7 +2,7 @@ package com.hashim.notepad.ui
 
 import android.net.Uri
 import android.widget.Toast
-import com.hashim.notepad.InboundShare
+import com.hashim.notepad.InboundShareEvent
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.animation.ExperimentalSharedTransitionApi
@@ -69,7 +69,8 @@ fun NotePadApp(
     dynamicColor: Boolean,
     onThemeChange: (ThemeMode) -> Unit,
     onDynamicChange: (Boolean) -> Unit,
-    initialShare: InboundShare? = null,
+    initialShare: InboundShareEvent? = null,
+    onShareConsumed: (String) -> Unit = {},
 ) {
     val context = LocalContext.current
     val repo = remember { NotePadRepository.get(context) }
@@ -126,7 +127,7 @@ fun NotePadApp(
         importing = false
     }
 
-    LaunchedEffect(initialShare) {
+    LaunchedEffect(initialShare?.id) {
         if (initialShare != null) screen = Screen.Notebooks
     }
 
@@ -196,7 +197,10 @@ fun NotePadApp(
                 when (s) {
                     Screen.Notebooks -> NotebooksScreen(
                         repo = repo, importer = importer, bundles = bundles, exporter = exporter, importing = importing,
-                        sharedItems = initialShare?.uris.orEmpty(), sharedMimeType = initialShare?.mimeType,
+                        sharedItems = initialShare?.share?.uris.orEmpty(),
+                        sharedMimeType = initialShare?.share?.mimeType,
+                        sharedIntentId = initialShare?.id,
+                        onSharedIntentConsumed = onShareConsumed,
                         onImportingChanged = { importing = it },
                         onOpen = { screen = Screen.Pages(it) },
                         onContinueAtPosition = { notebookId, pageIndex ->

@@ -109,6 +109,35 @@ class PdfTextSearchTest {
         assertEquals(1, findPdfTextHits("page", 0, layer, "text survives").size)
     }
 
+    @Test fun sourceSpacesDisableSyntheticGapsAcrossTheWholeLine() {
+        val source = "Release101 text survives"
+        var x = 0f
+        val boxes = source.mapIndexed { index, character ->
+            if (character.isWhitespace()) {
+                x += 10f
+                PdfTextRect(0f, 0f, 0f, 0f)
+            } else {
+                if (index in setOf(2, 6, 11, 15, 19)) x += 6f
+                PdfTextRect(x, 0f, x + 5f, 10f).also { x += 5f }
+            }
+        }
+
+        val layer = PdfGeometryText.order(source, boxes)
+
+        assertEquals(source, layer.text)
+        assertEquals(1, findPdfTextHits("page", 0, layer, "text survives").size)
+    }
+
+    @Test fun reimportedExportedTextBlockKeepsWordsAndSearchSpaces() {
+        val (source, boxes) = PdfGeometryTestFixtures.load("exported-text-block")
+        val layer = PdfGeometryText.order(source, boxes)
+
+        assertEquals("Release101 text survives", source)
+        assertEquals(source, layer.text)
+        val hit = findPdfTextHits("page", 0, layer, "text survives").single()
+        assertEquals("text survives", layer.text.substring(hit.matchStart, hit.matchEnd))
+    }
+
     @Test fun geometryFallbackDropsCarriageReturnsAndLineFeeds() {
         assertEquals("firstsecond", PdfGeometryText.order("first\r\nsecond", emptyList()).text)
     }

@@ -523,32 +523,58 @@ fun PdfReadScreen(
             exit = fadeOut(tween(200)) + slideOutVertically(tween(200)) { -it },
             modifier = Modifier.align(Alignment.TopCenter).padding(start = sidebarWidth),
         ) {
-            Surface(color = MaterialTheme.colorScheme.surface.copy(alpha = 0.90f), shadowElevation = 4.dp) {
+            Surface(
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.90f),
+                contentColor = MaterialTheme.colorScheme.onSurface,
+                shadowElevation = 4.dp,
+            ) {
                 Row(
                     Modifier.fillMaxWidth().padding(top = 24.dp, start = 12.dp, end = 12.dp, bottom = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back") }
-                    Text(notebook?.title.orEmpty(), Modifier.weight(1f), maxLines = 1, style = MaterialTheme.typography.titleMedium)
-                    Text("${currentIndex + 1} / ${pages.size}", style = MaterialTheme.typography.labelMedium)
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back", tint = MaterialTheme.colorScheme.onSurface)
+                    }
+                    Text(
+                        notebook?.title.orEmpty(),
+                        Modifier.weight(1f),
+                        maxLines = 1,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        "${currentIndex + 1} / ${pages.size}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
                     if (searchResults.isNotEmpty()) {
-                        androidx.compose.material3.TextButton(onClick = { showSearchHit(searchHitIndex - 1) }) { Text("‹") }
-                        Text("${(searchHitIndex + 1).coerceAtLeast(0)} / ${searchResults.size}", style = MaterialTheme.typography.labelMedium)
-                        androidx.compose.material3.TextButton(onClick = { showSearchHit(searchHitIndex + 1) }) { Text("›") }
+                        androidx.compose.material3.TextButton(onClick = { showSearchHit(searchHitIndex - 1) }) {
+                            Text("‹", color = MaterialTheme.colorScheme.onSurface)
+                        }
+                        Text(
+                            "${(searchHitIndex + 1).coerceAtLeast(0)} / ${searchResults.size}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        androidx.compose.material3.TextButton(onClick = { showSearchHit(searchHitIndex + 1) }) {
+                            Text("›", color = MaterialTheme.colorScheme.onSurface)
+                        }
                     }
                     androidx.compose.material3.TextButton(onClick = { sidebarOpen = !sidebarOpen; chromeVisible = true }) {
-                        Text("Contents")
+                        Text("Contents", color = MaterialTheme.colorScheme.onSurface)
                     }
                     androidx.compose.material3.TextButton(onClick = {
                         selection?.text?.let { searchQuery = it }
                         sidebarOpen = true
                         chromeVisible = true
-                    }) { Text("Marks") }
+                    }) { Text("Marks", color = MaterialTheme.colorScheme.onSurface) }
                     IconButton(onClick = { onWrite(pages.getOrNull(currentIndex)?.id ?: startPageId) }) {
-                        Icon(Icons.Outlined.Edit, "Write")
+                        Icon(Icons.Outlined.Edit, "Write", tint = MaterialTheme.colorScheme.onSurface)
                     }
                     Box {
-                        IconButton(onClick = { showMenu = true }) { Icon(Icons.Outlined.MoreVert, "Reader options") }
+                        IconButton(onClick = { showMenu = true }) {
+                            Icon(Icons.Outlined.MoreVert, "Reader options", tint = MaterialTheme.colorScheme.onSurface)
+                        }
                         androidx.compose.material3.DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
                             if (tabletWidth && onOpenSideBySide != null) {
                                 androidx.compose.material3.DropdownMenuItem(
@@ -589,7 +615,11 @@ fun PdfReadScreen(
             modifier = Modifier.align(Alignment.BottomCenter).padding(start = sidebarWidth)
                 .navigationBarsPadding().systemGesturesPadding(),
         ) {
-            Surface(color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f), shadowElevation = 4.dp) {
+            Surface(
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+                contentColor = MaterialTheme.colorScheme.onSurface,
+                shadowElevation = 4.dp,
+            ) {
                 Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp)) {
                     if (scrubbing) Text("${scrubValue.toInt() + 1} / ${pages.size}", Modifier.align(Alignment.CenterHorizontally))
                     PageScrubber(

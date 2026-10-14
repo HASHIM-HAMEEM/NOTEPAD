@@ -23,13 +23,15 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.UUID
 
 data class InboundShare(val uris: List<Uri>, val mimeType: String?)
+data class InboundShareEvent(val id: String, val share: InboundShare)
 
 class MainActivity : ComponentActivity() {
     private val launchUri = mutableStateOf<Uri?>(null)
-    private val launchShare = mutableStateOf<InboundShare?>(null)
-    private var shareHandled = false
+    private val launchShare = mutableStateOf<InboundShareEvent?>(null)
+    private var handledShareKey: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -59,11 +61,18 @@ class MainActivity : ComponentActivity() {
             return
         }
         launchUri.value = intent?.data?.takeIf { intent.action == Intent.ACTION_VIEW }
-        shareHandled = savedInstanceState?.getBoolean(SHARE_HANDLED_KEY) == true
-        val incomingShare = if (shareHandled) null else shareFrom(intent)
-        launchShare.value = incomingShare
+        handledShareKey = savedInstanceState?.getString(SHARE_HANDLED_KEY)
+        val incomingShare = shareFrom(intent)
         if (incomingShare != null) {
-            shareHandled = true
+            val shareKey = intent?.getStringExtra(SHARE_EVENT_KEY)
+            if (savedInstanceState == null || shareKey != null) {
+                val key = shareKey ?: UUID.randomUUID().toString()
+                intent?.putExtra(SHARE_EVENT_KEY, key)
+                if (key != handledShareKey) {
+                    handledShareKey = key
+                    launchShare.value = InboundShareEvent(key, incomingShare)
+                }
+            }
             setIntent(Intent())
         }
         setContent {
@@ -74,7 +83,13 @@ class MainActivity : ComponentActivity() {
                 val share by launchShare
                 val authCallback = uri?.takeIf { it.scheme == "notepad" && it.host == "auth-callback" }
                 val initialPdf = uri?.takeIf { authCallback == null }
-                NotePadApp(initialPdf, authCallback, themeMode = mode, dynamicColor = dynamic, initialShare = share,
+                NotePadApp(
+                    initialPdf,
+                    authCallback,
+                    themeMode = mode,
+                    dynamicColor = dynamic,
+                    initialShare = share,
+                    onShareConsumed = { key -> if (launchShare.value?.id == key) launchShare.value = null },
                     onThemeChange = { mode = it; Settings.setThemeMode(this, it) },
                     onDynamicChange = { dynamic = it; Settings.setUseDynamicColor(this, it) })
             }
@@ -86,15 +101,19 @@ class MainActivity : ComponentActivity() {
         setIntent(intent)
         launchUri.value = intent.data?.takeIf { intent.action == Intent.ACTION_VIEW }
         val incomingShare = shareFrom(intent)
-        launchShare.value = incomingShare
         if (incomingShare != null) {
-            shareHandled = true
+            val key = intent.getStringExtra(SHARE_EVENT_KEY) ?: UUID.randomUUID().toString()
+            intent.putExtra(SHARE_EVENT_KEY, key)
+            if (key != handledShareKey) {
+                handledShareKey = key
+                launchShare.value = InboundShareEvent(key, incomingShare)
+            }
             setIntent(Intent())
         }
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
-        outState.putBoolean(SHARE_HANDLED_KEY, shareHandled)
+        outState.putString(SHARE_HANDLED_KEY, handledShareKey)
         super.onSaveInstanceState(outState)
     }
 
@@ -133,6 +152,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private companion object {
-        const val SHARE_HANDLED_KEY = "inbound_share_handled"
+        const val SHARE_HANDLED_KEY = "inbound_share_handled_key"
+        const val SHARE_EVENT_KEY = "com.hashim.notepad.extra.SHARE_EVENT_KEY"
     }
 }

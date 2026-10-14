@@ -1,6 +1,7 @@
 package com.hashim.notepad.export
 
 import android.graphics.Color as AndroidColor
+import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.hashim.notepad.data.Asset
@@ -17,11 +18,13 @@ import com.tom_roush.pdfbox.pdmodel.graphics.color.PDDeviceRGB
 import com.tom_roush.pdfbox.pdmodel.interactive.annotation.PDAnnotationTextMarkup
 import com.tom_roush.pdfbox.text.PDFTextStripper
 import com.hashim.notepad.pdf.PdfPageSource
+import com.hashim.notepad.pdf.PdfGeometryText
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import java.io.File
 import java.util.UUID
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -60,6 +63,22 @@ class PdfBoxTextExportInstrumentedTest {
         PDDocument.load(output).use { exported ->
             assertTrue(PDFTextStripper().getText(exported).contains("Release101 text survives"))
         }
+        val (sourceText, boxes, orderedText) = PdfPageSource(context, output).use { source ->
+            val text = source.text(0)
+            val boxes = source.textCharBoxes(0)
+            val codePoints = text.codePoints().toArray()
+            codePoints.forEachIndexed { index, codePoint ->
+                val box = boxes[index]
+                Log.i(
+                    "PdfGeometryCapture",
+                    "$index\t${codePoint.toString(16).uppercase()}\t${box.left}\t${box.top}\t${box.right}\t${box.bottom}",
+                )
+            }
+            Triple(text, boxes, PdfGeometryText.order(text, boxes).text)
+        }
+        assertEquals("Release101 text survives", sourceText)
+        assertEquals(sourceText, orderedText)
+        assertEquals(sourceText.codePointCount(0, sourceText.length), boxes.size)
     }
 
     @Test
@@ -168,7 +187,27 @@ class PdfBoxTextExportInstrumentedTest {
                     val annotation = exported.getPage(0).annotations.single()
                     assertTrue(annotation.isPrinted())
                     assertNotNull(annotation.normalAppearanceStream)
+                    Log.i(
+                        "PdfAnnotsDump",
+                        "page=0 /Annots count=1 subtype=${annotation.subtype} contents=${annotation.contents} printed=${annotation.isPrinted()} appearance=${annotation.normalAppearanceStream != null}",
+                    )
                 }
+                val sourceBitmap = PdfPageSource(context, source).use { it.render(0, 600) }
+                val exportedBitmap = PdfPageSource(context, exportedFile).use { it.render(0, 600) }
+                var tintedPixels = 0
+                for (y in 0 until minOf(sourceBitmap.height, exportedBitmap.height)) {
+                    for (x in 0 until minOf(sourceBitmap.width, exportedBitmap.width)) {
+                        val before = sourceBitmap.getPixel(x, y)
+                        val after = exportedBitmap.getPixel(x, y)
+                        if (before != after &&
+                            AndroidColor.red(after) > AndroidColor.blue(after) + 20 &&
+                            AndroidColor.green(after) > AndroidColor.blue(after) + 20
+                        ) {
+                            tintedPixels++
+                        }
+                    }
+                }
+                assertTrue("Expected PDFium to render the exported Arabic highlight", tintedPixels > 0)
             } finally {
                 repo.helper.close()
                 context.deleteDatabase(databaseName)

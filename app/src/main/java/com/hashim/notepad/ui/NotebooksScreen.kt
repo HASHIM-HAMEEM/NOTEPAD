@@ -136,6 +136,8 @@ fun NotebooksScreen(
     showAccountButton: Boolean = true,
     sharedItems: List<Uri> = emptyList(),
     sharedMimeType: String? = null,
+    sharedIntentId: String? = null,
+    onSharedIntentConsumed: (String) -> Unit = {},
     sharedTransitionScope: SharedTransitionScope? = null,
     animatedVisibilityScope: AnimatedVisibilityScope? = null,
 ) {
@@ -174,13 +176,11 @@ fun NotebooksScreen(
     var importProgress by remember { mutableStateOf<ImportProgress?>(null) }
     var importJob by remember { mutableStateOf<Job?>(null) }
     var showSaveShared by remember { mutableStateOf(false) }
-    val sharedImportKey = remember(sharedItems, sharedMimeType) {
-        if (sharedItems.isEmpty()) "" else "${sharedMimeType.orEmpty()}|${sharedItems.joinToString("|")}"
-    }
-    var handledSharedImportKey by rememberSaveable { mutableStateOf("") }
+    var handledSharedIntentId by rememberSaveable { mutableStateOf("") }
     var sharedTitle by remember { mutableStateOf("") }
     var sharedFolderId by remember { mutableStateOf<String?>(null) }
     var pendingImportUris by remember { mutableStateOf<List<Uri>>(emptyList()) }
+    var pendingImportMimeType by remember { mutableStateOf<String?>(null) }
     var passwordUri by remember { mutableStateOf<Uri?>(null) }
     var passwordEntry by remember { mutableStateOf("") }
     var passwordFolderId by remember { mutableStateOf<String?>(null) }
@@ -189,9 +189,10 @@ fun NotebooksScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val pageImageImporter = remember(context) { PageImageImporter(context) }
     val fileImporter = remember(context, repo) { FileImporter(context, repo) }
-    fun requestImportDetails(uris: List<Uri>, title: String? = null) {
+    fun requestImportDetails(uris: List<Uri>, title: String? = null, mimeType: String? = null) {
         if (uris.isEmpty()) return
         pendingImportUris = uris
+        pendingImportMimeType = mimeType
         val filename = runCatching { ImportStorage(context).displayName(uris.first()) }.getOrDefault("Imported file")
         sharedTitle = title ?: filename.substringBeforeLast('.', filename)
         sharedFolderId = selectedFolderId.takeUnless { it == ALL_FOLDERS }
@@ -218,10 +219,12 @@ fun NotebooksScreen(
         }
     }
     LaunchedEffect(selectedFolderId) { libraryPrefs.edit().putString("library_folder", selectedFolderId).apply() }
-    LaunchedEffect(sharedImportKey) {
-        if (sharedImportKey.isNotEmpty() && sharedImportKey != handledSharedImportKey) {
-            handledSharedImportKey = sharedImportKey
-            requestImportDetails(sharedItems)
+    LaunchedEffect(sharedIntentId) {
+        val intentId = sharedIntentId ?: return@LaunchedEffect
+        if (sharedItems.isNotEmpty() && intentId != handledSharedIntentId) {
+            handledSharedIntentId = intentId
+            requestImportDetails(sharedItems, mimeType = sharedMimeType)
+            onSharedIntentConsumed(intentId)
         }
     }
     LaunchedEffect(librarySort) { libraryPrefs.edit().putString("library_sort", librarySort.name).apply() }
@@ -518,7 +521,7 @@ fun NotebooksScreen(
     if (showSaveShared) ModalBottomSheet(onDismissRequest = {
         showSaveShared = false
         pendingImportUris = emptyList()
-        if (sharedImportKey.isNotEmpty()) handledSharedImportKey = sharedImportKey
+        pendingImportMimeType = null
     }) {
         SheetTitle("Save to NotePad")
         OutlinedTextField(
@@ -540,9 +543,10 @@ fun NotebooksScreen(
             onClick = {
                 val folder = sharedFolderId
                 val itemsToSave = saveItems
-                if (sharedImportKey.isNotEmpty()) handledSharedImportKey = sharedImportKey
+                val mimeTypeForImport = pendingImportMimeType
                 showSaveShared = false
                 pendingImportUris = emptyList()
+                pendingImportMimeType = null
                 importJob = scope.launch {
                     onImportingChanged(true)
                     try {
@@ -551,6 +555,7 @@ fun NotebooksScreen(
                             val name = ImportStorage(context).displayName(uri)
                             context.contentResolver.getType(uri)?.startsWith("image/") == true ||
                                 (uri in sharedItems && sharedMimeType?.startsWith("image/") == true) ||
+                                (uri in itemsToSave && mimeTypeForImport?.startsWith("image/") == true) ||
                                 name.substringAfterLast('.', "").lowercase() in setOf("png", "jpg", "jpeg", "webp")
                         }
                         if (imageUris.isNotEmpty()) {
@@ -576,7 +581,11 @@ fun NotebooksScreen(
                             if (passwordUri != null) return@forEachIndexed
                             val name = ImportStorage(context).displayName(uri).ifBlank { "Shared file" }
                             val mime = context.contentResolver.getType(uri).orEmpty()
-                                .ifBlank { sharedMimeType.takeIf { uri in sharedItems }.orEmpty() }
+                                .ifBlank {
+                                    sharedMimeType.takeIf { uri in sharedItems }
+                                        ?: mimeTypeForImport.takeIf { uri in itemsToSave }
+                                        .orEmpty()
+                                }
                             val title = sharedTitle.takeIf { index == 0 && it.isNotBlank() }
                             val id = try {
                                 when {
@@ -595,7 +604,6 @@ fun NotebooksScreen(
                             if (firstOpenedId == null && (mime == "application/pdf" || name.endsWith(".pdf", true))) firstOpenedId = id
                         }
                         if (passwordUri == null) {
-                            if (sharedImportKey.isNotEmpty()) handledSharedImportKey = sharedImportKey
                             firstOpenedId?.let { onContinueAtPosition(it, 0) }
                         }
                     } catch (error: Throwable) {
