@@ -3,7 +3,6 @@ package com.hashim.notepad.ink
 import android.graphics.Bitmap
 import android.graphics.Color
 import androidx.ink.brush.ExperimentalInkCustomBrushApi
-import androidx.ink.brush.StockBrushes
 import androidx.ink.brush.TextureBitmapStore
 import java.util.Random
 
@@ -20,8 +19,10 @@ object InkTextures {
 
     @OptIn(ExperimentalInkCustomBrushApi::class)
     val textureStore = TextureBitmapStore { id ->
-        if (id == StockBrushes.pencilUnstableBackgroundTextureId) pencilBackground else null
+        if (id == PENCIL_TEXTURE_ID) pencilBackground else null
     }
 
     private const val TEXTURE_SIZE = 64
 }
+
+internal const val PENCIL_TEXTURE_ID = "notepad-pencil"

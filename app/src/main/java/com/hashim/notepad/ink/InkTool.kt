@@ -4,6 +4,7 @@ import androidx.ink.brush.Brush
 import androidx.ink.brush.BrushFamily
 import androidx.ink.brush.BrushPaint
 import androidx.ink.brush.BrushTip
+import androidx.ink.brush.SelfOverlap
 import androidx.ink.brush.ExperimentalInkCustomBrushApi
 import androidx.ink.brush.StockBrushes
 import kotlin.math.roundToInt
@@ -39,7 +40,7 @@ data class BrushSpec(
                 StockBrushes.pressurePen(), colorArgb.withAlpha((opacity.coerceIn(0f, 1f) * 255f).roundToInt()), size, EPSILON
             )
             PenType.PENCIL -> Brush.createWithColorIntArgb(
-                StockBrushes.pencilUnstable, colorArgb.withAlpha((opacity.coerceIn(0f, 1f) * 255f).roundToInt()), size * 1.2f, EPSILON
+                InkBrushFamilies.pencil, colorArgb.withAlpha((opacity.coerceIn(0f, 1f) * 255f).roundToInt()), size * 1.2f, EPSILON
             )
             PenType.MARKER -> Brush.createWithColorIntArgb(
                 StockBrushes.marker(), colorArgb.withAlpha((opacity.coerceIn(0f, 1f) * 255f).roundToInt()), size * 2.2f, EPSILON
@@ -58,6 +59,23 @@ private fun Int.withAlpha(alpha: Int): Int = (this and 0x00FFFFFF) or (alpha shl
 
 @OptIn(ExperimentalInkCustomBrushApi::class)
 internal object InkBrushFamilies {
+    val pencil: BrushFamily by lazy {
+        val tip = BrushTip.builder()
+            .setScaleX(1f)
+            .setScaleY(1f)
+            .setCornerRounding(0.7f)
+            .build()
+        val texture = BrushPaint.TilingTexture.builder()
+            .setClientTextureId(PENCIL_TEXTURE_ID)
+            .setSizeX(0.7f)
+            .setSizeY(0.7f)
+            .setSizeUnit(BrushPaint.TextureLayer.SizeUnit.BRUSH_SIZE)
+            .setWrapX(BrushPaint.TextureLayer.Wrap.REPEAT)
+            .setWrapY(BrushPaint.TextureLayer.Wrap.REPEAT)
+            .build()
+        BrushFamily(tip, BrushPaint(listOf(texture), emptyList(), SelfOverlap.ACCUMULATE))
+    }
+
     val calligraphy: BrushFamily by lazy {
         val tip = BrushTip.builder()
             .setScaleX(1f)

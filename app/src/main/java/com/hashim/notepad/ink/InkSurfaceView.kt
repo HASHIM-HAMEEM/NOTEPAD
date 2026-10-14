@@ -30,6 +30,7 @@ import android.graphics.DashPathEffect
 import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.Region
+import java.util.concurrent.TimeUnit
 import androidx.input.motionprediction.MotionEventPredictor
 import com.hashim.notepad.data.PageKind
 import com.hashim.notepad.data.PageImage
@@ -461,7 +462,19 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
 
     }
 
-    private val wetLayer = InProgressStrokesView(context).apply {
+    private var wetLayerGeneration = 0L
+    private var replaceWetLayerOnAttach = false
+    private var wetLayer: InProgressStrokesView = createWetLayer(wetLayerGeneration)
+
+    init {
+        setWillNotDraw(true)
+        updateRulerPaints()
+        addView(strokeLayer, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+        addView(wetLayer, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+        addView(laserOverlay, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+    }
+
+    private fun createWetLayer(generation: Long): InProgressStrokesView = InProgressStrokesView(context).apply {
         eagerInit()
         addFinishedStrokesListener(object : InProgressStrokesFinishedListener {
             override fun onStrokesFinished(strokes: Map<InProgressStrokeId, Stroke>) {
@@ -472,20 +485,42 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
                 }
                 snapshot()
                 this@InkSurfaceView.strokes.addAll(finishedStrokes)
-                if (zoomEnabled && inStrip) finishedStrokes.lastOrNull()?.let { autoAdvance(it) }
-                strokeLayer.invalidate()
-                post { removeFinishedStrokes(strokes.keys) }
+                val rendererCurrent = generation == wetLayerGeneration && isAttachedToWindow
+                if (rendererCurrent) {
+                    if (zoomEnabled && inStrip) finishedStrokes.lastOrNull()?.let { autoAdvance(it) }
+                    strokeLayer.invalidate()
+                    post {
+                        if (generation == wetLayerGeneration && isAttachedToWindow) {
+                            wetLayer.removeFinishedStrokes(strokes.keys)
+                        }
+                    }
+                }
                 notifyChanged()
             }
         })
     }
 
-    init {
-        setWillNotDraw(true)
-        updateRulerPaints()
-        addView(strokeLayer, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
-        addView(wetLayer, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
-        addView(laserOverlay, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+    @OptIn(androidx.ink.authoring.ExperimentalInkHandoffApi::class)
+    override fun onDetachedFromWindow() {
+        val detachedLayer = wetLayer
+        wetLayerGeneration++
+        runCatching { detachedLayer.cancelUnfinishedStrokes() }
+        runCatching { detachedLayer.flush(500, TimeUnit.MILLISECONDS, false) }
+        runCatching { detachedLayer.sync(500, TimeUnit.MILLISECONDS) }
+        detachedLayer.clearFinishedStrokesListeners()
+        replaceWetLayerOnAttach = true
+        super.onDetachedFromWindow()
+    }
+
+    override fun onAttachedToWindow() {
+        if (replaceWetLayerOnAttach) {
+            val index = indexOfChild(wetLayer).coerceAtLeast(0)
+            removeView(wetLayer)
+            wetLayer = createWetLayer(wetLayerGeneration)
+            addView(wetLayer, index, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+            replaceWetLayerOnAttach = false
+        }
+        super.onAttachedToWindow()
     }
 
     private fun drawRuler(canvas: Canvas) {
