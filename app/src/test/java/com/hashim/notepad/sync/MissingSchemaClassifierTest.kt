@@ -1,5 +1,6 @@
 package com.hashim.notepad.sync
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -59,6 +60,21 @@ class MissingSchemaClassifierTest {
                 """{"code":"42703","message":"column pages.bookmarked does not exist"}""",
                 "notebooks",
                 "bookmarked",
+            ),
+        )
+    }
+
+    @Test
+    fun defersMissingPdfMarksTableAndPagesRotationColumn() {
+        assertTrue(SyncSchemaFallback.shouldDeferTable("pdf_marks", 404, """{"message":"not found"}"""))
+        assertFalse(SyncSchemaFallback.shouldDeferTable("pages", 404, """{"message":"not found"}"""))
+        assertEquals(
+            listOf("rotation"),
+            SyncSchemaFallback.missingColumns(
+                "pages",
+                400,
+                """{"code":"PGRST204","message":"Could not find rotation column of pages"}""",
+                emptySet(),
             ),
         )
     }

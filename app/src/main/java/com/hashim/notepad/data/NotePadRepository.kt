@@ -31,8 +31,8 @@ private data class StoredTextBlock(
     val content: String,
 )
 
-class NotePadRepository(context: Context) {
-    internal val helper = NotePadDb(context.applicationContext)
+class NotePadRepository(context: Context, databaseName: String = "notepad.db") {
+    internal val helper = NotePadDb(context.applicationContext ?: context, databaseName)
     internal fun changed() = notifyChanged()
     private val changes = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
 

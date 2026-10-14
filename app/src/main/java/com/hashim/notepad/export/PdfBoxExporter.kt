@@ -49,8 +49,8 @@ class PdfBoxExporter(private val context: Context, private val repo: NotePadRepo
         onProgress: (Int, Int) -> Unit = { _, _ -> },
     ): File = withContext(Dispatchers.IO) {
         val allPages = repo.pages(notebookId).first()
-        options.pageRange?.let { require(it.first >= 0 && it.last < allPages.size && !it.isEmpty()) { "Invalid PDF page range" } }
-        val pages = options.pageRange?.let { range -> allPages.filterIndexed { index, _ -> index in range } } ?: allPages
+        val pagePlan = planPdfExportPages(allPages, options.pageRange)
+        val pages = pagePlan.map { it.page }
         val marks = repo.pdfMarks(notebookId).first()
         val sources = HashMap<String, PDDocument>()
         val output = PDDocument()
@@ -67,7 +67,7 @@ class PdfBoxExporter(private val context: Context, private val repo: NotePadRepo
                     target = PDPage(PDRectangle(page.widthPt, page.heightPt))
                     output.addPage(target)
                 }
-                target.rotation = page.rotation
+                target.rotation = pagePlan[pageOffset].page.rotation
                 if (page.kind != PageKind.PDF) drawTemplate(output, target, page)
                 if (options.includeInk || options.includeImages || options.includeText || options.flattenMarks) {
                     drawLocalContent(output, target, page, options, marks.filter { it.pageId == page.id && !it.deleted })

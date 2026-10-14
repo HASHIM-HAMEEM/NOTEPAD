@@ -9,7 +9,7 @@ import android.database.sqlite.SQLiteOpenHelper
  * sync layer can replicate rows one-to-one. Content columns are stored in plaintext locally and
  * encrypted only when leaving the device.
  */
-class NotePadDb(context: Context) : SQLiteOpenHelper(context, "notepad.db", null, VERSION) {
+class NotePadDb(context: Context, name: String = "notepad.db") : SQLiteOpenHelper(context, name, null, VERSION) {
 
     override fun onConfigure(db: SQLiteDatabase) {
         db.setForeignKeyConstraintsEnabled(true)

@@ -38,7 +38,7 @@ class SyncEngine(private val context: Context, private val repo: NotePadReposito
             try {
                 pulled += pull(t, token, session.userId, k)
             } catch (e: HttpException) {
-                if (t in SCHEMA_OPTIONAL_TABLES && MissingSchemaClassifier.isMissingSchema(e.code, e.message.orEmpty())) {
+                if (SyncSchemaFallback.shouldDeferTable(t, e.code, e.message.orEmpty())) {
                     Log.w(TAG, "server schema lacks $t; skipping pull until migration is applied", e)
                 } else {
                     throw e
@@ -50,7 +50,7 @@ class SyncEngine(private val context: Context, private val repo: NotePadReposito
             try {
                 pushed += push(t, token, session.userId, k)
             } catch (e: HttpException) {
-                if (t in SCHEMA_OPTIONAL_TABLES && MissingSchemaClassifier.isMissingSchema(e.code, e.message.orEmpty())) {
+                if (SyncSchemaFallback.shouldDeferTable(t, e.code, e.message.orEmpty())) {
                     Log.w(TAG, "server schema lacks $t; keeping queued changes for a later retry", e)
                 } else {
                     throw e
@@ -97,7 +97,7 @@ class SyncEngine(private val context: Context, private val repo: NotePadReposito
         when (table) {
             "notebooks" -> {
                 cv.put("id", id); cv.put("title", decText(k, r, "title_enc") ?: "Untitled"); cv.put("cover_color", str(r, "cover_color"))
-                val optionalColumns = OPTIONAL_COLUMNS_BY_TABLE.getValue("notebooks")
+                val optionalColumns = SyncSchemaFallback.optionalColumns.getValue("notebooks")
                 val local = db.query("notebooks", optionalColumns.toTypedArray(), "id = ?", arrayOf(id), null, null, null).use { c ->
                     if (c.moveToFirst()) c.toMap() else emptyMap()
                 }
@@ -232,9 +232,7 @@ class SyncEngine(private val context: Context, private val repo: NotePadReposito
                             mapOf("Prefer" to "resolution=merge-duplicates,return=minimal")).orThrow()
                         break
                     } catch (e: HttpException) {
-                        val newlyMissing = OPTIONAL_COLUMNS_BY_TABLE[table].orEmpty().filterNot { it in missingColumns }.filter { column ->
-                            MissingSchemaClassifier.isMissingOptionalColumn(e.code, e.message.orEmpty(), table, column)
-                        }
+                        val newlyMissing = SyncSchemaFallback.missingColumns(table, e.code, e.message.orEmpty(), missingColumns)
                         if (newlyMissing.isEmpty()) throw e
                         missingColumns += newlyMissing
                         compatiblePayload = JSONArray()
@@ -378,12 +376,6 @@ class SyncEngine(private val context: Context, private val repo: NotePadReposito
     companion object {
         private const val TAG = "SyncEngine"
         private const val PAGE = 500
-        private val SCHEMA_OPTIONAL_TABLES = setOf("folders", "tags", "notebook_tags", "page_images", "pdf_marks")
-        private val OPTIONAL_COLUMNS_BY_TABLE = mapOf(
-            "notebooks" to listOf("folder_id", "document_kind", "last_page_index", "last_opened_at", "file_asset_id", "file_mime_type", "original_filename"),
-            "pages" to listOf("bookmarked", "rotation"),
-            "text_blocks" to listOf("color_argb"),
-        )
         /** Parent tables first so foreign keys resolve on pull. */
         val TABLES = listOf(
             "assets", "folders", "tags", "notebooks", "pages", "notebook_tags",
