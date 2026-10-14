@@ -34,10 +34,21 @@ class NotePadDbMigrationTest {
                 )""",
             )
             db.execSQL(
+                """create table text_blocks (
+                    id text primary key, page_id text not null, x_pt real not null, y_pt real not null,
+                    w_pt real not null, direction text not null default 'auto', content text not null,
+                    font_size_pt real not null default 12, color_argb integer, deleted_at integer,
+                    updated_at integer not null
+                )""",
+            )
+            db.execSQL(
                 "insert into notebooks(id,title,language,sort_order,created_at,updated_at) values('legacy','Legacy','en',0,1,1)",
             )
             db.execSQL(
                 "insert into pages(id,notebook_id,sort_key,kind,created_at,updated_at) values('legacy-page','legacy',0,'pdf',1,1)",
+            )
+            db.execSQL(
+                "insert into text_blocks(id,page_id,x_pt,y_pt,w_pt,content,updated_at) values('legacy-block','legacy-page',10,20,80,'legacy',1)",
             )
             db.version = 7
         }
@@ -59,6 +70,11 @@ class NotePadDbMigrationTest {
         upgraded.rawQuery("select rotation from pages where id='legacy-page'", null).use {
             assertTrue(it.moveToFirst())
             assertEquals(0, it.getInt(0))
+        }
+        upgraded.rawQuery("select content,rotation_degrees from text_blocks where id='legacy-block'", null).use {
+            assertTrue(it.moveToFirst())
+            assertEquals("legacy", it.getString(0))
+            assertEquals(0f, it.getFloat(1), 0f)
         }
         upgraded.close()
         context.deleteDatabase(name)

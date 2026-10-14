@@ -13,10 +13,14 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
@@ -39,6 +43,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.style.TextDirection
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import com.hashim.notepad.data.NotePadRepository
@@ -87,6 +92,10 @@ internal fun PageSidebar(
     var expandedPaths by remember { mutableStateOf(emptySet<List<Int>>()) }
     var marks by remember { mutableStateOf(emptyList<PdfMark>()) }
     var markColorFilter by remember { mutableStateOf<Int?>(null) }
+    val tabListState = rememberLazyListState()
+    LaunchedEffect(selectedTab) {
+        tabListState.animateScrollToItem(selectedTab)
+    }
     LaunchedEffect(initialQuery) {
         if (initialQuery.isNotBlank()) {
             query = initialQuery
@@ -176,24 +185,34 @@ internal fun PageSidebar(
         }
     }
 
-    Column(modifier.background(MaterialTheme.colorScheme.surface)) {
+    Column(modifier.background(MaterialTheme.colorScheme.surface).statusBarsPadding()) {
         Row(
-            Modifier.fillMaxWidth().height(52.dp).padding(horizontal = 12.dp),
+            Modifier.fillMaxWidth().height(52.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            listOf("Pages", "Contents", "Marks", "Bookmarks", "Search").forEachIndexed { index, title ->
-                Column(
-                    Modifier.weight(1f).clickable { selectedTab = index }.padding(vertical = 10.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    Text(
-                        title,
-                        color = if (selectedTab == index) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                        style = MaterialTheme.typography.labelMedium,
-                    )
-                    Spacer(Modifier.height(5.dp))
-                    Box(Modifier.fillMaxWidth().height(2.dp).background(if (selectedTab == index) MaterialTheme.colorScheme.primary else Color.Transparent))
+            LazyRow(
+                state = tabListState,
+                modifier = Modifier.weight(1f).fillMaxSize(),
+                contentPadding = PaddingValues(horizontal = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                itemsIndexed(listOf("Pages", "Contents", "Marks", "Bookmarks", "Search")) { index, title ->
+                    Column(
+                        Modifier.clickable { selectedTab = index }.padding(horizontal = 8.dp, vertical = 10.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Text(
+                            title,
+                            color = if (selectedTab == index) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.labelMedium,
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Spacer(Modifier.height(5.dp))
+                        Box(Modifier.fillMaxWidth().height(2.dp).background(if (selectedTab == index) MaterialTheme.colorScheme.primary else Color.Transparent))
+                    }
                 }
             }
             Text("×", Modifier.clickable(onClick = onClose).padding(8.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)

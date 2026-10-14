@@ -111,4 +111,12 @@ private fun Hint(text: String) {
     }
 }
 
-private fun sourceLabel(source: String) = when (source) { "ink" -> "Handwriting"; "text" -> "Typed"; "pdf" -> "PDF text"; "pdf_annot" -> "PDF note"; else -> source }
+private fun sourceLabel(source: String) = when (source) {
+    "ink" -> "Handwriting"
+    "text" -> "Typed"
+    "pdf" -> "PDF text"
+    "pdf_annot" -> "PDF note"
+    "title" -> "Title"
+    "filename" -> "Filename"
+    else -> source
+}

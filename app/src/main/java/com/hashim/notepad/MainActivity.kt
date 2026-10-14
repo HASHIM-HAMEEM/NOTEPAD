@@ -37,10 +37,22 @@ class MainActivity : ComponentActivity() {
             val file = File(intent.getStringExtra("path").orEmpty())
             val page = intent.getIntExtra("page", 0)
             CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate).launch {
-                val text = withContext(PdfiumDispatcher.dispatcher) {
-                    PdfPageSource(this@MainActivity, file).use { it.text(page) }
+                val (text, boxes) = withContext(PdfiumDispatcher.dispatcher) {
+                    PdfPageSource(this@MainActivity, file).use { source ->
+                        source.text(page) to source.textCharBoxes(page)
+                    }
                 }
                 Log.i("PdfTextDump", "page=$page text=${text.codePoints().toArray().joinToString(" ") { "U+%04X".format(it) }}")
+                val codePoints = text.codePoints().toArray()
+                boxes.forEachIndexed { index, box ->
+                    val codePoint = codePoints.getOrNull(index) ?: return@forEachIndexed
+                    Log.i(
+                        "PdfTextDump",
+                        "char[$index] U+%04X box=%.3f,%.3f,%.3f,%.3f".format(
+                            codePoint, box.left, box.top, box.right, box.bottom,
+                        ),
+                    )
+                }
                 finish()
             }
             return

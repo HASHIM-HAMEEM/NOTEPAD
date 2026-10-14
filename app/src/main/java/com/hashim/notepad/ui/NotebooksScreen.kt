@@ -44,6 +44,7 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -173,6 +174,10 @@ fun NotebooksScreen(
     var importProgress by remember { mutableStateOf<ImportProgress?>(null) }
     var importJob by remember { mutableStateOf<Job?>(null) }
     var showSaveShared by remember { mutableStateOf(false) }
+    val sharedImportKey = remember(sharedItems, sharedMimeType) {
+        if (sharedItems.isEmpty()) "" else "${sharedMimeType.orEmpty()}|${sharedItems.joinToString("|")}"
+    }
+    var handledSharedImportKey by rememberSaveable { mutableStateOf("") }
     var sharedTitle by remember { mutableStateOf("") }
     var sharedFolderId by remember { mutableStateOf<String?>(null) }
     var pendingImportUris by remember { mutableStateOf<List<Uri>>(emptyList()) }
@@ -213,8 +218,10 @@ fun NotebooksScreen(
         }
     }
     LaunchedEffect(selectedFolderId) { libraryPrefs.edit().putString("library_folder", selectedFolderId).apply() }
-    LaunchedEffect(sharedItems) {
-        if (sharedItems.isNotEmpty()) requestImportDetails(sharedItems)
+    LaunchedEffect(sharedImportKey) {
+        if (sharedImportKey.isNotEmpty() && sharedImportKey != handledSharedImportKey) {
+            requestImportDetails(sharedItems)
+        }
     }
     LaunchedEffect(librarySort) { libraryPrefs.edit().putString("library_sort", librarySort.name).apply() }
     LaunchedEffect(folderSnapshot, selectedFolderId) {
@@ -507,7 +514,11 @@ fun NotebooksScreen(
     )
 
     val saveItems = pendingImportUris.ifEmpty { sharedItems }
-    if (showSaveShared) ModalBottomSheet(onDismissRequest = { showSaveShared = false; pendingImportUris = emptyList() }) {
+    if (showSaveShared) ModalBottomSheet(onDismissRequest = {
+        showSaveShared = false
+        pendingImportUris = emptyList()
+        if (sharedImportKey.isNotEmpty()) handledSharedImportKey = sharedImportKey
+    }) {
         SheetTitle("Save to NotePad")
         OutlinedTextField(
             value = sharedTitle,
@@ -581,7 +592,10 @@ fun NotebooksScreen(
                             }
                             if (firstOpenedId == null && (mime == "application/pdf" || name.endsWith(".pdf", true))) firstOpenedId = id
                         }
-                        if (passwordUri == null) firstOpenedId?.let { onContinueAtPosition(it, 0) }
+                        if (passwordUri == null) {
+                            if (sharedImportKey.isNotEmpty()) handledSharedImportKey = sharedImportKey
+                            firstOpenedId?.let { onContinueAtPosition(it, 0) }
+                        }
                     } catch (error: Throwable) {
                         if (error is kotlinx.coroutines.CancellationException) throw error
                         Toast.makeText(context, error.message ?: "Could not save shared items", Toast.LENGTH_LONG).show()
@@ -814,7 +828,27 @@ private fun LibraryHeader(
 ) {
     var sortExpanded by remember { mutableStateOf(false) }
     Column(Modifier.statusBarsPadding().padding(top = 12.dp, bottom = 4.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        if (compact) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f).padding(end = 8.dp)) {
+                    Text("Library", style = MaterialTheme.typography.headlineSmall.copy(fontFamily = FontFamily.Serif))
+                    Text(if (importing) "Importing…" else "$count items", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Box {
+                    IconButton(onClick = { sortExpanded = true }) { Icon(Icons.Outlined.Sort, "Sort") }
+                    DropdownMenu(expanded = sortExpanded, onDismissRequest = { sortExpanded = false }) {
+                        listOf(LibrarySort.RECENT to "Recent", LibrarySort.NAME to "Name", LibrarySort.DATE_ADDED to "Date added").forEach { (sort, label) ->
+                            DropdownMenuItem(text = { Text(label) }, onClick = { onSortChange(sort); sortExpanded = false })
+                        }
+                    }
+                }
+                IconButton(onClick = onNew) { Icon(Icons.Default.Add, "Import") }
+                IconButton(onClick = onAppearance) { Icon(Icons.Outlined.Palette, "Appearance") }
+                if (showAccountButton) IconButton(onClick = onAccount) { Icon(Icons.Outlined.AccountCircle, "Sync & account") }
+            }
+            Spacer(Modifier.height(10.dp))
+            LibrarySearchButton(onSearch, Modifier.fillMaxWidth())
+        } else Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.padding(end = 16.dp)) {
                 Text(
                     "Library",
@@ -823,18 +857,7 @@ private fun LibraryHeader(
                 )
                 Text(if (importing) "Importing…" else "$count items", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            Surface(
-                onClick = onSearch,
-                shape = RoundedCornerShape(18.dp),
-                color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                modifier = Modifier.weight(1f).widthIn(max = 360.dp).height(46.dp),
-            ) {
-                Row(Modifier.padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Outlined.Search, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Spacer(Modifier.width(10.dp))
-                    Text("Search books and notes", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-            }
+            LibrarySearchButton(onSearch, Modifier.weight(1f).widthIn(max = 360.dp))
             Spacer(Modifier.width(8.dp))
             Box {
                 IconButton(onClick = { sortExpanded = true }) { Icon(Icons.Outlined.Sort, "Sort") }
@@ -904,6 +927,28 @@ private fun LibraryHeader(
             }
         }
         Spacer(Modifier.height(8.dp))
+    }
+}
+
+@Composable
+private fun LibrarySearchButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        modifier = modifier.height(46.dp),
+    ) {
+        Row(Modifier.padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Outlined.Search, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.width(10.dp))
+            Text(
+                "Search books and notes",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }
 

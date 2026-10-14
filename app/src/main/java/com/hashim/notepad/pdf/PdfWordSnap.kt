@@ -6,6 +6,30 @@ import java.util.Locale
 data class TextSelectionRange(val start: Int, val end: Int)
 
 object PdfWordSnap {
+    fun wordRangeForPoints(
+        layer: PdfGeometryTextLayer,
+        points: List<PdfUserPoint>,
+        locale: Locale,
+        toleranceX: Float,
+        toleranceY: Float,
+    ): TextSelectionRange? {
+        val ranges = points.mapNotNull { point ->
+            nearestCharacterIndex(layer, point.x, point.y, toleranceX, toleranceY)
+                ?.let { wordRange(layer.text, it, locale) }
+        }
+        return ranges.takeIf { it.isNotEmpty() }?.let { hits ->
+            TextSelectionRange(hits.minOf(TextSelectionRange::start), hits.maxOf(TextSelectionRange::end))
+        }
+    }
+
+    fun nearestCharacterIndex(
+        layer: PdfGeometryTextLayer,
+        x: Float,
+        y: Float,
+        toleranceX: Float,
+        toleranceY: Float,
+    ): Int? = layer.nearestCharacterOffset(x, y, toleranceX, toleranceY)
+
     fun nearestCharacterIndex(
         boxes: List<PdfTextRect>,
         x: Float,

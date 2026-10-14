@@ -1,7 +1,10 @@
 package com.hashim.notepad.pdf
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.text.BreakIterator
+import java.util.Locale
 
 class PdfTextSearchTest {
     @Test fun returnsOriginalCharacterRangeAndShortSnippet() {
@@ -13,12 +16,6 @@ class PdfTextSearchTest {
         assertEquals("page", hit.pageId)
     }
 
-    @Test fun findsArabicQueryWhenPdfiumReturnsVisualOrder() {
-        val hit = findPdfTextHits("page", 0, "هغل", "لغه").single()
-        assertEquals(0, hit.matchStart)
-        assertEquals(3, hit.matchEnd)
-    }
-
     @Test fun matchesPdfiumTextWithDetachedTashkeelFromCapturedCodepoints() {
         val extracted = "\u064Eع\u064Eر\u0650ب\u064E\u0651ي\u064Cة"
         val hit = findPdfTextHits("page", 0, extracted, "عربية").single()
@@ -26,19 +23,60 @@ class PdfTextSearchTest {
         assertEquals(extracted.length, hit.matchEnd)
     }
 
-    @Test fun findsTashkeelQueryInCapturedPdfiumVisualOrder() {
+    @Test fun geometryOrdersCapturedArabicFragmentsAndMatchesBothFormsAcrossWholeWord() {
         val extracted = "اختبار ترتيب العربية في ملف PDF\r\n" +
             "\u064Cة\r\n" +
             "\u064Eغ\u064Cة \u064Eع\u064Eر\u0650ب\u064E\u0651ي\u064Cة \u064Eج\u0650م\u064A\u064Eل\r\n" +
             "\u064Fل"
-
-        val hit = findPdfTextHits("arabic", 0, extracted, "لغه").first {
-            it.sourceIndices == listOf(34, 38, 60)
+        val boxes = extracted.indices.map { index ->
+            val line = when (index) {
+                in 0..32 -> 0f
+                in 33..36 -> 40f
+                in 37..41, in 63..64 -> 60f
+                in 42..60 -> 100f
+                else -> 140f
+            }
+            val x = when (index) {
+                37, 38, 39 -> 20f
+                40 -> 10f
+                41 -> 0f
+                63, 64 -> 30f
+                else -> (index % 8) * 12f
+            }
+            PdfTextRect(x, line, x + 8f, line + 10f)
         }
+        val layer = PdfGeometryText.order(extracted, boxes)
+        val first = findPdfTextHits("arabic", 0, layer, "لغه").single()
+        val second = findPdfTextHits("arabic", 0, layer, "لغة").single()
 
-        assertEquals(listOf(34, 38, 60), hit.sourceIndices)
-        assertEquals('ة', extracted[hit.sourceIndices[0]])
-        assertEquals('غ', extracted[hit.sourceIndices[1]])
-        assertEquals('ل', extracted[hit.sourceIndices[2]])
+        assertEquals(first.matchStart, second.matchStart)
+        assertEquals(first.matchEnd, second.matchEnd)
+        assertEquals("لُغٌَة", layer.text.substring(first.matchStart, first.matchEnd))
+        assertEquals(listOf(37, 38, 39, 40, 63, 64), first.sourceIndices.sorted())
+        assertEquals(1, first.rects.size)
+        assertEquals(PdfTextRect(10f, 60f, 38f, 70f), first.rects.single())
+    }
+
+    @Test fun rtlSnippetsPreserveWordAndGraphemeBoundaries() {
+        val text = "مقدمة ".repeat(10) + "لُغَةٌ" + " خاتمة".repeat(10)
+        val hit = findPdfTextHits("page", 0, text, "لغة").single()
+        val snippetStart = hit.matchStart - hit.snippetMatchStart
+        val snippetEnd = snippetStart + hit.snippet.length
+        val words = BreakIterator.getWordInstance(Locale.ROOT).apply { setText(text) }
+        val graphemes = BreakIterator.getCharacterInstance(Locale.ROOT).apply { setText(text) }
+
+        assertTrue(words.isBoundary(snippetStart))
+        assertTrue(words.isBoundary(snippetEnd))
+        assertTrue(graphemes.isBoundary(snippetStart))
+        assertTrue(graphemes.isBoundary(snippetEnd))
+        assertEquals(text.substring(hit.matchStart, hit.matchEnd), hit.snippet.substring(hit.snippetMatchStart, hit.snippetMatchEnd))
+    }
+
+    @Test fun duplicateNormalizedMatchesAreDeduplicatedBySourceRange() {
+        val hit = findPdfTextHits("page", 0, "\u2161", "i")
+
+        assertEquals(1, hit.size)
+        assertEquals(0, hit.single().matchStart)
+        assertEquals(1, hit.single().matchEnd)
     }
 }

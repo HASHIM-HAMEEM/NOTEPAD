@@ -8,9 +8,18 @@ data class NormalizedText(val text: String, val indexMap: IntArray) {
         require(start >= 0 && endExclusive > start && endExclusive <= indexMap.size)
         val originalStart = indexMap[start]
         val lastOriginal = indexMap[endExclusive - 1]
-        val nextOriginal = indexMap.getOrNull(endExclusive) ?: source.length
-        val originalCharEnd = lastOriginal + Character.charCount(source.codePointAt(lastOriginal))
-        return originalStart to maxOf(nextOriginal, originalCharEnd)
+        var originalEnd = lastOriginal + Character.charCount(source.codePointAt(lastOriginal))
+        while (originalEnd < source.length) {
+            val codePoint = source.codePointAt(originalEnd)
+            if (Character.getType(codePoint) !in setOf(
+                    Character.NON_SPACING_MARK.toInt(),
+                    Character.COMBINING_SPACING_MARK.toInt(),
+                    Character.ENCLOSING_MARK.toInt(),
+                )
+            ) break
+            originalEnd += Character.charCount(codePoint)
+        }
+        return originalStart to originalEnd
     }
 }
 

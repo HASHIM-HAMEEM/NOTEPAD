@@ -36,13 +36,21 @@ object TextBlockPainter {
 
     fun draw(canvas: Canvas, block: TextBlock, selected: Boolean, paperArgb: Int = Color.WHITE, context: Context? = null) {
         val l = layout(block, paperArgb, context)
-        canvas.save(); canvas.translate(block.xPt, block.yPt)
+        canvas.save()
+        canvas.rotate(block.rotationDegrees, block.xPt, block.yPt + block.fontSizePt)
+        canvas.translate(block.xPt, block.yPt)
         if (selected) canvas.drawRect(-4f, -4f, block.wPt + 4f, l.height + 4f, selection)
         l.draw(canvas); canvas.restore()
     }
 
     fun hit(block: TextBlock, xPt: Float, yPt: Float, context: Context? = null): Boolean {
         val h = layout(block, context = context).height
-        return xPt >= block.xPt - 4 && xPt <= block.xPt + block.wPt + 4 && yPt >= block.yPt - 4 && yPt <= block.yPt + h + 4
+        val point = floatArrayOf(xPt, yPt)
+        android.graphics.Matrix().apply {
+            setRotate(-block.rotationDegrees, block.xPt, block.yPt + block.fontSizePt)
+            mapPoints(point)
+        }
+        return point[0] >= block.xPt - 4 && point[0] <= block.xPt + block.wPt + 4 &&
+            point[1] >= block.yPt - 4 && point[1] <= block.yPt + h + 4
     }
 }

@@ -63,13 +63,32 @@ class PdfPageSource(context: Context, file: File, password: String? = null) : Cl
         }
     }
 
+    fun textGeometry(pageIndex: Int): PdfGeometryTextLayer = synchronized(pdfiumLock) {
+        val page = document.openPage(pageIndex) ?: return@synchronized PdfGeometryText.order("", emptyList())
+        page.use { pg ->
+            pg.openTextPage().use { textPage ->
+                val count = textPage.textPageCountChars()
+                val text = if (count <= 0) "" else textPage.textPageGetText(0, count).orEmpty()
+                val pageHeight = pg.getPageHeightPoint().toFloat()
+                val boxes = List(count.coerceAtLeast(0)) { index ->
+                    textPage.textPageGetCharBox(index)?.let {
+                        PdfTextRect(it.left, pageHeight - it.top, it.right, pageHeight - it.bottom)
+                    } ?: PdfTextRect(0f, 0f, 0f, 0f)
+                }
+                PdfGeometryText.order(text, boxes)
+            }
+        }
+    }
+
     fun textLineRects(pageIndex: Int, start: Int, end: Int): List<PdfTextRect> = synchronized(pdfiumLock) {
         val page = document.openPage(pageIndex) ?: return@synchronized emptyList()
         page.use { pg ->
             pg.openTextPage().use { textPage ->
                 val boxes = (start until end).mapNotNull { index ->
                     if (index !in 0 until textPage.textPageCountChars()) return@mapNotNull null
-                    textPage.textPageGetCharBox(index)?.takeUnless { it.isEmpty }
+                    textPage.textPageGetCharBox(index)?.let {
+                        RectF(it.left, pg.getPageHeightPoint() - it.top, it.right, pg.getPageHeightPoint() - it.bottom)
+                    }?.takeUnless { it.isEmpty }
                 }.sortedWith(compareBy<RectF> { it.centerY() }.thenBy { it.left })
                 val lines = ArrayList<RectF>()
                 boxes.forEach { box ->
@@ -89,9 +108,10 @@ class PdfPageSource(context: Context, file: File, password: String? = null) : Cl
         val page = document.openPage(pageIndex) ?: return@synchronized emptyList()
         page.use { pg ->
             pg.openTextPage().use { textPage ->
+                val pageHeight = pg.getPageHeightPoint().toFloat()
                 List(textPage.textPageCountChars()) { index ->
                     textPage.textPageGetCharBox(index)?.let {
-                        PdfTextRect(it.left, it.top, it.right, it.bottom)
+                        PdfTextRect(it.left, pageHeight - it.top, it.right, pageHeight - it.bottom)
                     } ?: PdfTextRect(0f, 0f, 0f, 0f)
                 }
             }

@@ -4,11 +4,14 @@ import android.content.Context
 import android.util.LruCache
 import com.hashim.notepad.data.Page
 import com.hashim.notepad.search.TextNormalizer
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.ensureActive
 import java.io.File
+import java.io.DataInputStream
+import java.io.DataOutputStream
 import java.security.MessageDigest
+import java.text.BreakIterator
+import java.util.Locale
 import kotlin.coroutines.coroutineContext
 
 data class PdfTextSearchHit(
@@ -26,109 +29,143 @@ data class PdfTextSearchHit(
 data class PdfTextRect(val left: Float, val top: Float, val right: Float, val bottom: Float)
 
 object PdfTextCache {
-    private val memory = object : LruCache<String, String>(256) {}
+    private val memory = object : LruCache<String, PdfGeometryTextLayer>(16 * 1024) {
+        override fun sizeOf(key: String, value: PdfGeometryTextLayer): Int =
+            ((value.text.length * 2L + value.characters.size * 64L) / 1024L).toInt().coerceAtLeast(1)
+    }
 
-    fun getOrLoad(context: Context, assetId: String, pageIndex: Int, load: () -> String): String {
+    fun getOrLoad(
+        context: Context,
+        assetId: String,
+        pageIndex: Int,
+        load: () -> PdfGeometryTextLayer,
+    ): PdfGeometryTextLayer {
         val key = "$assetId:$pageIndex"
         synchronized(memory) { memory.get(key)?.let { return it } }
         val digest = MessageDigest.getInstance("SHA-256").digest(assetId.toByteArray())
             .joinToString("") { "%02x".format(it) }
-        val file = File(File(context.cacheDir, "pdf-text/$digest"), "$pageIndex.txt")
-        val text = if (file.isFile) runCatching { file.readText(Charsets.UTF_8) }.getOrNull() ?: load() else load()
-        if (!file.isFile) {
+        val file = File(File(context.cacheDir, "pdf-text/$digest"), "$pageIndex.gtext")
+        val cached = if (file.isFile) runCatching { readLayer(file) }.getOrNull() else null
+        val layer = cached ?: load()
+        if (cached == null) {
             file.parentFile?.mkdirs()
             val temporary = File(file.parentFile, "${file.name}.part")
             runCatching {
-                temporary.writeText(text, Charsets.UTF_8)
+                writeLayer(temporary, layer)
                 if (!temporary.renameTo(file)) temporary.delete()
             }
         }
-        synchronized(memory) { memory.put(key, text) }
-        return text
+        synchronized(memory) { memory.put(key, layer) }
+        return layer
     }
+
+    private fun writeLayer(file: File, layer: PdfGeometryTextLayer) {
+        DataOutputStream(file.outputStream().buffered()).use { output ->
+            output.writeInt(CACHE_MAGIC)
+            output.writeString(layer.text)
+            output.writeInt(layer.characters.size)
+            layer.characters.forEach { character ->
+                output.writeString(character.text)
+                output.writeInt(character.start)
+                output.writeInt(character.end)
+                output.writeFloat(character.box.left)
+                output.writeFloat(character.box.top)
+                output.writeFloat(character.box.right)
+                output.writeFloat(character.box.bottom)
+                output.writeInt(character.lineIndex)
+                output.writeInt(character.sourceIndices.size)
+                character.sourceIndices.forEach(output::writeInt)
+            }
+        }
+    }
+
+    private fun readLayer(file: File): PdfGeometryTextLayer =
+        DataInputStream(file.inputStream().buffered()).use { input ->
+            require(input.readInt() == CACHE_MAGIC)
+            val text = input.readString()
+            val count = input.readInt().coerceIn(0, MAX_CACHED_CHARS)
+            val characters = List(count) {
+                val value = input.readString()
+                val start = input.readInt()
+                val end = input.readInt()
+                val box = PdfTextRect(input.readFloat(), input.readFloat(), input.readFloat(), input.readFloat())
+                val lineIndex = input.readInt()
+                val sourceCount = input.readInt().coerceIn(0, 32)
+                val sources = List(sourceCount) { input.readInt() }
+                GeometryTextChar(value, start, end, box, sources, lineIndex)
+            }
+            PdfGeometryTextLayer(text, characters)
+    }
+
+    private fun DataOutputStream.writeString(value: String) {
+        val bytes = value.toByteArray(Charsets.UTF_8)
+        writeInt(bytes.size)
+        write(bytes)
+    }
+
+    private fun DataInputStream.readString(): String {
+        val size = readInt()
+        require(size in 0..MAX_CACHED_STRING_BYTES)
+        return ByteArray(size).also(::readFully).toString(Charsets.UTF_8)
+    }
+
+    private const val CACHE_MAGIC = 0x4E505458
+    private const val MAX_CACHED_CHARS = 2_000_000
+    private const val MAX_CACHED_STRING_BYTES = 16 * 1024 * 1024
 }
 
-fun findPdfTextHits(pageId: String, pageIndex: Int, source: String, query: String): List<PdfTextSearchHit> {
-    val normalizedQueries = buildList {
-        TextNormalizer.normalize(query).text.takeIf { it.isNotEmpty() }?.let(::add)
-        val reversed = buildString {
-            query.codePoints().toArray().reversedArray().forEach { appendCodePoint(it) }
-        }
-        TextNormalizer.normalize(reversed).text.takeIf { it.isNotEmpty() && it !in this }?.let(::add)
-    }
-    if (normalizedQueries.isEmpty()) return emptyList()
-    val normalized = TextNormalizer.normalize(source)
+fun findPdfTextHits(
+    pageId: String,
+    pageIndex: Int,
+    layer: PdfGeometryTextLayer,
+    query: String,
+): List<PdfTextSearchHit> {
+    val normalizedQuery = TextNormalizer.normalize(query).text
+    if (normalizedQuery.isEmpty()) return emptyList()
+    val normalized = TextNormalizer.normalize(layer.text)
     val results = ArrayList<PdfTextSearchHit>()
-    for (normalizedQuery in normalizedQueries) {
-        var searchFrom = 0
-        while (searchFrom < normalized.text.length) {
-            val match = normalized.text.indexOf(normalizedQuery, searchFrom)
-            if (match < 0) break
-            val (start, end) = normalized.sourceRange(source, match, match + normalizedQuery.length)
-            val snippetStart = (start - 30).coerceAtLeast(0)
-            val snippetEnd = (end + 30).coerceAtMost(source.length)
-            val hit = PdfTextSearchHit(
+    val seenRanges = HashSet<Pair<Int, Int>>()
+    val wordBoundaries = BreakIterator.getWordInstance(Locale.ROOT).apply { setText(layer.text) }
+    val characterBoundaries = BreakIterator.getCharacterInstance(Locale.ROOT).apply { setText(layer.text) }
+    var searchFrom = 0
+    while (searchFrom < normalized.text.length) {
+        val match = normalized.text.indexOf(normalizedQuery, searchFrom)
+        if (match < 0) break
+        val (start, end) = normalized.sourceRange(layer.text, match, match + normalizedQuery.length)
+        if (seenRanges.add(start to end)) {
+            val contextStart = (start - SNIPPET_CONTEXT).coerceAtLeast(0)
+            val contextEnd = (end + SNIPPET_CONTEXT).coerceAtMost(layer.text.length)
+            val wordStart = if (contextStart == 0) 0 else
+                wordBoundaries.preceding(contextStart + 1).takeIf { it != BreakIterator.DONE } ?: 0
+            val wordEnd = if (contextEnd == layer.text.length) layer.text.length else
+                wordBoundaries.following((contextEnd - 1).coerceAtLeast(0)).takeIf { it != BreakIterator.DONE }
+                    ?: layer.text.length
+            val snippetStart = if (wordStart == 0) 0 else
+                characterBoundaries.preceding(wordStart + 1).takeIf { it != BreakIterator.DONE } ?: 0
+            val snippetEnd = if (wordEnd == layer.text.length) layer.text.length else
+                characterBoundaries.following((wordEnd - 1).coerceAtLeast(0)).takeIf { it != BreakIterator.DONE }
+                    ?: layer.text.length
+            results += PdfTextSearchHit(
                 pageId = pageId,
                 pageIndex = pageIndex,
-                snippet = source.substring(snippetStart, snippetEnd),
+                snippet = layer.text.substring(snippetStart, snippetEnd),
                 matchStart = start,
                 matchEnd = end,
                 snippetMatchStart = start - snippetStart,
                 snippetMatchEnd = end - snippetStart,
+                rects = layer.rectsForRange(start, end),
+                sourceIndices = layer.sourceIndices(start, end),
             )
-            if (results.none { it.matchStart == hit.matchStart && it.matchEnd == hit.matchEnd }) results += hit
-            searchFrom = match + normalizedQuery.length
         }
+        searchFrom = match + normalizedQuery.length
     }
-    if (results.isEmpty()) {
-        normalizedQueries.firstOrNull(::isArabicWord)?.let { query ->
-            val reversed = query.codePoints().toArray().reversedArray()
-                .joinToString("") { String(Character.toChars(it)) }
-            val queryPoints = reversed.codePoints().toArray()
-            val maxGap = (queryPoints.size * 10).coerceAtLeast(24)
-            var from = 0
-            while (from < normalized.text.length) {
-                var cursor = from
-                val positions = ArrayList<Int>(queryPoints.size)
-                for (point in queryPoints) {
-                    val next = normalized.text.indexOf(String(Character.toChars(point)), cursor)
-                    if (next < 0 || next - cursor > maxGap) break
-                    positions += next
-                    cursor = next + Character.charCount(point)
-                }
-                if (positions.size == queryPoints.size) {
-                    val sourceIndices = positions.map { normalized.indexMap[it] }
-                    val start = sourceIndices.minOrNull() ?: break
-                    val last = sourceIndices.maxOrNull() ?: break
-                    val end = last + Character.charCount(source.codePointAt(last))
-                    val snippetStart = (start - 30).coerceAtLeast(0)
-                    val snippetEnd = (end + 30).coerceAtMost(source.length)
-                    results += PdfTextSearchHit(
-                        pageId = pageId,
-                        pageIndex = pageIndex,
-                        snippet = source.substring(snippetStart, snippetEnd),
-                        matchStart = start,
-                        matchEnd = end,
-                        snippetMatchStart = start - snippetStart,
-                        snippetMatchEnd = end - snippetStart,
-                        sourceIndices = sourceIndices,
-                    )
-                    from = positions.first() + 1
-                } else {
-                    break
-                }
-            }
-        }
-    }
-    return results.sortedBy { it.matchStart }
+    return results
 }
 
-private fun isArabicWord(value: String): Boolean {
-    val points = value.codePoints().toArray()
-    return points.size >= 2 && points.all {
-        it in 0x0600..0x06FF || it in 0x0750..0x077F || it in 0x08A0..0x08FF
-    }
-}
+private const val SNIPPET_CONTEXT = 30
+
+fun findPdfTextHits(pageId: String, pageIndex: Int, source: String, query: String): List<PdfTextSearchHit> =
+    findPdfTextHits(pageId, pageIndex, PdfGeometryText.order(source, emptyList()), query)
 
 suspend fun searchPdfText(
     context: Context,
@@ -143,17 +180,9 @@ suspend fun searchPdfText(
         pages.forEachIndexed { pageNumber, page ->
             coroutineContext.ensureActive()
             val pdfIndex = page.pdfPageIndex ?: pageNumber
-            val text = PdfTextCache.getOrLoad(context, assetId, pdfIndex) { source.text(pdfIndex) }
-            findPdfTextHits(page.id, pdfIndex, text, query).forEach { hit ->
-                val rects = if (hit.sourceIndices.isEmpty()) {
-                    source.textLineRects(pdfIndex, hit.matchStart, hit.matchEnd)
-                } else {
-                    val boxes = source.textCharBoxes(pdfIndex)
-                    hit.sourceIndices.mapNotNull(boxes::getOrNull).filter {
-                        it.right > it.left && it.bottom > it.top
-                    }
-                }
-                onHit(hit.copy(rects = rects))
+            val layer = PdfTextCache.getOrLoad(context, assetId, pdfIndex) { source.textGeometry(pdfIndex) }
+            findPdfTextHits(page.id, pdfIndex, layer, query).forEach { hit ->
+                onHit(hit)
             }
         }
     }

@@ -63,6 +63,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.toArgb
+import androidx.ink.brush.StockBrushes
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.StrokeJoin
@@ -117,6 +118,7 @@ import com.hashim.notepad.ink.StylusInputDiagnostics
 import com.hashim.notepad.ink.StrokeStore
 import com.hashim.notepad.ink.StylusDetector
 import com.hashim.notepad.pdf.PdfPageSource
+import com.hashim.notepad.pdf.PdfUserPoint
 import com.hashim.notepad.pdf.PdfTextCache
 import com.hashim.notepad.pdf.PdfWordSnap
 import com.hashim.notepad.pdf.PdfiumDispatcher
@@ -543,12 +545,12 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
         loadedFor = p.id
         processedHighlighterStrokeCount = strokes.size
     }
-    LaunchedEffect(dirtyStrokes, page?.id, loadedFor, snapHighlighterToText, tool, surface) {
+    LaunchedEffect(dirtyStrokes, page?.id, loadedFor, snapHighlighterToText, surface) {
         val strokes = dirtyStrokes ?: return@LaunchedEffect
         val currentPage = page ?: return@LaunchedEffect
         val target = surface ?: return@LaunchedEffect
         if (loadedFor != currentPage.id) return@LaunchedEffect
-        if (currentPage.kind != PageKind.PDF || !snapHighlighterToText || tool != InkTool.HIGHLIGHTER) {
+        if (currentPage.kind != PageKind.PDF || !snapHighlighterToText) {
             processedHighlighterStrokeCount = strokes.size
             return@LaunchedEffect
         }
@@ -563,23 +565,26 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
         val stroke = strokes.lastOrNull() ?: return@LaunchedEffect
         if (stroke.inputs.isEmpty()) return@LaunchedEffect
         processedHighlighterStrokeCount = strokes.size
+        if (stroke.brush.family != StockBrushes.highlighter()) return@LaunchedEffect
         val assetId = currentPage.assetId ?: return@LaunchedEffect
         val asset = repo.asset(assetId) ?: return@LaunchedEffect
         val created = withContext(PdfiumDispatcher.dispatcher) {
             PdfPageSource(context, File(asset.localPath), com.hashim.notepad.pdf.PdfPasswordVault(context).read(asset.id)).use { source ->
                 val pdfIndex = currentPage.pdfPageIndex ?: pages.indexOf(currentPage)
-                val text = PdfTextCache.getOrLoad(context, asset.id, pdfIndex) { source.text(pdfIndex) }
-                val boxes = source.textCharBoxes(pdfIndex)
-                val first = stroke.inputs[0]
-                val last = stroke.inputs[stroke.inputs.size - 1]
-                val startIndex = PdfWordSnap.nearestCharacterIndex(boxes, first.x, first.y, 3f, 12f)
-                    ?: return@use null
-                val endIndex = PdfWordSnap.nearestCharacterIndex(boxes, last.x, last.y, 3f, 12f) ?: startIndex
-                val startRange = PdfWordSnap.wordRange(text, startIndex, Locale.forLanguageTag(language)) ?: return@use null
-                val endRange = PdfWordSnap.wordRange(text, endIndex, Locale.forLanguageTag(language)) ?: startRange
-                val start = minOf(startRange.start, endRange.start)
-                val end = maxOf(startRange.end, endRange.end)
-                val rects = source.textLineRects(pdfIndex, start, end)
+                val text = PdfTextCache.getOrLoad(context, asset.id, pdfIndex) { source.textGeometry(pdfIndex) }
+                val toleranceX = maxOf(4f, stroke.brush.size * 2f)
+                val toleranceY = maxOf(10f, stroke.brush.size * 2f)
+                val points = (0 until stroke.inputs.size).map { index ->
+                    stroke.inputs[index].let { PdfUserPoint(it.x, it.y) }
+                }
+                val range = PdfWordSnap.wordRangeForPoints(
+                    text,
+                    points,
+                    Locale.forLanguageTag(language),
+                    toleranceX,
+                    toleranceY,
+                ) ?: return@use null
+                val rects = text.rectsForRange(range.start, range.end)
                 if (rects.isEmpty()) return@use null
                 PdfMark(
                     id = UUID.randomUUID().toString(),
@@ -588,9 +593,9 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
                     kind = PdfMarkKind.HIGHLIGHT,
                     colorArgb = stroke.brush.colorIntArgb,
                     quads = PdfWordSnap.quadPoints(rects, currentPage.heightPt),
-                    charStart = start,
-                    charEnd = end,
-                    text = text.substring(start, end),
+                    charStart = range.start,
+                    charEnd = range.end,
+                    text = text.text.substring(range.start, range.end),
                     note = null,
                     createdAt = System.currentTimeMillis(),
                     updatedAt = System.currentTimeMillis(),
@@ -599,9 +604,10 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
         }
         if (created != null) {
             repo.savePdfMark(created)
-            target.convertLastStrokeToExternalUndo(stroke) {
+            val converted = target.convertLastStrokeToExternalUndo(stroke) {
                 scope.launch { repo.deletePdfMark(created.id) }
             }
+            if (!converted) scope.launch { repo.deletePdfMark(created.id) }
         }
     }
 
@@ -992,31 +998,31 @@ fun EditorScreen(repo: NotePadRepository, notebookId: String, pageId: String, re
                     edge = toolbarEdge,
                     onDismissRequest = { highlighterPopover = false },
                 ) {
-                    Column {
-                        BrushSettingsPopover(
-                            title = "Highlighter",
-                            favoritePresets = favoritePresets,
-                            onAddFavorite = { addFavorite(InkTool.HIGHLIGHTER, pen, highlighterSettings) },
-                            onSelectFavorite = ::applyFavorite,
-                            onRemoveFavorite = ::removeFavorite,
-                            color = highlighterSettings.color,
-                            brushSize = highlighterSettings.size,
-                            previewStrokeSize = highlighterSettings.size * 4f,
-                            onSizeChange = { value -> updateActiveBrushSettings { it.copy(size = value) } },
-                            opacity = highlighterSettings.opacity,
-                            onOpacityChange = { value -> updateActiveBrushSettings { it.copy(opacity = value) } },
-                            showOpacity = true,
-                            alwaysStraight = alwaysStraight,
-                            onAlwaysStraightChange = ::setAlwaysStraight,
-                        )
-                        Row(
-                            Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text("Snap to text", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
-                            Switch(checked = snapHighlighterToText, onCheckedChange = { snapHighlighterToText = it })
-                        }
-                    }
+                    BrushSettingsPopover(
+                        title = "Highlighter",
+                        favoritePresets = favoritePresets,
+                        onAddFavorite = { addFavorite(InkTool.HIGHLIGHTER, pen, highlighterSettings) },
+                        onSelectFavorite = ::applyFavorite,
+                        onRemoveFavorite = ::removeFavorite,
+                        color = highlighterSettings.color,
+                        brushSize = highlighterSettings.size,
+                        previewStrokeSize = highlighterSettings.size * 4f,
+                        onSizeChange = { value -> updateActiveBrushSettings { it.copy(size = value) } },
+                        opacity = highlighterSettings.opacity,
+                        onOpacityChange = { value -> updateActiveBrushSettings { it.copy(opacity = value) } },
+                        showOpacity = true,
+                        alwaysStraight = alwaysStraight,
+                        onAlwaysStraightChange = ::setAlwaysStraight,
+                        bottomContent = {
+                            Row(
+                                Modifier.fillMaxWidth().padding(top = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text("Snap to text", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                                Switch(checked = snapHighlighterToText, onCheckedChange = { snapHighlighterToText = it })
+                            }
+                        },
+                    )
                 }
             }
             Box {
@@ -2357,6 +2363,7 @@ private fun BrushSettingsPopover(
     showOpacity: Boolean,
     alwaysStraight: Boolean? = null,
     onAlwaysStraightChange: ((Boolean) -> Unit)? = null,
+    bottomContent: (@Composable () -> Unit)? = null,
 ) {
     val sliderColors = SliderDefaults.colors(
         activeTrackColor = MaterialTheme.colorScheme.onSurface,
@@ -2438,6 +2445,7 @@ private fun BrushSettingsPopover(
                 Switch(checked = alwaysStraight == true, onCheckedChange = onChange)
             }
         }
+        bottomContent?.invoke()
         }
     }
 }

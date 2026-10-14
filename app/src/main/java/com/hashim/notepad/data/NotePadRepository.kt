@@ -13,6 +13,8 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.withContext
 import com.hashim.notepad.search.TextNormalizer
+import com.hashim.notepad.search.LibrarySearch
+import com.hashim.notepad.search.LibrarySearchDocument
 import org.json.JSONArray
 import java.util.UUID
 
@@ -29,6 +31,7 @@ private data class StoredTextBlock(
     val width: Float,
     val direction: String,
     val content: String,
+    val rotationDegrees: Float,
 )
 
 class NotePadRepository(context: Context, databaseName: String = "notepad.db") {
@@ -500,7 +503,7 @@ class NotePadRepository(context: Context, databaseName: String = "notepad.db") {
     }
 
     private fun loadTextBlocks(pageId: String): List<TextBlock> = helper.readableDatabase.rawQuery(
-        "select id, page_id, x_pt, y_pt, w_pt, direction, content, updated_at, font_size_pt, color_argb from text_blocks where page_id = ? and deleted_at is null order by y_pt", arrayOf(pageId)
+        "select id, page_id, x_pt, y_pt, w_pt, direction, content, updated_at, font_size_pt, color_argb, rotation_degrees from text_blocks where page_id = ? and deleted_at is null order by y_pt", arrayOf(pageId)
     ).use { c ->
         buildList {
             while (c.moveToNext()) add(
@@ -508,6 +511,7 @@ class NotePadRepository(context: Context, databaseName: String = "notepad.db") {
                     c.getString(0), c.getString(1), c.getFloat(2), c.getFloat(3), c.getFloat(4),
                     c.getString(5), c.getString(6), c.getLong(7), c.getFloat(8),
                     if (c.isNull(9)) null else c.getInt(9),
+                    c.getFloat(10),
                 ),
             )
         }
@@ -521,11 +525,13 @@ class NotePadRepository(context: Context, databaseName: String = "notepad.db") {
         content: String,
         fontSizePt: Float = 12f,
         colorArgb: Int? = null,
+        rotationDegrees: Float = 0f,
     ): String = withContext(Dispatchers.IO) {
         val id = UUID.randomUUID().toString()
         helper.writableDatabase.insertOrThrow("text_blocks", null, ContentValues().apply {
             put("id", id); put("page_id", pageId); put("x_pt", xPt); put("y_pt", yPt); put("w_pt", wPt); put("direction", "auto"); put("content", content); put("font_size_pt", fontSizePt)
             if (colorArgb == null) putNull("color_argb") else put("color_argb", colorArgb)
+            put("rotation_degrees", rotationDegrees)
             put("updated_at", System.currentTimeMillis())
         })
         mark("text_blocks", id); indexTextBlocks(pageId); notifyChanged(); id
@@ -551,6 +557,7 @@ class NotePadRepository(context: Context, databaseName: String = "notepad.db") {
                     put("w_pt", block.wPt); put("direction", block.direction); put("content", block.content)
                     put("font_size_pt", block.fontSizePt)
                     if (block.colorArgb == null) putNull("color_argb") else put("color_argb", block.colorArgb)
+                    put("rotation_degrees", block.rotationDegrees)
                     putNull("deleted_at"); put("updated_at", now)
                 }, SQLiteDatabase.CONFLICT_REPLACE)
                 mark("text_blocks", block.id)
@@ -563,9 +570,20 @@ class NotePadRepository(context: Context, databaseName: String = "notepad.db") {
         notifyChanged()
     }
 
-    suspend fun updateTextBlock(id: String, pageId: String, content: String? = null, xPt: Float? = null, yPt: Float? = null) = withContext(Dispatchers.IO) {
+    suspend fun updateTextBlock(
+        id: String,
+        pageId: String,
+        content: String? = null,
+        xPt: Float? = null,
+        yPt: Float? = null,
+        rotationDegrees: Float? = null,
+    ) = withContext(Dispatchers.IO) {
         helper.writableDatabase.update("text_blocks", ContentValues().apply {
-            content?.let { put("content", it) }; xPt?.let { put("x_pt", it) }; yPt?.let { put("y_pt", it) }; put("updated_at", System.currentTimeMillis())
+            content?.let { put("content", it) }
+            xPt?.let { put("x_pt", it) }
+            yPt?.let { put("y_pt", it) }
+            rotationDegrees?.let { put("rotation_degrees", it) }
+            put("updated_at", System.currentTimeMillis())
         }, "id = ?", arrayOf(id))
         mark("text_blocks", id); indexTextBlocks(pageId); notifyChanged()
     }
@@ -618,6 +636,32 @@ class NotePadRepository(context: Context, databaseName: String = "notepad.db") {
         val q = TextNormalizer.normalize(query).text
         if (q.isEmpty()) return@withContext emptyList()
         val database = helper.readableDatabase
+        val titleMatches = LibrarySearch.findMatches(
+            query,
+            loadNotebooks().map { LibrarySearchDocument(it.id, it.title, it.originalFilename) },
+        )
+        val firstPageByNotebook = database.rawQuery(
+            """select p.id, p.notebook_id,
+                      (select count(*) from pages p2 where p2.notebook_id = p.notebook_id
+                       and p2.sort_key <= p.sort_key and p2.deleted_at is null) as idx
+               from pages p where p.deleted_at is null order by p.notebook_id, p.sort_key""",
+            emptyArray(),
+        ).use { c ->
+            buildMap {
+                while (c.moveToNext()) putIfAbsent(c.getString(1), c.getString(0) to c.getInt(2))
+            }
+        }
+        val titleHits = titleMatches.mapNotNull { match ->
+            val page = firstPageByNotebook[match.document.notebookId] ?: return@mapNotNull null
+            SearchHit(
+                pageId = page.first,
+                notebookId = match.document.notebookId,
+                notebookTitle = match.document.title,
+                pageIndex = page.second,
+                snippet = match.snippet,
+                source = match.source,
+            )
+        }
         val recognitionHits = database.rawQuery(
             """select r.page_id, p.notebook_id, n.title, r.text, r.source,
                       (select count(*) from pages p2 where p2.notebook_id = p.notebook_id and p2.sort_key <= p.sort_key and p2.deleted_at is null) as idx
@@ -626,7 +670,7 @@ class NotePadRepository(context: Context, databaseName: String = "notepad.db") {
                order by n.updated_at desc limit 2000""", emptyArray()
         ).use { c ->
             buildList {
-                while (c.moveToNext()) {
+                while (c.moveToNext() && titleHits.size + size < 100) {
                     val text = c.getString(3)
                     val normalized = TextNormalizer.normalize(text)
                     val at = normalized.text.indexOf(q)
@@ -639,7 +683,9 @@ class NotePadRepository(context: Context, databaseName: String = "notepad.db") {
                 }
             }
         }
-        if (recognitionHits.size >= 100) return@withContext recognitionHits
+        if (titleHits.size + recognitionHits.size >= 100) {
+            return@withContext (titleHits + recognitionHits).take(100)
+        }
         val markHits = database.rawQuery(
             """select m.page_id, p.notebook_id, n.title, m.text, m.note,
                       (select count(*) from pages p2 where p2.notebook_id = p.notebook_id and p2.sort_key <= p.sort_key and p2.deleted_at is null) as idx
@@ -649,7 +695,7 @@ class NotePadRepository(context: Context, databaseName: String = "notepad.db") {
             emptyArray(),
         ).use { c ->
             buildList {
-                while (c.moveToNext() && recognitionHits.size + size < 100) {
+                while (c.moveToNext() && titleHits.size + recognitionHits.size + size < 100) {
                     val content = listOf(c.getString(3), c.getString(4).orEmpty()).filter(String::isNotBlank).joinToString(" ")
                     val normalized = TextNormalizer.normalize(content)
                     val at = normalized.text.indexOf(q)
@@ -662,7 +708,7 @@ class NotePadRepository(context: Context, databaseName: String = "notepad.db") {
                 }
             }
         }
-        return@withContext (recognitionHits + markHits).take(100)
+        return@withContext (titleHits + recognitionHits + markHits).take(100)
     }
 
     suspend fun renameNotebook(id: String, title: String) = withContext(Dispatchers.IO) {
@@ -761,11 +807,13 @@ class NotePadRepository(context: Context, databaseName: String = "notepad.db") {
             if (batches.isNotEmpty()) mark("stroke_batches", newId)
 
             val blocks = db.rawQuery(
-                "select x_pt, y_pt, w_pt, direction, content from text_blocks where page_id = ? and deleted_at is null",
+                "select x_pt, y_pt, w_pt, direction, content, rotation_degrees from text_blocks where page_id = ? and deleted_at is null",
                 arrayOf(pageId),
             ).use { c ->
                 buildList {
-                    while (c.moveToNext()) add(StoredTextBlock(c.getFloat(0), c.getFloat(1), c.getFloat(2), c.getString(3), c.getString(4)))
+                    while (c.moveToNext()) add(
+                        StoredTextBlock(c.getFloat(0), c.getFloat(1), c.getFloat(2), c.getString(3), c.getString(4), c.getFloat(5)),
+                    )
                 }
             }
             blocks.forEach { block ->
@@ -773,6 +821,7 @@ class NotePadRepository(context: Context, databaseName: String = "notepad.db") {
                 db.insertOrThrow("text_blocks", null, ContentValues().apply {
                     put("id", id); put("page_id", newId); put("x_pt", block.x); put("y_pt", block.y)
                     put("w_pt", block.width); put("direction", block.direction); put("content", block.content)
+                    put("rotation_degrees", block.rotationDegrees)
                     put("updated_at", now)
                 })
                 mark("text_blocks", id)
@@ -881,7 +930,7 @@ class NotePadRepository(context: Context, databaseName: String = "notepad.db") {
                         }
                     }
                     db.rawQuery(
-                        "select x_pt, y_pt, w_pt, direction, content, font_size_pt, color_argb from text_blocks where page_id = ? and deleted_at is null",
+                        "select x_pt, y_pt, w_pt, direction, content, font_size_pt, color_argb, rotation_degrees from text_blocks where page_id = ? and deleted_at is null",
                         arrayOf(page.id),
                     ).use { cursor ->
                         while (cursor.moveToNext()) {
@@ -896,6 +945,7 @@ class NotePadRepository(context: Context, databaseName: String = "notepad.db") {
                                 put("content", cursor.getString(4))
                                 put("font_size_pt", cursor.getFloat(5))
                                 if (cursor.isNull(6)) putNull("color_argb") else put("color_argb", cursor.getInt(6))
+                                put("rotation_degrees", cursor.getFloat(7))
                                 put("updated_at", now)
                             })
                             mark("text_blocks", id)

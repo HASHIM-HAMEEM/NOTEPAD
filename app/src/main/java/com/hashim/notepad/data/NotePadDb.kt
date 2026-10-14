@@ -74,10 +74,13 @@ class NotePadDb(context: Context, name: String = "notepad.db") : SQLiteOpenHelpe
             db.execSQL(PDF_MARKS)
             db.execSQL("create index if not exists pdf_marks_notebook_idx on pdf_marks(notebook_id, page_id, updated_at)")
         }
+        if (oldVersion < 11) {
+            db.execSQL("alter table text_blocks add column rotation_degrees real not null default 0")
+        }
     }
 
     companion object {
-        const val VERSION = 10
+        const val VERSION = 11
 
         /** Rows changed locally and not yet pushed. row_id is the page id for stroke_batches and recognition. */
         const val OUTBOX = "create table if not exists outbox (table_name text not null, row_id text not null, primary key (table_name, row_id))"
@@ -193,6 +196,7 @@ class NotePadDb(context: Context, name: String = "notepad.db") : SQLiteOpenHelpe
               content text not null,
               font_size_pt real not null default 12,
               color_argb integer,
+              rotation_degrees real not null default 0,
               deleted_at integer,
               updated_at integer not null
             );

@@ -26,4 +26,23 @@ class PdfWordSnapTest {
         )
         assertEquals(rect, PdfWordSnap.topLeftRects(PdfWordSnap.quadPoints(rect, 100f), 100f))
     }
+
+    @Test fun snapsEveryHighlighterSampleAndReturnsTheWholeWordRange() {
+        val text = "hello"
+        val boxes = text.indices.map { index ->
+            PdfTextRect(index * 10f, 0f, (index + 1) * 10f, 10f)
+        }
+        val layer = PdfGeometryText.order(text, boxes)
+
+        assertEquals(
+            TextSelectionRange(0, text.length),
+            PdfWordSnap.wordRangeForPoints(
+                layer,
+                listOf(PdfUserPoint(2f, 5f), PdfUserPoint(42f, 5f)),
+                Locale.ENGLISH,
+                2f,
+                2f,
+            ),
+        )
+    }
 }

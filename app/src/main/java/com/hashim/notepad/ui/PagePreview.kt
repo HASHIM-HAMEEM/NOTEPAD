@@ -59,11 +59,86 @@ private object PreviewCache {
     val bitmaps = object : LruCache<String, Bitmap>((Runtime.getRuntime().maxMemory() / 8 / 1024).toInt().coerceAtLeast(1)) {
         override fun sizeOf(key: String, value: Bitmap): Int = (value.allocationByteCount / 1024).coerceAtLeast(1)
     }
-    val composites = object : LruCache<String, Bitmap>((Runtime.getRuntime().maxMemory() / 16 / 1024).toInt().coerceAtLeast(1)) {
+    val composites = object : LruCache<String, Bitmap>((Runtime.getRuntime().maxMemory() / 8 / 1024).toInt().coerceAtLeast(1)) {
         override fun sizeOf(key: String, value: Bitmap): Int = (value.allocationByteCount / 1024).coerceAtLeast(1)
     }
     val strokes = LruCache<String, List<Stroke>>(64)
     val renderer: CanvasStrokeRenderer by lazy { CanvasStrokeRenderer.create(InkTextures.textureStore) }
+}
+
+internal suspend fun precomposeReadPage(
+    context: android.content.Context,
+    repo: NotePadRepository,
+    page: Page,
+    width: Int,
+    paperColor: Color,
+    bookmarkColor: Color,
+) = withContext(Dispatchers.Default) {
+    val renderWidth = width.coerceIn(420, 1800)
+    val paperArgb = paperColor.toArgbInt()
+    val key = "${page.id}:${page.updatedAt}:$renderWidth:$paperArgb:0"
+    if (PreviewCache.composites.get(key) != null) return@withContext
+
+    val pageImages = repo.pageImages(page.id).first()
+    val marks = repo.pdfMarks(page.notebookId).first().filter { it.pageId == page.id && !it.deleted }
+    val textBlocks = repo.textBlocks(page.id).first()
+    val strokesKey = "${page.id}:${page.updatedAt}"
+    val strokes = PreviewCache.strokes.get(strokesKey) ?: repo.loadStrokes(page.id)?.let {
+        runCatching { StrokeStore.decode(it) }.getOrNull()
+    }.orEmpty().also { PreviewCache.strokes.put(strokesKey, it) }
+    val imageBitmaps = pageImages.associate { image ->
+        val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(image.localPath, options)
+        var sample = 1
+        while (maxOf(options.outWidth, options.outHeight) / sample > 420) sample *= 2
+        image.assetId to (BitmapFactory.decodeFile(
+            image.localPath,
+            BitmapFactory.Options().apply { inSampleSize = sample },
+        ) ?: Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888))
+    }
+    val pdfBitmap = if (page.kind == PageKind.PDF && page.assetId != null) {
+        val pageIndex = page.pdfPageIndex ?: 0
+        val bitmapKey = "${page.assetId}:$pageIndex:$renderWidth"
+        PreviewCache.bitmaps.get(bitmapKey) ?: run {
+            val asset = repo.asset(page.assetId)
+            if (asset == null) null else withContext(PdfiumDispatcher.dispatcher) {
+                runCatching {
+                    val cacheFile = previewFile(context, page.assetId, pageIndex, renderWidth)
+                    val cached = if (cacheFile.isFile) BitmapFactory.decodeFile(cacheFile.absolutePath) else null
+                    cached ?: PdfPageSource(
+                        context,
+                        File(asset.localPath),
+                        com.hashim.notepad.pdf.PdfPasswordVault(context).read(asset.id),
+                    ).use { it.render(pageIndex, renderWidth) }.also { rendered ->
+                        cacheFile.parentFile?.mkdirs()
+                        val temporary = File(cacheFile.parentFile, "${cacheFile.name}.part")
+                        FileOutputStream(temporary).use { output ->
+                            val format = if (Build.VERSION.SDK_INT >= 30) Bitmap.CompressFormat.WEBP_LOSSY else Bitmap.CompressFormat.WEBP
+                            rendered.compress(format, 86, output)
+                        }
+                        if (!temporary.renameTo(cacheFile)) temporary.delete()
+                    }
+                }.getOrNull()
+            }?.also { PreviewCache.bitmaps.put(bitmapKey, it) }
+        }
+    } else null
+    PreviewCache.composites.put(
+        key,
+        renderPreviewComposite(
+            page,
+            renderWidth,
+            paperArgb,
+            null,
+            pdfBitmap,
+            strokes,
+            pageImages,
+            imageBitmaps,
+            textBlocks,
+            marks,
+            context,
+            bookmarkColor.toArgbInt(),
+        ),
+    )
 }
 
 /**
@@ -81,6 +156,7 @@ fun PagePreview(
     cropScale: Float = 1f,
     cropToContent: Boolean = false,
     renderScale: Float = 1f,
+    precomposedOnly: Boolean = false,
 ) {
     val context = LocalContext.current
     var targetWidthPx by remember { mutableIntStateOf(0) }
@@ -229,6 +305,14 @@ fun PagePreview(
             val composite = compositeBitmap
             if (composite != null) {
                 n.drawBitmap(composite, null, RectF(0f, 0f, p.widthPt, p.heightPt), Paint(Paint.FILTER_BITMAP_FLAG))
+            } else if (precomposedOnly) {
+                bitmap?.let { b ->
+                    val m = Matrix().apply { preScale(p.widthPt / b.width, p.heightPt / b.height) }
+                    val bitmapPaint = Paint(Paint.FILTER_BITMAP_FLAG).apply {
+                        if (paperColor.luminance() < 0.5f) colorFilter = PdfInvert.darkPaperFilter
+                    }
+                    n.drawBitmap(b, m, bitmapPaint)
+                }
             } else {
                 val texturePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                     shader = PaperTexture.shader()

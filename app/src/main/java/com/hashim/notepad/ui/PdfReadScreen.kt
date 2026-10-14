@@ -1,6 +1,9 @@
 package com.hashim.notepad.ui
 
 import android.content.Context
+import android.graphics.Rect as AndroidRect
+import android.os.Build
+import android.view.View
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -12,7 +15,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -28,6 +32,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.systemGesturesPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -69,8 +75,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.text.AnnotatedString
 import android.view.MotionEvent
@@ -83,6 +94,7 @@ import com.hashim.notepad.data.displayHeightPt
 import com.hashim.notepad.data.displayWidthPt
 import com.hashim.notepad.pdf.PdfMarkGeometry
 import com.hashim.notepad.pdf.PdfPageSource
+import com.hashim.notepad.pdf.PdfPageCoordinates
 import com.hashim.notepad.pdf.PdfPasswordVault
 import com.hashim.notepad.pdf.PdfTextCache
 import com.hashim.notepad.pdf.PdfTextRect
@@ -91,8 +103,8 @@ import com.hashim.notepad.pdf.PdfWordSnap
 import com.hashim.notepad.pdf.PdfiumDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -160,12 +172,6 @@ fun PdfReadScreen(
     LaunchedEffect(pages, startPageId) {
         if (pages.isNotEmpty()) listState.scrollToItem(initialIndex.coerceIn(pages.indices))
     }
-    LaunchedEffect(listState, zoom, pages) {
-        snapshotFlow { listState.layoutInfo.visibleItemsInfo.map { it.index }.toSet() }
-            .distinctUntilChanged()
-            .debounce(150)
-            .collect { settledPages = it }
-    }
     LaunchedEffect(currentIndex, pages) {
         if (pages.isEmpty() || currentIndex !in pages.indices) return@LaunchedEffect
         delay(350)
@@ -210,6 +216,41 @@ fun PdfReadScreen(
         val dockedSidebar = maxWidth >= 840.dp && sidebarOpen
         val sidebarWidth = if (dockedSidebar) 300.dp else 0.dp
         val pageWidth = maxWidth - sidebarWidth - 32.dp
+        val density = LocalDensity.current
+        val pagePaper = if (MaterialTheme.colorScheme.background.luminance() < 0.5f) Color(0xFF202024) else Color.White
+        val bookmarkColor = MaterialTheme.colorScheme.primary
+        LaunchedEffect(listState, pages, pageWidth, maxHeight, fitPage, zoom, pagePaper, bookmarkColor) {
+            snapshotFlow { listState.isScrollInProgress }
+                .distinctUntilChanged()
+                .collectLatest { scrolling ->
+                    if (scrolling) {
+                        settledPages = emptySet()
+                    } else {
+                        delay(150)
+                        val visible = listState.layoutInfo.visibleItemsInfo.map { it.index }.filter { it in pages.indices }.toSet()
+                        if (visible.isEmpty()) return@collectLatest
+                        val layout = listState.layoutInfo
+                        val current = layout.visibleItemsInfo.maxByOrNull {
+                            minOf(it.offset + it.size, layout.viewportEndOffset) -
+                                maxOf(it.offset, layout.viewportStartOffset)
+                        }?.index ?: return@collectLatest
+                        val prefetch = (current - 2..current + 2).filter { it in pages.indices }
+                        prefetch.forEach { index ->
+                            val page = pages[index]
+                            val displayWidth = if (fitPage) minOf(pageWidth, maxHeight * page.displayWidthPt / page.displayHeightPt) else pageWidth
+                            val widthPx = with(density) { (displayWidth * 0.4f).roundToPx() }
+                            precomposeReadPage(context, repo, page, widthPx, pagePaper, bookmarkColor)
+                        }
+                        visible.forEach { index ->
+                            val page = pages[index]
+                            val displayWidth = if (fitPage) minOf(pageWidth, maxHeight * page.displayWidthPt / page.displayHeightPt) else pageWidth
+                            val widthPx = with(density) { (displayWidth * zoom).roundToPx() }
+                            precomposeReadPage(context, repo, page, widthPx, pagePaper, bookmarkColor)
+                        }
+                        settledPages = visible
+                    }
+                }
+        }
         val pageTransform = if (zoom != 1f || panX != 0f || panY != 0f) {
             Modifier.graphicsLayer {
                 scaleX = zoom
@@ -223,10 +264,24 @@ fun PdfReadScreen(
         LazyColumn(
             state = listState,
             modifier = Modifier.fillMaxSize().padding(start = sidebarWidth).pointerInput(Unit) {
-                detectTransformGestures { _, pan, scale, _ ->
-                    zoom = (zoom * scale).coerceIn(1f, 4f)
-                    panX += pan.x
-                    panY += pan.y
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false)
+                    do {
+                        val event = awaitPointerEvent()
+                        val pointers = event.changes.filter { it.pressed }
+                        if (pointers.size >= 2) {
+                            val first = pointers[0]
+                            val second = pointers[1]
+                            val previousCenter = (first.previousPosition + second.previousPosition) * 0.5f
+                            val currentCenter = (first.position + second.position) * 0.5f
+                            val previousDistance = (first.previousPosition - second.previousPosition).getDistance().coerceAtLeast(1f)
+                            val currentDistance = (first.position - second.position).getDistance()
+                            zoom = (zoom * currentDistance / previousDistance).coerceIn(1f, 4f)
+                            panX += currentCenter.x - previousCenter.x
+                            panY += currentCenter.y - previousCenter.y
+                            pointers.forEach { it.consume() }
+                        }
+                    } while (event.changes.any { it.pressed })
                 }
             }.then(pageTransform),
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 84.dp, bottom = 112.dp),
@@ -237,41 +292,42 @@ fun PdfReadScreen(
                 key = { _, page -> page.id },
                 contentType = { _, _ -> "pdf-page" },
             ) { index, page ->
+                var pageCoordinates by remember(page.id) { mutableStateOf<LayoutCoordinates?>(null) }
                 Box(
                     Modifier.width(
                         if (fitPage) minOf(pageWidth, maxHeight * page.displayWidthPt / page.displayHeightPt) else pageWidth,
                     ).aspectRatio(page.displayWidthPt / page.displayHeightPt)
                         .clip(RoundedCornerShape(4.dp))
-                        .clickable { chromeVisible = !chromeVisible }
+                        .onGloballyPositioned { pageCoordinates = it }
                         .pointerInput(page.id, page.rotation, marks, notebook?.language) {
                             detectTapGestures(
                                 onLongPress = { point ->
                                     scope.launch {
                                         val assetId = page.assetId ?: return@launch
                                         val asset = repo.asset(assetId) ?: return@launch
-                                        val viewX = point.x / size.width * page.displayWidthPt
-                                        val viewY = point.y / size.height * page.displayHeightPt
-                                        val pagePoint = displayToPagePoint(page.widthPt, page.heightPt, page.rotation, viewX, viewY)
+                                        val coordinates = pageCoordinates?.takeIf { it.isAttached } ?: return@launch
+                                        val bounds = coordinates.boundsInRoot()
+                                        val textPoint = pagePointForText(point, coordinates, bounds, page)
                                         val pdfIndex = page.pdfPageIndex ?: index
                                         val found = withContext(PdfiumDispatcher.dispatcher) {
                                             PdfPageSource(context, File(asset.localPath), PdfPasswordVault(context).read(asset.id)).use { source ->
-                                                val text = PdfTextCache.getOrLoad(context, asset.id, pdfIndex) { source.text(pdfIndex) }
+                                                val text = PdfTextCache.getOrLoad(context, asset.id, pdfIndex) { source.textGeometry(pdfIndex) }
                                                 val charIndex = PdfWordSnap.nearestCharacterIndex(
-                                                    source.textCharBoxes(pdfIndex),
-                                                    pagePoint.x,
-                                                    pagePoint.y,
-                                                    page.widthPt * 4f / size.width,
-                                                    page.heightPt * 12f / size.height,
+                                                    text,
+                                                    textPoint.x,
+                                                    textPoint.y,
+                                                    page.displayWidthPt * 4f / bounds.width,
+                                                    page.displayHeightPt * 12f / bounds.height,
                                                 ) ?: return@use null
                                                 val range = PdfWordSnap.wordRange(
-                                                    text, charIndex, Locale.forLanguageTag(notebook?.language ?: "und"),
+                                                    text.text, charIndex, Locale.forLanguageTag(notebook?.language ?: "und"),
                                                 ) ?: return@use null
                                                 PdfReadSelection(
                                                     page.id,
                                                     range.start,
                                                     range.end,
-                                                    text.substring(range.start, range.end),
-                                                    source.textLineRects(pdfIndex, range.start, range.end),
+                                                    text.text.substring(range.start, range.end),
+                                                    text.rectsForRange(range.start, range.end),
                                                 )
                                             }
                                         }
@@ -282,12 +338,17 @@ fun PdfReadScreen(
                                     }
                                 },
                                 onTap = { point ->
-                                    val viewX = point.x / size.width * page.displayWidthPt
-                                    val viewY = point.y / size.height * page.displayHeightPt
-                                    val pagePoint = displayToPagePoint(page.widthPt, page.heightPt, page.rotation, viewX, viewY)
-                                    val mark = marks.firstOrNull { item ->
-                                        item.pageId == page.id && PdfWordSnap.topLeftRects(item.quads, page.heightPt).any {
-                                            pagePoint.x in it.left..it.right && pagePoint.y in it.top..it.bottom
+                                    chromeVisible = !chromeVisible
+                                    val coordinates = pageCoordinates?.takeIf { it.isAttached }
+                                    val bounds = coordinates?.boundsInRoot()
+                                    val textPoint = if (coordinates != null && bounds != null) {
+                                        pagePointForText(point, coordinates, bounds, page)
+                                    } else null
+                                    val mark = textPoint?.let { pointOnPage ->
+                                        marks.firstOrNull { item ->
+                                            item.pageId == page.id && PdfWordSnap.topLeftRects(item.quads, page.heightPt).any {
+                                                pointOnPage.x in it.left..it.right && pointOnPage.y in it.top..it.bottom
+                                            }
                                         }
                                     }
                                     if (mark != null) {
@@ -315,11 +376,23 @@ fun PdfReadScreen(
                     PagePreview(
                         repo = repo,
                         page = page,
-                        paperColor = if (MaterialTheme.colorScheme.background.luminance() < 0.5f) Color(0xFF202024) else Color.White,
+                        paperColor = pagePaper,
                         renderEnabled = true,
-                        renderScale = if (index in settledPages) zoom else 0.4f,
+                        renderScale = 0.4f,
+                        precomposedOnly = true,
                         modifier = Modifier.fillMaxSize(),
                     )
+                    if (index in settledPages) {
+                        PagePreview(
+                            repo = repo,
+                            page = page,
+                            paperColor = pagePaper,
+                            renderEnabled = true,
+                            renderScale = zoom,
+                            precomposedOnly = true,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
                     currentHit?.takeIf { it.pageId == page.id }?.let { hit ->
                         Canvas(Modifier.fillMaxSize()) {
                             hit.rects.forEach { rect ->
@@ -412,7 +485,8 @@ fun PdfReadScreen(
             visible = chromeVisible,
             enter = fadeIn(tween(200)) + slideInVertically(tween(200)) { it },
             exit = fadeOut(tween(200)) + slideOutVertically(tween(200)) { it },
-            modifier = Modifier.align(Alignment.BottomCenter).padding(start = sidebarWidth),
+            modifier = Modifier.align(Alignment.BottomCenter).padding(start = sidebarWidth)
+                .navigationBarsPadding().systemGesturesPadding(),
         ) {
             Surface(color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f), shadowElevation = 4.dp) {
                 Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp)) {
@@ -590,8 +664,10 @@ private fun PageScrubber(
     val primary = MaterialTheme.colorScheme.primary
     val track = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.30f)
     val surface = MaterialTheme.colorScheme.surface
+    val view = LocalView.current
     Canvas(
         Modifier.fillMaxWidth().height(32.dp)
+            .systemGestureExclusion(view)
             .pointerInput(maxValue) {
                 detectTapGestures { point ->
                     val start = 8.dp.toPx()
@@ -623,17 +699,35 @@ private fun PageScrubber(
     }
 }
 
-private fun displayToPagePoint(
-    pageWidth: Float,
-    pageHeight: Float,
-    rotation: Int,
-    x: Float,
-    y: Float,
-): Offset = when ((rotation % 360 + 360) % 360) {
-    90 -> Offset(y, pageHeight - x)
-    180 -> Offset(pageWidth - x, pageHeight - y)
-    270 -> Offset(pageWidth - y, x)
-    else -> Offset(x, y)
+private fun Modifier.systemGestureExclusion(view: View): Modifier =
+    onGloballyPositioned { coordinates ->
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val bounds = coordinates.boundsInRoot()
+            view.systemGestureExclusionRects = listOf(
+                AndroidRect(bounds.left.toInt(), bounds.top.toInt(), bounds.right.toInt(), bounds.bottom.toInt()),
+            )
+        }
+    }
+
+private fun pagePointForText(
+    point: Offset,
+    coordinates: LayoutCoordinates,
+    bounds: androidx.compose.ui.geometry.Rect,
+    page: Page,
+): Offset {
+    val screen = coordinates.localToRoot(point)
+    val pagePoint = PdfPageCoordinates.screenToPageTopLeft(
+        screenX = screen.x,
+        screenY = screen.y,
+        pageLeft = bounds.left,
+        pageTop = bounds.top,
+        pageWidthPx = bounds.width,
+        pageHeightPx = bounds.height,
+        pageWidthPt = page.widthPt,
+        pageHeightPt = page.heightPt,
+        rotation = page.rotation,
+    )
+    return Offset(pagePoint.x, pagePoint.y)
 }
 
 private fun pageRectToDisplay(

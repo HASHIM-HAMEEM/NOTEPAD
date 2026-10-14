@@ -14,9 +14,12 @@ import com.tom_roush.pdfbox.pdmodel.PDPage
 import com.tom_roush.pdfbox.pdmodel.common.PDRectangle
 import com.tom_roush.pdfbox.pdmodel.graphics.color.PDColor
 import com.tom_roush.pdfbox.pdmodel.graphics.color.PDDeviceRGB
+import com.tom_roush.pdfbox.pdmodel.graphics.blend.BlendMode
 import com.tom_roush.pdfbox.pdmodel.graphics.image.PDImageXObject
+import com.tom_roush.pdfbox.pdmodel.graphics.state.PDExtendedGraphicsState
 import com.tom_roush.pdfbox.pdmodel.font.PDType0Font
 import com.tom_roush.pdfbox.pdmodel.interactive.annotation.PDAnnotationTextMarkup
+import com.tom_roush.pdfbox.util.Matrix
 import androidx.ink.brush.StockBrushes
 import androidx.ink.strokes.Stroke
 import kotlinx.coroutines.Dispatchers
@@ -193,10 +196,15 @@ class PdfBoxExporter(private val context: Context, private val repo: NotePadRepo
     private fun drawStroke(stream: PDPageContentStream, stroke: Stroke, pageHeight: Float) {
         if (stroke.inputs.size < 2) return
         val color = stroke.brush.colorIntArgb
+        val alpha = android.graphics.Color.alpha(color) / 255f
+        val highlighter = stroke.brush.family == StockBrushes.highlighter()
         val red = android.graphics.Color.red(color) / 255f
         val green = android.graphics.Color.green(color) / 255f
         val blue = android.graphics.Color.blue(color) / 255f
         stream.saveGraphicsState()
+        if (alpha < 1f || highlighter) {
+            applyStrokeGraphicsState(stream, alpha, highlighter)
+        }
         stream.setStrokingColor(red, green, blue)
         stream.setNonStrokingColor(red, green, blue)
         stream.setLineWidth(stroke.brush.size.coerceAtLeast(0.35f))
@@ -225,16 +233,23 @@ class PdfBoxExporter(private val context: Context, private val repo: NotePadRepo
     private suspend fun drawTextBlocks(document: PDDocument, stream: PDPageContentStream, page: Page) {
         val blocks = repo.textBlocks(page.id).first()
         blocks.forEach { block ->
-            val fontAsset = if (block.content.any { it in '\u0600'..'\u06FF' && it in "ٹڈڑںھہ" }) {
+            val fontAsset = if (block.content.any { it in "ٹڈڑںھہ" }) {
                 "fonts/NotoNastaliqUrdu.ttf"
-            } else "fonts/NotoNaskhArabic.ttf"
-            runCatching {
-                val font = PDType0Font.load(document, context.assets.open(fontAsset), true)
-                stream.beginText()
-                stream.setFont(font, block.fontSizePt)
-                stream.newLineAtOffset(block.xPt, page.heightPt - block.yPt - block.fontSizePt)
-                stream.showText(block.content)
-                stream.endText()
+            } else {
+                "fonts/NotoNaskhArabic.ttf"
+            }
+            context.assets.open(fontAsset).use { font ->
+                drawTextBlock(
+                    document = document,
+                    stream = stream,
+                    fontFile = font,
+                    text = block.content,
+                    colorArgb = block.colorArgb ?: android.graphics.Color.BLACK,
+                    fontSize = block.fontSizePt,
+                    x = block.xPt,
+                    baseline = page.heightPt - block.yPt - block.fontSizePt,
+                    rotationDegrees = -block.rotationDegrees,
+                )
             }
         }
     }
@@ -276,4 +291,47 @@ class PdfBoxExporter(private val context: Context, private val repo: NotePadRepo
             stream.stroke()
         }
     }
+}
+
+internal fun applyStrokeGraphicsState(
+    stream: PDPageContentStream,
+    alpha: Float,
+    multiply: Boolean,
+) {
+    val state = PDExtendedGraphicsState().apply {
+        strokingAlphaConstant = alpha.coerceIn(0f, 1f)
+        nonStrokingAlphaConstant = alpha.coerceIn(0f, 1f)
+        if (multiply) blendMode = BlendMode.MULTIPLY
+    }
+    stream.setGraphicsStateParameters(state)
+}
+
+internal fun drawTextBlock(
+    document: PDDocument,
+    stream: PDPageContentStream,
+    fontFile: java.io.InputStream,
+    text: String,
+    colorArgb: Int,
+    fontSize: Float,
+    x: Float,
+    baseline: Float,
+    rotationDegrees: Float = 0f,
+) {
+    val font = PDType0Font.load(document, fontFile, true)
+    stream.setNonStrokingColor(
+        colorArgb ushr 16 and 0xff,
+        colorArgb ushr 8 and 0xff,
+        colorArgb and 0xff,
+    )
+    stream.beginText()
+    stream.setFont(font, fontSize.coerceAtLeast(1f))
+    stream.setTextMatrix(
+        Matrix.getRotateInstance(
+            Math.toRadians(rotationDegrees.toDouble()),
+            x,
+            baseline,
+        ),
+    )
+    stream.showText(text)
+    stream.endText()
 }
