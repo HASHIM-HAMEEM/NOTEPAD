@@ -20,6 +20,7 @@ data class PdfTextSearchHit(
     val snippetMatchStart: Int,
     val snippetMatchEnd: Int,
     val rects: List<PdfTextRect> = emptyList(),
+    val sourceIndices: List<Int> = emptyList(),
 )
 
 data class PdfTextRect(val left: Float, val top: Float, val right: Float, val bottom: Float)
@@ -79,7 +80,54 @@ fun findPdfTextHits(pageId: String, pageIndex: Int, source: String, query: Strin
             searchFrom = match + normalizedQuery.length
         }
     }
+    if (results.isEmpty()) {
+        normalizedQueries.firstOrNull(::isArabicWord)?.let { query ->
+            val reversed = query.codePoints().toArray().reversedArray()
+                .joinToString("") { String(Character.toChars(it)) }
+            val queryPoints = reversed.codePoints().toArray()
+            val maxGap = (queryPoints.size * 10).coerceAtLeast(24)
+            var from = 0
+            while (from < normalized.text.length) {
+                var cursor = from
+                val positions = ArrayList<Int>(queryPoints.size)
+                for (point in queryPoints) {
+                    val next = normalized.text.indexOf(String(Character.toChars(point)), cursor)
+                    if (next < 0 || next - cursor > maxGap) break
+                    positions += next
+                    cursor = next + Character.charCount(point)
+                }
+                if (positions.size == queryPoints.size) {
+                    val sourceIndices = positions.map { normalized.indexMap[it] }
+                    val start = sourceIndices.minOrNull() ?: break
+                    val last = sourceIndices.maxOrNull() ?: break
+                    val end = last + Character.charCount(source.codePointAt(last))
+                    val snippetStart = (start - 30).coerceAtLeast(0)
+                    val snippetEnd = (end + 30).coerceAtMost(source.length)
+                    results += PdfTextSearchHit(
+                        pageId = pageId,
+                        pageIndex = pageIndex,
+                        snippet = source.substring(snippetStart, snippetEnd),
+                        matchStart = start,
+                        matchEnd = end,
+                        snippetMatchStart = start - snippetStart,
+                        snippetMatchEnd = end - snippetStart,
+                        sourceIndices = sourceIndices,
+                    )
+                    from = positions.first() + 1
+                } else {
+                    break
+                }
+            }
+        }
+    }
     return results.sortedBy { it.matchStart }
+}
+
+private fun isArabicWord(value: String): Boolean {
+    val points = value.codePoints().toArray()
+    return points.size >= 2 && points.all {
+        it in 0x0600..0x06FF || it in 0x0750..0x077F || it in 0x08A0..0x08FF
+    }
 }
 
 suspend fun searchPdfText(
@@ -97,7 +145,15 @@ suspend fun searchPdfText(
             val pdfIndex = page.pdfPageIndex ?: pageNumber
             val text = PdfTextCache.getOrLoad(context, assetId, pdfIndex) { source.text(pdfIndex) }
             findPdfTextHits(page.id, pdfIndex, text, query).forEach { hit ->
-                onHit(hit.copy(rects = source.textLineRects(pdfIndex, hit.matchStart, hit.matchEnd)))
+                val rects = if (hit.sourceIndices.isEmpty()) {
+                    source.textLineRects(pdfIndex, hit.matchStart, hit.matchEnd)
+                } else {
+                    val boxes = source.textCharBoxes(pdfIndex)
+                    hit.sourceIndices.mapNotNull(boxes::getOrNull).filter {
+                        it.right > it.left && it.bottom > it.top
+                    }
+                }
+                onHit(hit.copy(rects = rects))
             }
         }
     }

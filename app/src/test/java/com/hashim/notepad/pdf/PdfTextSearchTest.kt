@@ -25,4 +25,20 @@ class PdfTextSearchTest {
         assertEquals(1, hit.matchStart)
         assertEquals(extracted.length, hit.matchEnd)
     }
+
+    @Test fun findsTashkeelQueryInCapturedPdfiumVisualOrder() {
+        val extracted = "اختبار ترتيب العربية في ملف PDF\r\n" +
+            "\u064Cة\r\n" +
+            "\u064Eغ\u064Cة \u064Eع\u064Eر\u0650ب\u064E\u0651ي\u064Cة \u064Eج\u0650م\u064A\u064Eل\r\n" +
+            "\u064Fل"
+
+        val hit = findPdfTextHits("arabic", 0, extracted, "لغه").first {
+            it.sourceIndices == listOf(34, 38, 60)
+        }
+
+        assertEquals(listOf(34, 38, 60), hit.sourceIndices)
+        assertEquals('ة', extracted[hit.sourceIndices[0]])
+        assertEquals('غ', extracted[hit.sourceIndices[1]])
+        assertEquals('ل', extracted[hit.sourceIndices[2]])
+    }
 }

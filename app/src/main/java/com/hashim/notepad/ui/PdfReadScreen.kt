@@ -210,6 +210,16 @@ fun PdfReadScreen(
         val dockedSidebar = maxWidth >= 840.dp && sidebarOpen
         val sidebarWidth = if (dockedSidebar) 300.dp else 0.dp
         val pageWidth = maxWidth - sidebarWidth - 32.dp
+        val pageTransform = if (zoom != 1f || panX != 0f || panY != 0f) {
+            Modifier.graphicsLayer {
+                scaleX = zoom
+                scaleY = zoom
+                translationX = panX
+                translationY = panY
+            }
+        } else {
+            Modifier
+        }
         LazyColumn(
             state = listState,
             modifier = Modifier.fillMaxSize().padding(start = sidebarWidth).pointerInput(Unit) {
@@ -218,12 +228,7 @@ fun PdfReadScreen(
                     panX += pan.x
                     panY += pan.y
                 }
-            }.graphicsLayer {
-                scaleX = zoom
-                scaleY = zoom
-                translationX = panX
-                translationY = panY
-            },
+            }.then(pageTransform),
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 84.dp, bottom = 112.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {

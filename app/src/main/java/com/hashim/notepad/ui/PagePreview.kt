@@ -349,14 +349,16 @@ private fun drawPreviewOverlays(
             }
         }
     }
-    drawStrokes(
-        canvas,
-        strokes,
-        CanvasStrokeRenderer.create(InkTextures.textureStore),
-        Matrix(),
-        paperArgb,
-        canvasHasPageTransform = true,
-    )
+    if (strokes.isNotEmpty()) {
+        drawStrokes(
+            canvas,
+            strokes,
+            PreviewCache.renderer,
+            Matrix(),
+            paperArgb,
+            canvasHasPageTransform = true,
+        )
+    }
     textBlocks.forEach { TextBlockPainter.draw(canvas, it, false, paperArgb, context) }
     if (page.bookmarked) {
         val ribbonWidth = page.widthPt * 0.13f
