@@ -5,6 +5,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import com.tom_roush.pdfbox.pdmodel.PDDocument
+import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -16,13 +17,26 @@ class N03RuntimeDumpTest {
     fun shareExportAndStoredImportKeepBothAnnotations() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         PDFBoxResourceLoader.init(instrumentation.targetContext)
-        val files = listOf(
-            "n03-share-output.pdf",
-            "n03-stored-import.pdf",
+        val runtimePaths = listOf(
+            "share-output" to InstrumentationRegistry.getArguments().getString("sharePath"),
+            "stored-import" to InstrumentationRegistry.getArguments().getString("importPath"),
         )
-        files.forEach { assetName ->
-            instrumentation.context.assets.open(assetName).use { input ->
-                PDDocument.load(input).use { document ->
+        val useRuntimePaths = runtimePaths.all { it.second != null }
+        val files: List<Pair<String, File?>> = if (useRuntimePaths) {
+            runtimePaths.map { (name, path) -> name to File(requireNotNull(path)) }
+        } else {
+            listOf("n03-share-output.pdf" to null, "n03-stored-import.pdf" to null)
+        }
+        val expectedContents = if (useRuntimePaths) {
+            setOf("العربية", "جَمِيلَةٌ")
+        } else {
+            setOf("عَرَبِيَّةٌ", "PDF")
+        }
+        files.forEach { (assetName, file) ->
+            val input = file?.inputStream() ?: instrumentation.context.assets.open(assetName)
+            input.use {
+                if (file != null) assertTrue(file.isFile)
+                PDDocument.load(it).use { document ->
                     val annotations = document.getPage(0).annotations
                     Log.i(
                         "PdfAnnotsRuntime",
@@ -34,10 +48,7 @@ class N03RuntimeDumpTest {
                     assertEquals(2, annotations.size)
                     assertTrue(annotations.all { it.subtype == "Highlight" })
                     assertTrue(annotations.all { it.isPrinted() && it.normalAppearanceStream != null })
-                    assertEquals(
-                        setOf("عَرَبِيَّةٌ", "PDF"),
-                        annotations.mapNotNull { it.contents }.toSet(),
-                    )
+                    assertEquals(expectedContents, annotations.mapNotNull { annotation -> annotation.contents }.toSet())
                 }
             }
         }

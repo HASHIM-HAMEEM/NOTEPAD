@@ -1,5 +1,6 @@
 package com.hashim.notepad.pdf
 
+import androidx.core.graphics.ColorUtils
 import com.hashim.notepad.data.PdfMark
 import com.hashim.notepad.data.PdfMarkKind
 import kotlin.math.max
@@ -8,6 +9,17 @@ import kotlin.math.min
 data class PdfQuad(val left: Float, val top: Float, val right: Float, val bottom: Float)
 
 object PdfMarkGeometry {
+    fun displayHighlightColor(colorArgb: Int, darkPaper: Boolean): Int {
+        if (!darkPaper) return colorArgb
+        val hsl = FloatArray(3)
+        ColorUtils.colorToHSL(colorArgb, hsl)
+        hsl[1] = max(hsl[1], 0.72f)
+        hsl[2] = max(hsl[2], 0.62f).coerceAtMost(0.78f)
+        val rgb = ColorUtils.HSLToColor(hsl)
+        val alpha = android.graphics.Color.alpha(colorArgb).coerceIn(89, 115)
+        return ColorUtils.setAlphaComponent(rgb, alpha)
+    }
+
     fun quads(values: List<Float>): List<PdfQuad> =
         values.chunked(8).mapNotNull { q ->
             if (q.size < 8) return@mapNotNull null

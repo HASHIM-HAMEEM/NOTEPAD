@@ -812,11 +812,12 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
 
     private fun drawPdfMarks(canvas: Canvas) {
         pdfMarks.forEach { mark ->
+            val isHighlight = mark.kind == PdfMarkKind.HIGHLIGHT
+            val darkPaper = android.graphics.Color.luminance(paperPaint.color) < 0.5f
             val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = mark.colorArgb
+                color = if (isHighlight) PdfMarkGeometry.displayHighlightColor(mark.colorArgb, darkPaper) else mark.colorArgb
                 strokeWidth = 1.5f
-                style = if (mark.kind == PdfMarkKind.HIGHLIGHT) Paint.Style.FILL else Paint.Style.STROKE
-                if (mark.kind == PdfMarkKind.HIGHLIGHT) xfermode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.MULTIPLY)
+                style = if (isHighlight) Paint.Style.FILL else Paint.Style.STROKE
             }
             PdfMarkGeometry.quads(mark.quads).forEach { quad ->
                 val top = pageHeightPt - quad.bottom
