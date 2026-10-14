@@ -106,7 +106,6 @@ fun PdfReadScreen(
     var scrubValue by remember { mutableFloatStateOf(initialIndex.toFloat()) }
     var scrubbing by remember { mutableStateOf(false) }
     var backPage by remember { mutableStateOf<Int?>(null) }
-    var visiblePages by remember { mutableStateOf(emptySet<Int>()) }
     var settledPages by remember { mutableStateOf(emptySet<Int>()) }
     var sidebarOpen by remember { mutableStateOf(false) }
     var currentHit by remember { mutableStateOf<PdfTextSearchHit?>(null) }
@@ -123,14 +122,11 @@ fun PdfReadScreen(
     LaunchedEffect(pages, startPageId) {
         if (pages.isNotEmpty()) listState.scrollToItem(initialIndex.coerceIn(pages.indices))
     }
-    LaunchedEffect(listState, pages) {
+    LaunchedEffect(listState, zoom, pages) {
         snapshotFlow { listState.layoutInfo.visibleItemsInfo.map { it.index }.toSet() }
-            .collect { visiblePages = it }
-    }
-    LaunchedEffect(visiblePages, zoom) {
-        settledPages = emptySet()
-        delay(150)
-        settledPages = visiblePages
+            .distinctUntilChanged()
+            .debounce(150)
+            .collect { settledPages = it }
     }
     LaunchedEffect(currentIndex, pages) {
         if (pages.isEmpty() || currentIndex !in pages.indices) return@LaunchedEffect
@@ -193,7 +189,11 @@ fun PdfReadScreen(
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 84.dp, bottom = 112.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            itemsIndexed(pages, key = { _, page -> page.id }) { index, page ->
+            itemsIndexed(
+                pages,
+                key = { _, page -> page.id },
+                contentType = { _, _ -> "pdf-page" },
+            ) { index, page ->
                 Box(
                     Modifier.width(
                         if (fitPage) minOf(pageWidth, maxHeight * page.widthPt / page.heightPt) else pageWidth,
@@ -216,7 +216,7 @@ fun PdfReadScreen(
                         repo = repo,
                         page = page,
                         paperColor = if (MaterialTheme.colorScheme.background.luminance() < 0.5f) Color(0xFF202024) else Color.White,
-                        renderEnabled = index in visiblePages,
+                        renderEnabled = true,
                         renderScale = if (index in settledPages) zoom else 0.4f,
                         modifier = Modifier.fillMaxSize(),
                     )

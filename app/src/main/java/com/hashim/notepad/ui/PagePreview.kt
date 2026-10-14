@@ -31,6 +31,8 @@ import com.hashim.notepad.data.NotePadRepository
 import com.hashim.notepad.data.Page
 import com.hashim.notepad.data.PageImage
 import com.hashim.notepad.data.PageKind
+import com.hashim.notepad.data.PdfMark
+import com.hashim.notepad.data.PdfMarkKind
 import com.hashim.notepad.data.TextBlock
 import com.hashim.notepad.ink.InkTextures
 import com.hashim.notepad.ink.PaperTexture
@@ -40,6 +42,7 @@ import com.hashim.notepad.ink.TextBlockPainter
 import com.hashim.notepad.ink.drawStrokes
 import com.hashim.notepad.pdf.PdfInvert
 import com.hashim.notepad.pdf.PdfPageSource
+import com.hashim.notepad.pdf.PdfMarkGeometry
 import com.hashim.notepad.pdf.PdfiumDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
@@ -52,6 +55,9 @@ import kotlin.math.roundToInt
 /** Small memory caches front the persistent WebP cache used by library covers. */
 private object PreviewCache {
     val bitmaps = object : LruCache<String, Bitmap>((Runtime.getRuntime().maxMemory() / 8 / 1024).toInt().coerceAtLeast(1)) {
+        override fun sizeOf(key: String, value: Bitmap): Int = (value.allocationByteCount / 1024).coerceAtLeast(1)
+    }
+    val composites = object : LruCache<String, Bitmap>((Runtime.getRuntime().maxMemory() / 16 / 1024).toInt().coerceAtLeast(1)) {
         override fun sizeOf(key: String, value: Bitmap): Int = (value.allocationByteCount / 1024).coerceAtLeast(1)
     }
     val strokes = LruCache<String, List<Stroke>>(64)
@@ -86,10 +92,18 @@ fun PagePreview(
     }
     var strokes by remember(page?.id, page?.updatedAt) { mutableStateOf<List<Stroke>>(page?.let { PreviewCache.strokes.get("${it.id}:${it.updatedAt}") } ?: emptyList()) }
     var pageImages by remember(page?.id, page?.updatedAt) { mutableStateOf(emptyList<PageImage>()) }
+    var marks by remember(page?.id) { mutableStateOf(emptyList<PdfMark>()) }
     var textBlocks by remember(page?.id, page?.updatedAt) { mutableStateOf(emptyList<TextBlock>()) }
     var imageBitmaps by remember(page?.id, page?.updatedAt) { mutableStateOf(emptyMap<String, Bitmap>()) }
     val contentBounds = remember(page?.id, page?.updatedAt, bitmap, strokes, pageImages, cropToContent) {
         if (cropToContent && page != null) pageContentBounds(page, bitmap, strokes, pageImages) else null
+    }
+    val compositeKey = page?.let {
+        "${it.id}:${it.updatedAt}:$renderWidth:${paperColor.toArgbInt()}:${lineColor?.toArgbInt() ?: 0}"
+    }
+    val bookmarkColor = MaterialTheme.colorScheme.primary.toArgbInt()
+    var compositeBitmap by remember(compositeKey) {
+        mutableStateOf(compositeKey?.let { PreviewCache.composites.get(it) })
     }
 
     LaunchedEffect(bitmapKey) {
@@ -97,10 +111,11 @@ fun PagePreview(
     }
 
     LaunchedEffect(page?.id, page?.updatedAt, renderEnabled, renderWidth) {
-        if (!renderEnabled || targetWidthPx == 0) return@LaunchedEffect
+        if (targetWidthPx == 0) return@LaunchedEffect
         val p = page ?: return@LaunchedEffect
         val key = "${p.id}:${p.updatedAt}"
         val imageRows = repo.pageImages(p.id).first()
+        marks = repo.pdfMarks(p.notebookId).first().filter { it.pageId == p.id && !it.deleted }
         val decodedImages = withContext(Dispatchers.Default) {
             imageRows.associate { image ->
                 val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -148,8 +163,33 @@ fun PagePreview(
         }
     }
 
+    LaunchedEffect(compositeKey, bitmap, strokes, pageImages, textBlocks, imageBitmaps, marks) {
+        val p = page ?: return@LaunchedEffect
+        val key = compositeKey ?: return@LaunchedEffect
+        if (!renderEnabled || targetWidthPx == 0) return@LaunchedEffect
+        compositeBitmap = PreviewCache.composites.get(key)
+        if (compositeBitmap != null) return@LaunchedEffect
+        val result = withContext(Dispatchers.Default) {
+            renderPreviewComposite(
+                page = p,
+                width = renderWidth,
+                paperArgb = paperColor.toArgbInt(),
+                lineArgb = lineColor?.toArgbInt(),
+                pdfBitmap = bitmap,
+                strokes = strokes,
+                pageImages = pageImages,
+                imageBitmaps = imageBitmaps,
+                textBlocks = textBlocks,
+                marks = marks,
+                context = context,
+                bookmarkArgb = bookmarkColor,
+            )
+        }
+        PreviewCache.composites.put(key, result)
+        compositeBitmap = result
+    }
+
     val ruling = lineColor ?: if (paperColor.luminance() < 0.5f) Color(0xFF3A3A40) else Color(0xFFCDD1D8)
-    val bookmarkColor = MaterialTheme.colorScheme.primary.toArgbInt()
     Canvas(modifier.onSizeChanged { if (it.width > 0) targetWidthPx = it.width }.background(paperColor)) {
         val p = page ?: return@Canvas
         val crop = contentBounds?.let { fitCropToAspect(it, p.widthPt, p.heightPt, size.width / size.height) }
@@ -167,53 +207,153 @@ fun PagePreview(
         val ty = if (crop != null) (size.height - crop.height * scale) / 2f - crop.top * scale else 0f
         drawIntoCanvas { c ->
             val n = c.nativeCanvas
-            val texturePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                shader = PaperTexture.shader()
-                alpha = 40
-                colorFilter = PorterDuffColorFilter(paperColor.toArgbInt(), PorterDuff.Mode.MULTIPLY)
-            }
-            n.drawRect(0f, 0f, size.width, size.height, texturePaint)
             n.save()
             val toScreen = Matrix().apply {
                 setValues(floatArrayOf(scale, 0f, tx, 0f, scale, ty, 0f, 0f, 1f))
             }
             n.concat(toScreen)
-            val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = ruling.toArgbInt(); strokeWidth = 0.8f }
-            PageTemplateRenderer.draw(n, paint, p.widthPt, p.heightPt, p.kind)
-            bitmap?.let { b ->
-                val m = Matrix().apply { preScale(p.widthPt / b.width, p.heightPt / b.height) }
-                val bitmapPaint = Paint(Paint.FILTER_BITMAP_FLAG).apply {
-                    if (paperColor.luminance() < 0.5f) colorFilter = PdfInvert.darkPaperFilter
+            val composite = compositeBitmap
+            if (composite != null) {
+                n.drawBitmap(composite, null, RectF(0f, 0f, p.widthPt, p.heightPt), Paint(Paint.FILTER_BITMAP_FLAG))
+            } else {
+                val texturePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    shader = PaperTexture.shader()
+                    alpha = 40
+                    colorFilter = PorterDuffColorFilter(paperColor.toArgbInt(), PorterDuff.Mode.MULTIPLY)
                 }
-                n.drawBitmap(b, m, bitmapPaint)
-            }
-            pageImages.forEach { image ->
-                imageBitmaps[image.assetId]?.let {
-                    n.drawBitmap(it, null, RectF(image.xPt, image.yPt, image.xPt + image.wPt, image.yPt + image.hPt), Paint(Paint.FILTER_BITMAP_FLAG))
+                n.drawRect(0f, 0f, size.width, size.height, texturePaint)
+                val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = ruling.toArgbInt(); strokeWidth = 0.8f }
+                PageTemplateRenderer.draw(n, paint, p.widthPt, p.heightPt, p.kind)
+                bitmap?.let { b ->
+                    val m = Matrix().apply { preScale(p.widthPt / b.width, p.heightPt / b.height) }
+                    val bitmapPaint = Paint(Paint.FILTER_BITMAP_FLAG).apply {
+                        if (paperColor.luminance() < 0.5f) colorFilter = PdfInvert.darkPaperFilter
+                    }
+                    n.drawBitmap(b, m, bitmapPaint)
                 }
-            }
-            drawStrokes(
-                n,
-                strokes,
-                PreviewCache.renderer,
-                toScreen,
-                paperColor.toArgbInt(),
-                canvasHasPageTransform = true,
-            )
-            textBlocks.forEach { TextBlockPainter.draw(n, it, false, paperColor.toArgbInt(), context) }
-            if (p.bookmarked) {
-                val ribbonWidth = p.widthPt * 0.13f
-                val ribbonHeight = p.heightPt * 0.12f
-                val path = android.graphics.Path().apply {
-                    moveTo(p.widthPt, 0f)
-                    lineTo(p.widthPt - ribbonWidth, 0f)
-                    lineTo(p.widthPt, ribbonHeight)
-                    close()
-                }
-                n.drawPath(path, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = bookmarkColor })
+                drawPreviewOverlays(n, p, strokes, pageImages, imageBitmaps, textBlocks, marks, paperColor.toArgbInt(), bookmarkColor, context)
             }
             n.restore()
         }
+    }
+}
+
+private fun renderPreviewComposite(
+    page: Page,
+    width: Int,
+    paperArgb: Int,
+    lineArgb: Int?,
+    pdfBitmap: Bitmap?,
+    strokes: List<Stroke>,
+    pageImages: List<PageImage>,
+    imageBitmaps: Map<String, Bitmap>,
+    textBlocks: List<TextBlock>,
+    marks: List<PdfMark>,
+    context: android.content.Context,
+    bookmarkArgb: Int,
+): Bitmap {
+    val height = (width * page.heightPt / page.widthPt).roundToInt().coerceAtLeast(1)
+    return Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).also { bitmap ->
+        val canvas = android.graphics.Canvas(bitmap)
+        val scale = width / page.widthPt
+        canvas.save()
+        canvas.scale(scale, scale)
+        canvas.drawColor(paperArgb)
+        val texturePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            shader = PaperTexture.shader()
+            alpha = 40
+            colorFilter = PorterDuffColorFilter(paperArgb, PorterDuff.Mode.MULTIPLY)
+        }
+        canvas.drawRect(0f, 0f, page.widthPt, page.heightPt, texturePaint)
+        PageTemplateRenderer.draw(
+            canvas,
+            Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = lineArgb ?: if (android.graphics.Color.luminance(paperArgb) < 0.5f) 0xFF3A3A40.toInt() else 0xFFCDD1D8.toInt()
+                strokeWidth = 0.8f
+            },
+            page.widthPt,
+            page.heightPt,
+            page.kind,
+        )
+        pdfBitmap?.let {
+            val paint = Paint(Paint.FILTER_BITMAP_FLAG).apply {
+                if (android.graphics.Color.luminance(paperArgb) < 0.5f) colorFilter = PdfInvert.darkPaperFilter
+            }
+            canvas.drawBitmap(it, null, RectF(0f, 0f, page.widthPt, page.heightPt), paint)
+        }
+        drawPreviewOverlays(canvas, page, strokes, pageImages, imageBitmaps, textBlocks, marks, paperArgb, bookmarkArgb, context)
+        canvas.restore()
+    }
+}
+
+private fun drawPreviewOverlays(
+    canvas: android.graphics.Canvas,
+    page: Page,
+    strokes: List<Stroke>,
+    pageImages: List<PageImage>,
+    imageBitmaps: Map<String, Bitmap>,
+    textBlocks: List<TextBlock>,
+    marks: List<PdfMark>,
+    paperArgb: Int,
+    bookmarkArgb: Int,
+    context: android.content.Context,
+) {
+    pageImages.forEach { image ->
+        imageBitmaps[image.assetId]?.let {
+            canvas.drawBitmap(it, null, RectF(image.xPt, image.yPt, image.xPt + image.wPt, image.yPt + image.hPt), Paint(Paint.FILTER_BITMAP_FLAG))
+        }
+    }
+    marks.forEach { mark ->
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = mark.colorArgb
+            strokeWidth = 1.5f
+            style = if (mark.kind == PdfMarkKind.HIGHLIGHT) Paint.Style.FILL else Paint.Style.STROKE
+            if (mark.kind == PdfMarkKind.HIGHLIGHT) xfermode = android.graphics.PorterDuffXfermode(PorterDuff.Mode.MULTIPLY)
+        }
+        PdfMarkGeometry.quads(mark.quads).forEach { quad ->
+            val left = quad.left
+            val right = quad.right
+            val top = page.heightPt - quad.bottom
+            val bottom = page.heightPt - quad.top
+            when (mark.kind) {
+                PdfMarkKind.HIGHLIGHT -> canvas.drawRect(left, top, right, bottom, paint)
+                PdfMarkKind.UNDERLINE -> canvas.drawLine(left, bottom, right, bottom, paint)
+                PdfMarkKind.STRIKE -> canvas.drawLine(left, (top + bottom) / 2f, right, (top + bottom) / 2f, paint)
+                PdfMarkKind.SQUIGGLY -> {
+                    val path = android.graphics.Path()
+                    val step = 2f
+                    var x = left
+                    var up = true
+                    path.moveTo(x, bottom)
+                    while (x < right) {
+                        x = minOf(right, x + step)
+                        path.lineTo(x, bottom + if (up) -1.5f else 1.5f)
+                        up = !up
+                    }
+                    canvas.drawPath(path, paint)
+                }
+            }
+        }
+    }
+    drawStrokes(
+        canvas,
+        strokes,
+        CanvasStrokeRenderer.create(InkTextures.textureStore),
+        Matrix(),
+        paperArgb,
+        canvasHasPageTransform = true,
+    )
+    textBlocks.forEach { TextBlockPainter.draw(canvas, it, false, paperArgb, context) }
+    if (page.bookmarked) {
+        val ribbonWidth = page.widthPt * 0.13f
+        val ribbonHeight = page.heightPt * 0.12f
+        val path = android.graphics.Path().apply {
+            moveTo(page.widthPt, 0f)
+            lineTo(page.widthPt - ribbonWidth, 0f)
+            lineTo(page.widthPt, ribbonHeight)
+            close()
+        }
+        canvas.drawPath(path, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = bookmarkArgb })
     }
 }
 

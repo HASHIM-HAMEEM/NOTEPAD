@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.withContext
 import com.hashim.notepad.search.TextNormalizer
+import org.json.JSONArray
 import java.util.UUID
 
 private data class StoredStrokeBatch(
@@ -122,14 +123,14 @@ class NotePadRepository(context: Context) {
     }
 
     private fun loadPages(notebookId: String): List<Page> = helper.readableDatabase.rawQuery(
-        """select id, notebook_id, sort_key, kind, asset_id, pdf_page_index, width_pt, height_pt, created_at, updated_at, bookmarked
+        """select id, notebook_id, sort_key, kind, asset_id, pdf_page_index, width_pt, height_pt, created_at, updated_at, bookmarked, rotation
            from pages where notebook_id = ? and deleted_at is null order by sort_key""", arrayOf(notebookId)
     ).use { c ->
         buildList {
             while (c.moveToNext()) add(
                 Page(
                     c.getString(0), c.getString(1), c.getDouble(2), PageKind.from(c.getString(3)), c.getStringOrNull(4),
-                    if (c.isNull(5)) null else c.getInt(5), c.getFloat(6), c.getFloat(7), c.getLong(8), c.getLong(9), c.getInt(10) != 0
+                    if (c.isNull(5)) null else c.getInt(5), c.getFloat(6), c.getFloat(7), c.getLong(8), c.getLong(9), c.getInt(10) != 0, c.getInt(11)
                 )
             )
         }
@@ -137,14 +138,62 @@ class NotePadRepository(context: Context) {
 
     suspend fun page(pageId: String): Page? = withContext(Dispatchers.IO) {
         helper.readableDatabase.rawQuery(
-            """select id, notebook_id, sort_key, kind, asset_id, pdf_page_index, width_pt, height_pt, created_at, updated_at, bookmarked
+            """select id, notebook_id, sort_key, kind, asset_id, pdf_page_index, width_pt, height_pt, created_at, updated_at, bookmarked, rotation
                from pages where id = ?""", arrayOf(pageId)
         ).use { c ->
             if (!c.moveToFirst()) null else Page(
                 c.getString(0), c.getString(1), c.getDouble(2), PageKind.from(c.getString(3)), c.getStringOrNull(4),
-                if (c.isNull(5)) null else c.getInt(5), c.getFloat(6), c.getFloat(7), c.getLong(8), c.getLong(9), c.getInt(10) != 0
+                if (c.isNull(5)) null else c.getInt(5), c.getFloat(6), c.getFloat(7), c.getLong(8), c.getLong(9), c.getInt(10) != 0, c.getInt(11)
             )
         }
+    }
+
+    fun pdfMarks(notebookId: String): Flow<List<PdfMark>> = flow {
+        emit(loadPdfMarks(notebookId))
+        changes.collect { emit(loadPdfMarks(notebookId)) }
+    }.flowOn(Dispatchers.IO)
+
+    private fun loadPdfMarks(notebookId: String): List<PdfMark> = helper.readableDatabase.rawQuery(
+        "select id, notebook_id, page_id, kind, color_argb, quads, char_start, char_end, text, note, created_at, updated_at, deleted from pdf_marks where notebook_id = ? and deleted = 0 order by page_id, created_at",
+        arrayOf(notebookId),
+    ).use { c ->
+        buildList {
+            while (c.moveToNext()) add(
+                PdfMark(
+                    c.getString(0), c.getString(1), c.getString(2), PdfMarkKind.from(c.getString(3)), c.getInt(4),
+                    JSONArray(c.getString(5)).let { json -> List(json.length()) { i -> json.getDouble(i).toFloat() } },
+                    if (c.isNull(6)) null else c.getInt(6), if (c.isNull(7)) null else c.getInt(7),
+                    c.getString(8), c.getStringOrNull(9), c.getLong(10), c.getLong(11), c.getInt(12) != 0,
+                ),
+            )
+        }
+    }
+
+    suspend fun savePdfMark(mark: PdfMark) = withContext(Dispatchers.IO) {
+        val db = helper.writableDatabase
+        db.insertWithOnConflict("pdf_marks", null, ContentValues().apply {
+            put("id", mark.id); put("notebook_id", mark.notebookId); put("page_id", mark.pageId)
+            put("kind", mark.kind.db); put("color_argb", mark.colorArgb)
+            put("quads", JSONArray(mark.quads.toList()).toString())
+            if (mark.charStart == null) putNull("char_start") else put("char_start", mark.charStart)
+            if (mark.charEnd == null) putNull("char_end") else put("char_end", mark.charEnd)
+            put("text", mark.text); if (mark.note == null) putNull("note") else put("note", mark.note)
+            put("created_at", mark.createdAt); put("updated_at", mark.updatedAt); put("deleted", if (mark.deleted) 1 else 0)
+        }, SQLiteDatabase.CONFLICT_REPLACE)
+        mark("pdf_marks", mark.id); notifyChanged()
+    }
+
+    suspend fun deletePdfMark(id: String) = withContext(Dispatchers.IO) {
+        val now = System.currentTimeMillis()
+        helper.writableDatabase.update("pdf_marks", ContentValues().apply { put("deleted", 1); put("updated_at", now) }, "id = ?", arrayOf(id))
+        mark("pdf_marks", id); notifyChanged()
+    }
+
+    suspend fun setPageRotation(pageId: String, rotation: Int) = withContext(Dispatchers.IO) {
+        val value = ((rotation % 360) + 360) % 360
+        require(value % 90 == 0) { "rotation must be a right angle" }
+        helper.writableDatabase.update("pages", ContentValues().apply { put("rotation", value); put("updated_at", System.currentTimeMillis()) }, "id = ?", arrayOf(pageId))
+        mark("pages", pageId); notifyChanged()
     }
 
     suspend fun setPageBookmarked(pageId: String, bookmarked: Boolean) = withContext(Dispatchers.IO) {

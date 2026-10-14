@@ -19,6 +19,8 @@ object TextNormalizer {
         val text = StringBuilder()
         val indices = ArrayList<Int>()
         var sourceIndex = 0
+        var pendingSpaceAt: Int? = null
+        var previousWasTashkeel = false
 
         while (sourceIndex < value.length) {
             val originalIndex = sourceIndex
@@ -33,17 +35,29 @@ object TextNormalizer {
             while (normalizedIndex < compatibility.length) {
                 val normalizedPoint = compatibility.codePointAt(normalizedIndex)
                 normalizedIndex += Character.charCount(normalizedPoint)
-                if (isIgnored(normalizedPoint)) continue
                 if (Character.isWhitespace(normalizedPoint)) {
-                    if (text.isEmpty() || text.last() == ' ') continue
-                    text.append(' ')
-                    indices += originalIndex
+                    if (text.isNotEmpty() && text.last() != ' ' && !previousWasTashkeel) {
+                        pendingSpaceAt = originalIndex
+                    }
                     continue
                 }
+                if (isIgnored(normalizedPoint)) {
+                    if (isTashkeel(normalizedPoint)) {
+                        pendingSpaceAt = null
+                        previousWasTashkeel = true
+                    }
+                    continue
+                }
+                pendingSpaceAt?.let { spaceAt ->
+                    text.append(' ')
+                    indices += spaceAt
+                }
+                pendingSpaceAt = null
                 val folded = fold(normalizedPoint)
                 val chars = String(Character.toChars(folded))
                 text.append(chars)
                 repeat(chars.length) { indices += originalIndex }
+                previousWasTashkeel = false
             }
         }
 
@@ -55,12 +69,15 @@ object TextNormalizer {
     }
 
     private fun isIgnored(codePoint: Int): Boolean =
-        codePoint in 0x064B..0x065F ||
-            codePoint == 0x0670 ||
-            codePoint in 0x06D6..0x06ED ||
+        isTashkeel(codePoint) ||
             codePoint == 0x0640 ||
             codePoint == 0x200C ||
-            codePoint == 0x200D
+            codePoint == 0x200D ||
+            codePoint == 0x0000 ||
+            codePoint == 0xFFFD
+
+    private fun isTashkeel(codePoint: Int): Boolean =
+        codePoint in 0x064B..0x065F || codePoint == 0x0670 || codePoint in 0x06D6..0x06ED
 
     private fun isCombiningMark(codePoint: Int): Boolean =
         when (Character.getType(codePoint)) {

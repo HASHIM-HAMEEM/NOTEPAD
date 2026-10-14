@@ -67,6 +67,7 @@ dependencies {
     implementation(libs.androidx.documentfile)
     implementation(libs.androidx.work.runtime)
     implementation(libs.reorderable)
+    implementation(libs.pdfbox.android)
 
     testImplementation(libs.junit)
 }

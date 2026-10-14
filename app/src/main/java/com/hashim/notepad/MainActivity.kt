@@ -6,6 +6,7 @@ import android.os.Bundle
 import android.os.Build
 import android.os.Parcelable
 import android.view.KeyEvent
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -14,6 +15,14 @@ import com.hashim.notepad.ui.NotePadApp
 import com.hashim.notepad.ui.NotePadTheme
 import com.hashim.notepad.ui.Settings
 import com.hashim.notepad.ink.StylusInputDiagnostics
+import com.hashim.notepad.pdf.PdfPageSource
+import com.hashim.notepad.pdf.PdfiumDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
 
 data class InboundShare(val uris: List<Uri>, val mimeType: String?)
 
@@ -24,6 +33,18 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        if (BuildConfig.DEBUG && intent?.action == "com.hashim.notepad.DUMP_PDF_TEXT") {
+            val file = File(intent.getStringExtra("path").orEmpty())
+            val page = intent.getIntExtra("page", 0)
+            CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate).launch {
+                val text = withContext(PdfiumDispatcher.dispatcher) {
+                    PdfPageSource(this@MainActivity, file).use { it.text(page) }
+                }
+                Log.i("PdfTextDump", "page=$page text=${text.codePoints().toArray().joinToString(" ") { "U+%04X".format(it) }}")
+                finish()
+            }
+            return
+        }
         launchUri.value = intent?.data?.takeIf { intent.action == Intent.ACTION_VIEW }
         launchShare.value = shareFrom(intent)
         setContent {

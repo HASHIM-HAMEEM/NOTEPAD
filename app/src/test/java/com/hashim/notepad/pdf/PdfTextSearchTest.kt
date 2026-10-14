@@ -12,4 +12,17 @@ class PdfTextSearchTest {
         assertEquals(text.substring(hit.matchStart, hit.matchEnd), hit.snippet.substring(hit.snippetMatchStart, hit.snippetMatchEnd))
         assertEquals("page", hit.pageId)
     }
+
+    @Test fun findsArabicQueryWhenPdfiumReturnsVisualOrder() {
+        val hit = findPdfTextHits("page", 0, "هغل", "لغه").single()
+        assertEquals(0, hit.matchStart)
+        assertEquals(3, hit.matchEnd)
+    }
+
+    @Test fun matchesPdfiumTextWithDetachedTashkeelFromCapturedCodepoints() {
+        val extracted = "\u064Eع\u064Eر\u0650ب\u064E\u0651ي\u064Cة"
+        val hit = findPdfTextHits("page", 0, extracted, "عربية").single()
+        assertEquals(1, hit.matchStart)
+        assertEquals(extracted.length, hit.matchEnd)
+    }
 }

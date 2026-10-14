@@ -131,7 +131,7 @@ fun NotePadApp(
     }
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        val showNavigationRail = maxWidth >= 840.dp && screen !is Screen.Editor
+        val showNavigationRail = maxWidth >= 840.dp && screen !is Screen.Editor && screen !is Screen.Read && screen !is Screen.Read
         val screenContent: @Composable () -> Unit = {
             SharedTransitionLayout {
                 val sharedScope = this

@@ -33,4 +33,8 @@ class TextNormalizerTest {
     @Test fun appliesCompatibilityNormalizationAcrossCombiningCharacters() {
         assertEquals("café", TextNormalizer.normalize("cafe\u0301").text)
     }
+
+    @Test fun removesPdfiumNulAndNormalizesArabicPresentationForms() {
+        assertEquals("الربع", TextNormalizer.normalize("\u0000\uFE8D\uFEDF\uFEAE\uFE91\uFECC").text)
+    }
 }

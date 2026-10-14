@@ -30,7 +30,11 @@ import java.io.File
 /** Flattens a notebook (PDF/template pages + ink) into a single PDF rendered with the same Ink renderer used on screen. */
 class PdfExporter(private val context: Context, private val repo: NotePadRepository) {
 
-    suspend fun exportNotebook(notebookId: String, title: String): File = withContext(Dispatchers.Default) {
+    suspend fun exportNotebook(notebookId: String, title: String): File =
+        runCatching { PdfBoxExporter(context, repo).exportNotebook(notebookId, title) }
+            .getOrElse { legacyExportNotebook(notebookId, title) }
+
+    private suspend fun legacyExportNotebook(notebookId: String, title: String): File = withContext(Dispatchers.Default) {
         val pages = repo.pages(notebookId).first()
         val paperArgb = repo.notebooks().first().firstOrNull { it.id == notebookId }?.coverColor
             ?.let { runCatching { Color.parseColor(it) }.getOrNull() } ?: Color.WHITE

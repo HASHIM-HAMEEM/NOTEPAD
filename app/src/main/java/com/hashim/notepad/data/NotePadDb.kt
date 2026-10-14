@@ -67,10 +67,17 @@ class NotePadDb(context: Context) : SQLiteOpenHelper(context, "notepad.db", null
             db.execSQL("alter table notebooks add column original_filename text")
             db.execSQL("update notebooks set document_kind = 'pdf' where exists (select 1 from pages where pages.notebook_id = notebooks.id and pages.kind = 'pdf' and pages.deleted_at is null)")
         }
+        if (oldVersion < 9) {
+            db.execSQL("alter table pages add column rotation integer not null default 0")
+        }
+        if (oldVersion < 10) {
+            db.execSQL(PDF_MARKS)
+            db.execSQL("create index if not exists pdf_marks_notebook_idx on pdf_marks(notebook_id, page_id, updated_at)")
+        }
     }
 
     companion object {
-        const val VERSION = 8
+        const val VERSION = 10
 
         /** Rows changed locally and not yet pushed. row_id is the page id for stroke_batches and recognition. */
         const val OUTBOX = "create table if not exists outbox (table_name text not null, row_id text not null, primary key (table_name, row_id))"
@@ -111,6 +118,21 @@ class NotePadDb(context: Context) : SQLiteOpenHelper(context, "notepad.db", null
               updated_at integer not null,
               deleted_at integer
             )"""
+        private const val PDF_MARKS = """create table if not exists pdf_marks (
+              id text primary key,
+              notebook_id text not null references notebooks(id) on delete cascade,
+              page_id text not null references pages(id) on delete cascade,
+              kind text not null,
+              color_argb integer not null,
+              quads text not null,
+              char_start integer,
+              char_end integer,
+              text text not null,
+              note text,
+              created_at integer not null,
+              updated_at integer not null,
+              deleted integer not null default 0
+            )"""
 
         private val SCHEMA = """
             create table notebooks (
@@ -140,6 +162,7 @@ class NotePadDb(context: Context) : SQLiteOpenHelper(context, "notepad.db", null
               width_pt real not null default 595,
               height_pt real not null default 842,
               bookmarked integer not null default 0,
+              rotation integer not null default 0,
               deleted_at integer,
               created_at integer not null,
               updated_at integer not null
@@ -187,6 +210,8 @@ class NotePadDb(context: Context) : SQLiteOpenHelper(context, "notepad.db", null
             );
             $PAGE_IMAGES;
             create index page_images_page_idx on page_images(page_id);
+            $PDF_MARKS;
+            create index pdf_marks_notebook_idx on pdf_marks(notebook_id, page_id, updated_at);
             create table recognition (
               id text primary key,
               page_id text not null references pages(id) on delete cascade,

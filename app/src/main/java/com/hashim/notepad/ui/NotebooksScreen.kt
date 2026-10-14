@@ -316,7 +316,7 @@ fun NotebooksScreen(
             horizontalArrangement = Arrangement.spacedBy(20.dp),
             verticalArrangement = Arrangement.spacedBy(20.dp),
         ) {
-            item(span = { GridItemSpan(maxLineSpan) }) {
+            item(span = { GridItemSpan(maxLineSpan) }, contentType = "library-header") {
                 LibraryHeader(
                     count = visibleNotebooks.size, compact = compact, importing = importing, progress = importProgress,
                     onCancelImport = { importJob?.cancel() }, showAccountButton = showAccountButton,
@@ -331,7 +331,7 @@ fun NotebooksScreen(
             }
             val recent = notebooks.filter { it.lastOpenedAt != null }.sortedByDescending { it.lastOpenedAt }.take(3)
             if (recent.isNotEmpty()) {
-                item(span = { GridItemSpan(maxLineSpan) }) {
+                item(span = { GridItemSpan(maxLineSpan) }, contentType = "continue-reading") {
                     Column {
                         Text("Continue reading", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                         Spacer(Modifier.height(12.dp))
@@ -352,7 +352,7 @@ fun NotebooksScreen(
                     }
                 }
             }
-            if (tags.isNotEmpty()) item(span = { GridItemSpan(maxLineSpan) }) {
+            if (tags.isNotEmpty()) item(span = { GridItemSpan(maxLineSpan) }, contentType = "tag-row") {
                 Row(
                     Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -368,16 +368,16 @@ fun NotebooksScreen(
                     }
                 }
             }
-            item(span = { GridItemSpan(maxLineSpan) }) {
+            item(span = { GridItemSpan(maxLineSpan) }, contentType = "library-title") {
                 Text("Your library", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             }
-            if (notebooks.isEmpty() && !importing) item(span = { GridItemSpan(maxLineSpan) }) {
+            if (notebooks.isEmpty() && !importing) item(span = { GridItemSpan(maxLineSpan) }, contentType = "empty-state") {
                 EmptyLibrary(onNew = { showNew = true }, onImport = { pickPdf.launch(arrayOf("application/pdf")) })
             }
-            if (notebooks.isNotEmpty() && visibleNotebooks.isEmpty()) item(span = { GridItemSpan(maxLineSpan) }) {
+            if (notebooks.isNotEmpty() && visibleNotebooks.isEmpty()) item(span = { GridItemSpan(maxLineSpan) }, contentType = "filtered-empty-state") {
                 Text("No notebooks match these filters.", modifier = Modifier.padding(vertical = 24.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            items(sortedNotebooks, key = { it.id }) { nb ->
+            items(sortedNotebooks, key = { it.id }, contentType = { "notebook-card" }) { nb ->
                 NotebookCard(
                     repo = repo, notebook = nb, tags = tags, compact = compact,
                     modifier = Modifier.animateItem(),

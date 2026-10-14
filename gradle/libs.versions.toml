@@ -15,6 +15,7 @@ documentfile = "1.1.0"
 work = "2.12.0"
 junit = "4.13.2"
 reorderable = "3.1.0"
+pdfbox = "2.0.27.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -44,6 +45,7 @@ pdfium-android = { group = "io.legere", name = "pdfiumandroid", version.ref = "p
 play-services-mlkit-document-scanner = { group = "com.google.android.gms", name = "play-services-mlkit-document-scanner", version.ref = "documentScanner" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 reorderable = { module = "sh.calvin.reorderable:reorderable", version.ref = "reorderable" }
+pdfbox-android = { group = "com.tom-roush", name = "pdfbox-android", version.ref = "pdfbox" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

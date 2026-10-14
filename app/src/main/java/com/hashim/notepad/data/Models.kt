@@ -62,6 +62,28 @@ data class Page(
     val createdAt: Long,
     val updatedAt: Long,
     val bookmarked: Boolean = false,
+    val rotation: Int = 0,
+)
+
+enum class PdfMarkKind(val db: String) {
+    HIGHLIGHT("highlight"), UNDERLINE("underline"), STRIKE("strike"), SQUIGGLY("squiggly");
+    companion object { fun from(value: String) = entries.firstOrNull { it.db == value } ?: HIGHLIGHT }
+}
+
+data class PdfMark(
+    val id: String,
+    val notebookId: String,
+    val pageId: String,
+    val kind: PdfMarkKind,
+    val colorArgb: Int,
+    val quads: List<Float>,
+    val charStart: Int?,
+    val charEnd: Int?,
+    val text: String,
+    val note: String?,
+    val createdAt: Long,
+    val updatedAt: Long,
+    val deleted: Boolean = false,
 )
 
 data class Asset(

@@ -23,6 +23,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.Button
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -43,11 +44,13 @@ import androidx.compose.ui.unit.dp
 import com.hashim.notepad.data.NotePadRepository
 import com.hashim.notepad.data.Page
 import com.hashim.notepad.data.PageKind
+import com.hashim.notepad.data.PdfMark
 import com.hashim.notepad.pdf.PdfOutlineItem
 import com.hashim.notepad.pdf.PdfOutlineRow
 import com.hashim.notepad.pdf.PdfPageSource
 import com.hashim.notepad.pdf.PdfPasswordVault
 import com.hashim.notepad.pdf.PdfTextSearchHit
+import com.hashim.notepad.pdf.PdfMarkGeometry
 import com.hashim.notepad.pdf.PdfiumDispatcher
 import com.hashim.notepad.pdf.chapterForPage
 import com.hashim.notepad.pdf.flattenOutline
@@ -77,6 +80,8 @@ internal fun PageSidebar(
     var outline by remember { mutableStateOf(emptyList<PdfOutlineItem>()) }
     var outlineLoading by remember { mutableStateOf(false) }
     var expandedPaths by remember { mutableStateOf(emptySet<List<Int>>()) }
+    var marks by remember { mutableStateOf(emptyList<PdfMark>()) }
+    var markColorFilter by remember { mutableStateOf<Int?>(null) }
     val assetId = pages.firstOrNull { it.kind == PageKind.PDF }?.assetId
     val currentPage = pages.firstOrNull { it.id == currentPageId }
     val currentPdfIndex = currentPage?.pdfPageIndex ?: pages.indexOfFirst { it.id == currentPageId }
@@ -103,6 +108,10 @@ internal fun PageSidebar(
     }
     LaunchedEffect(currentOutlinePath) {
         if (currentOutlinePath != null) expandedPaths = contextPaths
+    }
+    LaunchedEffect(pages.firstOrNull()?.notebookId) {
+        val notebookId = pages.firstOrNull()?.notebookId ?: return@LaunchedEffect
+        repo.pdfMarks(notebookId).collect { marks = it.filterNot(PdfMark::deleted) }
     }
     LaunchedEffect(query, assetId, pages) {
         searchHits = emptyList()
@@ -137,7 +146,7 @@ internal fun PageSidebar(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            listOf("Pages", "Contents", "Bookmarks", "Search").forEachIndexed { index, title ->
+            listOf("Pages", "Contents", "Marks", "Bookmarks", "Search").forEachIndexed { index, title ->
                 Column(
                     Modifier.weight(1f).clickable { selectedTab = index }.padding(vertical = 10.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
@@ -155,9 +164,9 @@ internal fun PageSidebar(
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         when (selectedTab) {
-            0, 2 -> {
+            0, 3 -> {
                 val visible = pages.withIndex().filter { selectedTab == 0 || it.value.bookmarked }
-                if (selectedTab == 2 && visible.isEmpty()) {
+                if (selectedTab == 3 && visible.isEmpty()) {
                     EmptySidebar("No bookmarks yet")
                 } else {
                     LazyColumn(Modifier.fillMaxSize()) {
@@ -208,6 +217,68 @@ internal fun PageSidebar(
                                     target?.let { onPageSelected(it.id) }
                                 },
                             )
+                        }
+                    }
+                }
+            }
+            2 -> {
+                val visibleMarks = marks.filter { markColorFilter == null || it.colorArgb == markColorFilter }
+                    .groupBy { it.pageId }
+                if (marks.isEmpty()) {
+                    EmptySidebar("No marks yet")
+                } else {
+                    Column(Modifier.fillMaxSize()) {
+                        Row(
+                            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text("All", Modifier.clickable { markColorFilter = null }, color = MaterialTheme.colorScheme.primary)
+                            marks.map { it.colorArgb }.distinct().forEach { color ->
+                                Box(
+                                    Modifier.padding(2.dp).width(18.dp).height(18.dp)
+                                        .clip(RoundedCornerShape(50)).background(Color(color))
+                                        .clickable { markColorFilter = if (markColorFilter == color) null else color },
+                                )
+                            }
+                            Spacer(Modifier.weight(1f))
+                            Text(
+                                "Export",
+                                Modifier.clickable {
+                                    val send = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                                        type = "text/markdown"
+                                        putExtra(android.content.Intent.EXTRA_TEXT, PdfMarkGeometry.markdown(marks))
+                                    }
+                                    context.startActivity(android.content.Intent.createChooser(send, "Export marks"))
+                                },
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                        LazyColumn(Modifier.fillMaxSize()) {
+                            visibleMarks.forEach { (pageId, pageMarks) ->
+                                val pageNumber = pages.indexOfFirst { it.id == pageId } + 1
+                                item(key = "marks-page-$pageId") {
+                                    Text(
+                                        "Page $pageNumber",
+                                        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                                        style = MaterialTheme.typography.labelLarge,
+                                        color = MaterialTheme.colorScheme.primary,
+                                    )
+                                }
+                                items(pageMarks, key = { it.id }) { mark ->
+                                    Column(
+                                        Modifier.fillMaxWidth().clickable {
+                                            pages.firstOrNull { it.id == pageId }?.let { onPageSelected(it.id) }
+                                        }.padding(horizontal = 12.dp, vertical = 8.dp),
+                                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                                    ) {
+                                        Text(mark.text.ifBlank { mark.kind.db.replaceFirstChar(Char::uppercase) }, maxLines = 2)
+                                        mark.note?.takeIf(String::isNotBlank)?.let {
+                                            Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2)
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }

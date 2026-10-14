@@ -48,29 +48,38 @@ object PdfTextCache {
 }
 
 fun findPdfTextHits(pageId: String, pageIndex: Int, source: String, query: String): List<PdfTextSearchHit> {
-    val normalizedQuery = TextNormalizer.normalize(query).text
-    if (normalizedQuery.isEmpty()) return emptyList()
+    val normalizedQueries = buildList {
+        TextNormalizer.normalize(query).text.takeIf { it.isNotEmpty() }?.let(::add)
+        val reversed = buildString {
+            query.codePoints().toArray().reversedArray().forEach { appendCodePoint(it) }
+        }
+        TextNormalizer.normalize(reversed).text.takeIf { it.isNotEmpty() && it !in this }?.let(::add)
+    }
+    if (normalizedQueries.isEmpty()) return emptyList()
     val normalized = TextNormalizer.normalize(source)
     val results = ArrayList<PdfTextSearchHit>()
-    var searchFrom = 0
-    while (searchFrom < normalized.text.length) {
-        val match = normalized.text.indexOf(normalizedQuery, searchFrom)
-        if (match < 0) break
-        val (start, end) = normalized.sourceRange(source, match, match + normalizedQuery.length)
-        val snippetStart = (start - 30).coerceAtLeast(0)
-        val snippetEnd = (end + 30).coerceAtMost(source.length)
-        results += PdfTextSearchHit(
-            pageId = pageId,
-            pageIndex = pageIndex,
-            snippet = source.substring(snippetStart, snippetEnd),
-            matchStart = start,
-            matchEnd = end,
-            snippetMatchStart = start - snippetStart,
-            snippetMatchEnd = end - snippetStart,
-        )
-        searchFrom = match + normalizedQuery.length
+    for (normalizedQuery in normalizedQueries) {
+        var searchFrom = 0
+        while (searchFrom < normalized.text.length) {
+            val match = normalized.text.indexOf(normalizedQuery, searchFrom)
+            if (match < 0) break
+            val (start, end) = normalized.sourceRange(source, match, match + normalizedQuery.length)
+            val snippetStart = (start - 30).coerceAtLeast(0)
+            val snippetEnd = (end + 30).coerceAtMost(source.length)
+            val hit = PdfTextSearchHit(
+                pageId = pageId,
+                pageIndex = pageIndex,
+                snippet = source.substring(snippetStart, snippetEnd),
+                matchStart = start,
+                matchEnd = end,
+                snippetMatchStart = start - snippetStart,
+                snippetMatchEnd = end - snippetStart,
+            )
+            if (results.none { it.matchStart == hit.matchStart && it.matchEnd == hit.matchEnd }) results += hit
+            searchFrom = match + normalizedQuery.length
+        }
     }
-    return results
+    return results.sortedBy { it.matchStart }
 }
 
 suspend fun searchPdfText(
