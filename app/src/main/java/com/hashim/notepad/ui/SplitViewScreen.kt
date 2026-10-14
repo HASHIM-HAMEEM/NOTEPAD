@@ -38,7 +38,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -244,11 +243,22 @@ private fun SplitDivider(
         verticalArrangement = Arrangement.Center,
     ) {
         IconButton(onClick = onSwap) {
-            Icon(Icons.Default.SwapHoriz, contentDescription = if (swapped) "Restore pane order" else "Swap panes")
+            Icon(
+                Icons.Default.SwapHoriz,
+                contentDescription = if (swapped) "Restore pane order" else "Swap panes",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
-        Box(Modifier.width(1.dp).height(56.dp).background(MaterialTheme.colorScheme.outlineVariant))
+        Box(
+            Modifier.width(4.dp).height(56.dp)
+                .background(MaterialTheme.colorScheme.outlineVariant, androidx.compose.foundation.shape.CircleShape),
+        )
         IconButton(onClick = onClose) {
-            Icon(Icons.Default.Close, contentDescription = "Close side-by-side view")
+            Icon(
+                Icons.Default.Close,
+                contentDescription = "Close side-by-side view",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
