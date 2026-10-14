@@ -692,6 +692,74 @@ class NotePadRepository(context: Context, databaseName: String = "notepad.db") {
         mark("recognition", pageId); notifyChanged()
     }
 
+    suspend fun ocrWords(pageId: String): List<OcrWord> = withContext(Dispatchers.IO) {
+        helper.readableDatabase.rawQuery(
+            "select page_id, word_index, text, left_pt, top_pt, right_pt, bottom_pt, confidence from ocr_words where page_id = ? order by word_index",
+            arrayOf(pageId),
+        ).use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) {
+                    add(
+                        OcrWord(
+                            cursor.getString(0),
+                            cursor.getInt(1),
+                            cursor.getString(2),
+                            cursor.getFloat(3),
+                            cursor.getFloat(4),
+                            cursor.getFloat(5),
+                            cursor.getFloat(6),
+                            cursor.getFloat(7),
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    suspend fun replaceOcrWords(pageId: String, words: List<OcrWord>, language: String) = withContext(Dispatchers.IO) {
+        val db = helper.writableDatabase
+        db.beginTransaction()
+        try {
+            db.delete("ocr_words", "page_id = ?", arrayOf(pageId))
+            words.sortedBy(OcrWord::index).forEachIndexed { index, word ->
+                db.insertOrThrow(
+                    "ocr_words",
+                    null,
+                    ContentValues().apply {
+                        put("page_id", pageId)
+                        put("word_index", index)
+                        put("text", word.text)
+                        put("left_pt", word.left)
+                        put("top_pt", word.top)
+                        put("right_pt", word.right)
+                        put("bottom_pt", word.bottom)
+                        put("confidence", word.confidence)
+                    },
+                )
+            }
+            db.delete("recognition", "page_id = ? and source = 'ocr'", arrayOf(pageId))
+            val recognizedText = words.sortedBy(OcrWord::index).joinToString(" ") { it.text }
+            if (recognizedText.isNotBlank()) {
+                db.insertOrThrow(
+                    "recognition",
+                    null,
+                    ContentValues().apply {
+                        put("id", UUID.randomUUID().toString())
+                        put("page_id", pageId)
+                        put("source", "ocr")
+                        put("language", language)
+                        put("text", recognizedText)
+                        put("updated_at", System.currentTimeMillis())
+                    },
+                )
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        notifyChanged()
+    }
+
     suspend fun recognizedText(pageId: String): String? = withContext(Dispatchers.IO) {
         helper.readableDatabase.rawQuery("select text from recognition where page_id = ? and source = 'ink'", arrayOf(pageId)).use { c -> if (c.moveToFirst()) c.getString(0) else null }
     }

@@ -17,6 +17,7 @@ import com.tom_roush.pdfbox.pdmodel.graphics.color.PDDeviceRGB
 import com.tom_roush.pdfbox.pdmodel.graphics.blend.BlendMode
 import com.tom_roush.pdfbox.pdmodel.graphics.image.PDImageXObject
 import com.tom_roush.pdfbox.pdmodel.graphics.state.PDExtendedGraphicsState
+import com.tom_roush.pdfbox.pdmodel.graphics.state.RenderingMode
 import com.tom_roush.pdfbox.pdmodel.font.PDType0Font
 import com.tom_roush.pdfbox.pdmodel.interactive.annotation.PDAnnotationTextMarkup
 import com.tom_roush.pdfbox.util.Matrix
@@ -75,6 +76,7 @@ class PdfBoxExporter(private val context: Context, private val repo: NotePadRepo
                 if (options.includeInk || options.includeImages || options.includeText || options.flattenMarks) {
                     drawLocalContent(output, target, page, options, marks.filter { it.pageId == page.id && !it.deleted })
                 }
+                if (options.includeText) drawOcrText(output, target, page)
                 val pageMarks = marks.filter { it.pageId == page.id && !it.deleted }
                 if (options.includeMarks && !options.flattenMarks && pageMarks.isNotEmpty()) {
                     val annotations = target.annotations
@@ -253,6 +255,25 @@ class PdfBoxExporter(private val context: Context, private val repo: NotePadRepo
                     baseline = page.heightPt - block.yPt - block.fontSizePt,
                     rotationDegrees = -block.rotationDegrees,
                 )
+            }
+        }
+    }
+
+    private suspend fun drawOcrText(document: PDDocument, page: PDPage, model: Page) {
+        val words = repo.ocrWords(model.id)
+        if (words.isEmpty()) return
+        context.assets.open("fonts/NotoNaskhArabic.ttf").use { input ->
+            val font = PDType0Font.load(document, input, true)
+            PDPageContentStream(document, page, PDPageContentStream.AppendMode.APPEND, true, true).use { stream ->
+                stream.setRenderingMode(RenderingMode.NEITHER)
+                stream.setFont(font, 10f)
+                words.sortedBy { it.index }.forEach { word ->
+                    stream.beginText()
+                    stream.setFont(font, (word.bottom - word.top).coerceAtLeast(1f))
+                    stream.newLineAtOffset(word.left, model.heightPt - word.bottom)
+                    stream.showText(word.text)
+                    stream.endText()
+                }
             }
         }
     }

@@ -104,6 +104,10 @@ import com.hashim.notepad.pdf.PdfPageSource
 import com.hashim.notepad.pdf.PdfPageCoordinates
 import com.hashim.notepad.pdf.PdfPasswordVault
 import com.hashim.notepad.pdf.PdfTextCache
+import com.hashim.notepad.pdf.PdfOcrWorker
+import com.hashim.notepad.pdf.OcrModelCatalog
+import com.hashim.notepad.pdf.OcrModelDownloadWorker
+import com.hashim.notepad.pdf.loadPdfTextLayer
 import com.hashim.notepad.pdf.PdfTextRect
 import com.hashim.notepad.pdf.PdfTextSearchHit
 import com.hashim.notepad.pdf.PdfWordSnap
@@ -172,6 +176,18 @@ fun PdfReadScreen(
     var draggingSelectionHandle by remember { mutableStateOf(false) }
     val selectionState = rememberUpdatedState(selection)
     var searchQuery by remember { mutableStateOf("") }
+    val ocrWorkName = "pdf-ocr-$notebookId"
+    val ocrWorkManager = remember(context) { androidx.work.WorkManager.getInstance(context) }
+    val ocrWorkInfos by ocrWorkManager.getWorkInfosForUniqueWorkFlow(ocrWorkName).collectAsState(initial = emptyList())
+    val ocrWorkInfo = ocrWorkInfos.firstOrNull { !it.state.isFinished }
+    val ocrProgress = ocrWorkInfo?.progress?.getInt(PdfOcrWorker.KEY_COMPLETED, 0) ?: 0
+    val ocrTotal = ocrWorkInfo?.progress?.getInt(PdfOcrWorker.KEY_TOTAL, 0) ?: 0
+    val optionalOcrModel = OcrModelCatalog.optionalCodeFor(notebook?.language ?: "ar")
+    val modelWorkName = optionalOcrModel?.let { "ocr-model-$it" } ?: "ocr-model-none"
+    val modelWorkInfos by ocrWorkManager.getWorkInfosForUniqueWorkFlow(modelWorkName).collectAsState(initial = emptyList())
+    val modelWorkInfo = modelWorkInfos.firstOrNull { !it.state.isFinished }
+    val modelFile = optionalOcrModel?.let { java.io.File(context.filesDir, "tessdata/$it.traineddata") }
+    val optionalModelMissing = optionalOcrModel != null && modelFile?.isFile != true
     var selectedMarkColor by remember { mutableIntStateOf(0x66FFF176) }
     var noteDialog by remember { mutableStateOf(false) }
     var noteDraft by remember { mutableStateOf("") }
@@ -238,6 +254,14 @@ fun PdfReadScreen(
             if (kotlin.math.abs(target - currentIndex) > 3) backPage = currentIndex
             scope.launch { listState.animateScrollToItem(target) }
         }
+    }
+    fun enqueueOcr(pageId: String?) {
+        val data = androidx.work.Data.Builder().putString(PdfOcrWorker.KEY_NOTEBOOK_ID, notebookId)
+        pageId?.let { data.putString(PdfOcrWorker.KEY_PAGE_ID, it) }
+        val request = androidx.work.OneTimeWorkRequestBuilder<PdfOcrWorker>()
+            .setInputData(data.build())
+            .build()
+        ocrWorkManager.enqueueUniqueWork(ocrWorkName, androidx.work.ExistingWorkPolicy.KEEP, request)
     }
 
     BoxWithConstraints(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
@@ -339,7 +363,9 @@ fun PdfReadScreen(
                                         val pdfIndex = page.pdfPageIndex ?: index
                                         val found = withContext(PdfiumDispatcher.dispatcher) {
                                             PdfPageSource(context, File(asset.localPath), PdfPasswordVault(context).read(asset.id)).use { source ->
-                                                val text = PdfTextCache.getOrLoad(context, asset.id, pdfIndex) { source.textGeometry(pdfIndex) }
+                                                val text = loadPdfTextLayer(
+                                                    context, asset.id, pdfIndex, { repo.ocrWords(page.id) },
+                                                ) { source.textGeometry(pdfIndex) }
                                                 val charIndex = PdfWordSnap.nearestCharacterIndex(
                                                     text,
                                                     textPoint.x,
@@ -502,9 +528,9 @@ fun PdfReadScreen(
                                                         File(asset.localPath),
                                                         PdfPasswordVault(context).read(asset.id),
                                                     ).use { source ->
-                                                        PdfTextCache.getOrLoad(context, asset.id, pdfIndex) {
-                                                            source.textGeometry(pdfIndex)
-                                                        }
+                                                        loadPdfTextLayer(
+                                                            context, asset.id, pdfIndex, { repo.ocrWords(page.id) },
+                                                        ) { source.textGeometry(pdfIndex) }
                                                     }
                                                 }
                                                 val textPoint = pagePointForText(change.position, coordinates, page)
@@ -625,7 +651,18 @@ fun PdfReadScreen(
                         }
                     }
                     androidx.compose.material3.TextButton(onClick = { sidebarOpen = !sidebarOpen; chromeVisible = true }) {
-                        Text("Contents", color = MaterialTheme.colorScheme.onSurface)
+                    Text("Contents", color = MaterialTheme.colorScheme.onSurface)
+                    }
+                    if (notebook?.documentKind == "pdf") {
+                        Text(
+                            when {
+                                ocrWorkInfo != null -> "OCR $ocrProgress/$ocrTotal"
+                                modelWorkInfo != null -> "Model download"
+                                else -> "OCR"
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
                     }
                     androidx.compose.material3.TextButton(onClick = {
                         selection?.text?.let { searchQuery = it }
@@ -640,6 +677,69 @@ fun PdfReadScreen(
                             Icon(Icons.Outlined.MoreVert, "Reader options", tint = MaterialTheme.colorScheme.onSurface)
                         }
                         androidx.compose.material3.DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                            if (notebook?.documentKind == "pdf") {
+                                if (optionalModelMissing) {
+                                    val spec = OcrModelCatalog.optionalModels[optionalOcrModel]
+                                    if (spec != null) {
+                                        val downloaded = modelWorkInfo?.progress?.getLong(OcrModelDownloadWorker.KEY_DOWNLOADED, 0L) ?: 0L
+                                        val sizeLabel = "%.1f".format(spec.sizeBytes / 1_048_576f)
+                                        androidx.compose.material3.DropdownMenuItem(
+                                            text = {
+                                                Text(
+                                                    if (modelWorkInfo != null) {
+                                                        "Downloading ${spec.displayName} model (${(downloaded / 1_048_576f).coerceAtMost(spec.sizeBytes / 1_048_576f).let { "%.1f".format(it) }}/$sizeLabel MB)"
+                                                    } else {
+                                                        "Download ${spec.displayName} model ($sizeLabel MB)"
+                                                    },
+                                                )
+                                            },
+                                            onClick = {
+                                                val constraints = androidx.work.Constraints.Builder()
+                                                    .setRequiredNetworkType(androidx.work.NetworkType.CONNECTED)
+                                                    .build()
+                                                val request = androidx.work.OneTimeWorkRequestBuilder<OcrModelDownloadWorker>()
+                                                    .setInputData(androidx.work.workDataOf(OcrModelDownloadWorker.KEY_MODEL to spec.code))
+                                                    .setConstraints(constraints)
+                                                    .setBackoffCriteria(
+                                                        androidx.work.BackoffPolicy.EXPONENTIAL,
+                                                        30,
+                                                        java.util.concurrent.TimeUnit.SECONDS,
+                                                    )
+                                                    .build()
+                                                ocrWorkManager.enqueueUniqueWork(
+                                                    modelWorkName,
+                                                    androidx.work.ExistingWorkPolicy.KEEP,
+                                                    request,
+                                                )
+                                                showMenu = false
+                                            },
+                                        )
+                                    }
+                                } else if (ocrWorkInfo != null) {
+                                    androidx.compose.material3.DropdownMenuItem(
+                                        text = { Text("Cancel recognition") },
+                                        onClick = {
+                                            ocrWorkManager.cancelUniqueWork(ocrWorkName)
+                                            showMenu = false
+                                        },
+                                    )
+                                } else {
+                                    androidx.compose.material3.DropdownMenuItem(
+                                        text = { Text("Recognize this page") },
+                                        onClick = {
+                                            pages.getOrNull(currentIndex)?.id?.let(::enqueueOcr)
+                                            showMenu = false
+                                        },
+                                    )
+                                    androidx.compose.material3.DropdownMenuItem(
+                                        text = { Text("Recognize whole document") },
+                                        onClick = {
+                                            enqueueOcr(null)
+                                            showMenu = false
+                                        },
+                                    )
+                                }
+                            }
                             if (tabletWidth && onOpenSideBySide != null) {
                                 androidx.compose.material3.DropdownMenuItem(
                                     text = { Text("Open side by side") },

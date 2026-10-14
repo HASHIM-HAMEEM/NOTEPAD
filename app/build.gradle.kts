@@ -19,7 +19,7 @@ android {
         targetSdk = 36
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         versionCode = 11
-        versionName = "0.10.5"
+        versionName = "0.11.0"
         ndk { abiFilters += listOf("arm64-v8a") }
     }
 
@@ -72,6 +72,8 @@ dependencies {
     implementation(libs.androidx.work.runtime)
     implementation(libs.reorderable)
     implementation(libs.pdfbox.android)
+    implementation(libs.androidx.media3.exoplayer)
+    implementation(libs.tesseract4android)
 
     testImplementation(libs.junit)
     androidTestImplementation("androidx.test:runner:1.6.2")

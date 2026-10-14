@@ -165,6 +165,7 @@ internal fun PageSidebar(
                 password = PdfPasswordVault(context).read(asset.id),
                 pages = pages,
                 query = query,
+                loadOcrWords = { pageId -> repo.ocrWords(pageId) },
             ) { hit ->
                 withContext(Dispatchers.Main.immediate) {
                     searchHits = searchHits + hit

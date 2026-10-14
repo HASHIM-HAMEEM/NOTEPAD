@@ -2,6 +2,7 @@ package com.hashim.notepad.pdf
 
 import android.content.Context
 import android.util.LruCache
+import com.hashim.notepad.data.OcrWord
 import com.hashim.notepad.data.Page
 import com.hashim.notepad.search.TextNormalizer
 import kotlinx.coroutines.withContext
@@ -214,16 +215,35 @@ suspend fun searchPdfText(
     password: String?,
     pages: List<Page>,
     query: String,
+    loadOcrWords: suspend (String) -> List<OcrWord> = { emptyList() },
     onHit: suspend (PdfTextSearchHit) -> Unit,
 ) = withContext(PdfiumDispatcher.dispatcher) {
     PdfPageSource(context, file, password).use { source ->
         pages.forEachIndexed { pageNumber, page ->
             coroutineContext.ensureActive()
             val pdfIndex = page.pdfPageIndex ?: pageNumber
-            val layer = PdfTextCache.getOrLoad(context, assetId, pdfIndex) { source.textGeometry(pdfIndex) }
+            val layer = loadPdfTextLayer(
+                context,
+                assetId,
+                pdfIndex,
+                { loadOcrWords(page.id) },
+            ) { source.textGeometry(pdfIndex) }
             findPdfTextHits(page.id, pdfIndex, layer, query).forEach { hit ->
                 onHit(hit)
             }
         }
     }
+}
+
+suspend fun loadPdfTextLayer(
+    context: Context,
+    assetId: String,
+    pageIndex: Int,
+    loadOcrWords: suspend () -> List<OcrWord>,
+    loadEmbeddedText: () -> PdfGeometryTextLayer,
+): PdfGeometryTextLayer {
+    val embedded = PdfTextCache.getOrLoad(context, assetId, pageIndex, loadEmbeddedText)
+    if (!OcrGeometry.isScannedPage(embedded.text)) return embedded
+    val words = loadOcrWords()
+    return if (words.isEmpty()) embedded else OcrGeometry.toTextLayer(words)
 }

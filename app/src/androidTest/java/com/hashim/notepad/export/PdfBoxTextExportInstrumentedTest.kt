@@ -6,6 +6,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.hashim.notepad.data.Asset
 import com.hashim.notepad.data.NotePadRepository
+import com.hashim.notepad.data.OcrWord
 import com.hashim.notepad.data.PdfMark
 import com.hashim.notepad.data.PdfMarkKind
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
@@ -247,6 +248,60 @@ class PdfBoxTextExportInstrumentedTest {
                 File(context.cacheDir, "exports/legacy-arabic-export.pdf").delete()
                 File(context.cacheDir, "exports/legacy-arabic-fallback-guard.pdf").delete()
             }
+        }
+    }
+
+    @Test
+    fun exportedOcrTextIsSearchableButInvisible() = runBlocking {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val context = instrumentation.targetContext
+        PDFBoxResourceLoader.init(context)
+        val databaseName = "ocr-export-test.db"
+        context.deleteDatabase(databaseName)
+        val source = File(context.cacheDir, "ocr-export-input.pdf")
+        instrumentation.context.assets.open("scanned-english.pdf").use { input ->
+            source.outputStream().use(input::copyTo)
+        }
+        val repo = NotePadRepository(context, databaseName)
+        val outputName = "ocr-export-layer"
+        try {
+            val pageSizes = PdfPageSource(context, source).use { it.pageSizesPt() }
+            val asset = Asset(
+                id = UUID.randomUUID().toString(),
+                kind = "pdf",
+                localPath = source.absolutePath,
+                byteSize = source.length(),
+                sha256 = "scanned-english-fixture",
+                pageCount = pageSizes.size,
+                name = "scanned-english.pdf",
+            )
+            val notebookId = repo.createPdfNotebook("OCR export", asset, pageSizes, null)
+            val page = repo.pages(notebookId).first().first()
+            val pageWidth = page.widthPt
+            val pageHeight = page.heightPt
+            val boxLeft = pageWidth - 120f
+            val boxTop = pageHeight - 40f
+            repo.replaceOcrWords(
+                page.id,
+                listOf(
+                    OcrWord(page.id, 0, "InvisibleOCR", boxLeft, boxTop, pageWidth - 20f, pageHeight - 20f, 99f),
+                ),
+                "eng",
+            )
+            val output = PdfBoxExporter(context, repo).exportNotebook(notebookId, outputName)
+            PDDocument.load(output).use { exported ->
+                assertTrue(PDFTextStripper().getText(exported).contains("InvisibleOCR"))
+            }
+            val renderedSource = PdfPageSource(context, source).use { it.render(0, 600) }
+            val renderedExport = PdfPageSource(context, output).use { it.render(0, 600) }
+            val sampleX = ((pageWidth - 70f) / pageWidth * renderedExport.width).toInt().coerceIn(0, renderedExport.width - 1)
+            val sampleY = (20f / pageHeight * renderedExport.height).toInt().coerceIn(0, renderedExport.height - 1)
+            assertEquals(renderedSource.getPixel(sampleX, sampleY), renderedExport.getPixel(sampleX, sampleY))
+        } finally {
+            repo.helper.close()
+            context.deleteDatabase(databaseName)
+            source.delete()
+            File(context.cacheDir, "exports/$outputName.pdf").delete()
         }
     }
 }
