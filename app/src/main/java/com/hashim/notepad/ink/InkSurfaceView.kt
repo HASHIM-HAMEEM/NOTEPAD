@@ -286,6 +286,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     private var highlighterWet: InProgressStroke? = null
     private val stylusButtonPresses = HashSet<Int>()
     private val stylusButtonStates = HashMap<Int, Int>()
+    private val activeContactPointerIds = HashSet<Int>()
     private val stylusButtonDebouncer = StylusButtonDebouncer()
     private var highlighterStoredBrush: Brush? = null
     private var highlighterRenderBrush: Brush? = null
@@ -1729,17 +1730,23 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     fun handleStylusKeyEvent(event: KeyEvent) {
         if (!StylusButtonKeyMapping.shouldDispatch(event.action, event.repeatCount)) return
         val button = StylusButtonKeyMapping.buttonForKeyCode(event.keyCode) ?: return
+        if (!StylusButtonDispatchPolicy.shouldSwitchTool(hasActiveContact())) return
         dispatchStylusButtonAction(button, event.eventTime)
     }
 
-    private fun beginStylusButton(button: Int, eventTime: Long) {
+    private fun beginStylusButton(button: Int, eventTime: Long, contactActive: Boolean) {
         stylusButtonPresses.add(button)
-        dispatchStylusButtonAction(button, eventTime)
+        if (StylusButtonDispatchPolicy.shouldSwitchTool(contactActive)) {
+            dispatchStylusButtonAction(button, eventTime)
+        }
     }
 
     private fun endStylusButton(button: Int) {
         stylusButtonPresses.remove(button)
     }
+
+    private fun hasActiveContact(): Boolean =
+        activeContactPointerIds.isNotEmpty() || currentStrokeId != null || highlighterWet != null || erasing
 
     private fun dispatchStylusButtonAction(button: Int, eventTime: Long) {
         val action = when (button) {
@@ -1752,21 +1759,35 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         listener(action)
     }
 
-    private fun observeStylusButtons(event: MotionEvent) {
-        if (event.pointerCount == 0) return
+    private fun observeStylusButtons(event: MotionEvent, touchEvent: Boolean = false) {
+        if (event.pointerCount == 0) {
+            if (touchEvent && event.actionMasked == MotionEvent.ACTION_CANCEL) activeContactPointerIds.clear()
+            return
+        }
         val index = event.actionIndex.coerceIn(0, event.pointerCount - 1)
+        val pointerId = event.getPointerId(index)
+        if (
+            touchEvent &&
+            (event.actionMasked == MotionEvent.ACTION_DOWN || event.actionMasked == MotionEvent.ACTION_POINTER_DOWN)
+        ) {
+            activeContactPointerIds.add(pointerId)
+        }
         val toolType = event.getToolType(index)
         val stylusSource = event.source and InputDevice.SOURCE_STYLUS == InputDevice.SOURCE_STYLUS
-        if (!stylusSource && toolType != MotionEvent.TOOL_TYPE_STYLUS && toolType != MotionEvent.TOOL_TYPE_ERASER) return
+        if (!stylusSource && toolType != MotionEvent.TOOL_TYPE_STYLUS && toolType != MotionEvent.TOOL_TYPE_ERASER) {
+            finishContactTracking(event, pointerId, touchEvent)
+            return
+        }
 
         val mask = MotionEvent.BUTTON_STYLUS_PRIMARY or MotionEvent.BUTTON_STYLUS_SECONDARY
         val current = event.buttonState and mask
         val previous = stylusButtonStates[event.deviceId] ?: 0
         val actionButton = event.actionButton and mask
         val changes = StylusButtonMotionTransitions.changes(previous, current, event.actionMasked, actionButton)
+        val contactActive = hasActiveContact()
 
         for (button in intArrayOf(MotionEvent.BUTTON_STYLUS_PRIMARY, MotionEvent.BUTTON_STYLUS_SECONDARY)) {
-            if (changes.pressed and button != 0) beginStylusButton(button, event.eventTime)
+            if (changes.pressed and button != 0) beginStylusButton(button, event.eventTime, contactActive)
             if (changes.released and button != 0) endStylusButton(button)
         }
         if (changes.pressed != 0 && (currentStrokeId != null || highlighterWet != null)) {
@@ -1789,6 +1810,15 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         ) {
             StylusInputDiagnostics.recordMotionEvent(event)
         }
+        finishContactTracking(event, pointerId, touchEvent)
+    }
+
+    private fun finishContactTracking(event: MotionEvent, pointerId: Int, touchEvent: Boolean) {
+        if (!touchEvent) return
+        when (event.actionMasked) {
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> activeContactPointerIds.remove(pointerId)
+            MotionEvent.ACTION_CANCEL -> activeContactPointerIds.clear()
+        }
     }
 
     override fun onGenericMotionEvent(event: MotionEvent): Boolean {
@@ -1802,7 +1832,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
-        observeStylusButtons(event)
+        observeStylusButtons(event, touchEvent = true)
         applyPendingStylusEraser(event)
         if (event.actionMasked == MotionEvent.ACTION_BUTTON_PRESS || event.actionMasked == MotionEvent.ACTION_BUTTON_RELEASE) return true
         predictor.record(event)
@@ -2066,12 +2096,15 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         if (!highlighterLifecycle.finish()) return
         val inputs = highlighterInputs(event, index, includeHistory = true)
         if (inputs.isNotEmpty()) highlighterLastInput = inputs.last()
+        val first = highlighterFirstInput
+        val last = highlighterLastInput
+        if (first == null || last == null || !HighlighterInputPolicy.hasLength(first.x, first.y, last.x, last.y)) {
+            resetHighlighterStroke()
+            strokeLayer.invalidate()
+            return
+        }
         if (highlighterStraight) {
-            val endpoint = highlighterLastInput ?: highlighterFirstInput ?: run {
-                resetHighlighterStroke()
-                return
-            }
-            rebuildStraightHighlighter(endpoint)
+            rebuildStraightHighlighter(last)
         } else {
             enqueueHighlighterInputs(inputs)
         }
@@ -2110,6 +2143,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     private fun rebuildStraightHighlighter(endpoint: StrokeInput) {
         val first = highlighterFirstInput ?: return
         val brush = highlighterRenderBrush ?: return
+        if (!HighlighterInputPolicy.hasLength(first.x, first.y, endpoint.x, endpoint.y)) return
         val end = StrokeInput.create(
             endpoint.x,
             endpoint.y,
@@ -2150,6 +2184,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         fun addInput(x: Float, y: Float, eventTime: Long, pressure: Float, tilt: Float, orientation: Float) {
             val point = floatArrayOf(x, y)
             transform.mapPoints(point)
+            if (!point[0].isFinite() || !point[1].isFinite()) return
             val elapsed = maxOf(eventTime - highlighterStartEventTime, highlighterLastElapsed + 1L).coerceAtLeast(0L)
             highlighterLastElapsed = elapsed
             inputs += StrokeInput.create(
@@ -2158,9 +2193,9 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
                 elapsed,
                 toolType,
                 POINT_STROKE_UNIT_LENGTH_CM,
-                pressure.takeIf { it > 0f } ?: 1f,
-                tilt,
-                orientation,
+                HighlighterInputPolicy.pressure(pressure),
+                HighlighterInputPolicy.tilt(tilt),
+                HighlighterInputPolicy.orientation(orientation),
             )
         }
         if (includeHistory) {

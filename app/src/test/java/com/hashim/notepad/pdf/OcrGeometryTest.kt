@@ -72,4 +72,19 @@ class OcrGeometryTest {
         assertEquals(source.length, hit.matchEnd)
         assertEquals(source, hit.snippet.substring(hit.snippetMatchStart, hit.snippetMatchEnd))
     }
+
+    @Test
+    fun ocrGeometryOverridesNonEmptyEmbeddedTextForSelection() {
+        val ocrWord = OcrWord("page", 0, "لُغَةٌ", 10f, 20f, 50f, 34f, 98f)
+        var embeddedTextLoaded = false
+
+        val selectedText = preferOcrTextLayer(listOf(ocrWord)) {
+            embeddedTextLoaded = true
+            PdfGeometryText.order("unrelated embedded text", emptyList())
+        }
+
+        assertFalse(embeddedTextLoaded)
+        assertEquals("لُغَةٌ", selectedText.text)
+        assertEquals(10f, selectedText.characters.first().box.left, 0f)
+    }
 }

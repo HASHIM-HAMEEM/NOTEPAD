@@ -31,6 +31,7 @@ class PdfOcrWorker(
         if (pdfPages.isEmpty()) return failure("No PDF pages available for OCR in notebook=$notebookId")
         Log.i(TAG, "Starting OCR notebook=$notebookId language=${notebook.language} pages=${pdfPages.size} pageId=$requestedPageId attempt=$runAttemptCount abis=${android.os.Build.SUPPORTED_ABIS.joinToString()}")
         var recognizedWords = 0
+        var recognizedPages = 0
         try {
             PdfOcrEngine(applicationContext).use { engine ->
             pdfPages.forEachIndexed { pageOrder, page ->
@@ -48,7 +49,9 @@ class PdfOcrWorker(
                 val scannedPage = OcrGeometry.isScannedPage(embedded)
                 val hasOcrWords = scannedPage && repo.ocrWords(page.id).isNotEmpty()
                 if (PdfOcrPolicy.shouldSkipPage(scannedPage, hasOcrWords, forceRecognition)) {
-                    recognizedWords += repo.ocrWords(page.id).size
+                    val existingWords = repo.ocrWords(page.id)
+                    recognizedWords += existingWords.size
+                    if (existingWords.isNotEmpty()) recognizedPages++
                     setProgress(Data.Builder().putInt(KEY_COMPLETED, pageOrder + 1).putInt(KEY_TOTAL, pdfPages.size).build())
                     return@forEachIndexed
                 }
@@ -88,6 +91,7 @@ class PdfOcrWorker(
                 if (words.isNotEmpty()) {
                     repo.replaceOcrWords(page.id, words, notebook.language)
                     recognizedWords += words.size
+                    recognizedPages++
                 }
                 Log.i(TAG, "OCR page=${page.id} words=${words.size} language=${notebook.language}")
                 setProgress(Data.Builder().putInt(KEY_COMPLETED, pageOrder + 1).putInt(KEY_TOTAL, pdfPages.size).build())
@@ -99,7 +103,12 @@ class PdfOcrWorker(
                 Data.Builder().putString(KEY_ERROR, error.message ?: error.javaClass.simpleName).build(),
             )
         }
-        return Result.success(Data.Builder().putInt(KEY_RECOGNIZED_WORDS, recognizedWords).build())
+        return Result.success(
+            Data.Builder()
+                .putInt(KEY_RECOGNIZED_WORDS, recognizedWords)
+                .putInt(KEY_RECOGNIZED_PAGES, recognizedPages)
+                .build(),
+        )
     }
 
     companion object {
@@ -111,6 +120,7 @@ class PdfOcrWorker(
         const val KEY_TOTAL = "total"
         const val KEY_ERROR = "error"
         const val KEY_RECOGNIZED_WORDS = "recognized_words"
+        const val KEY_RECOGNIZED_PAGES = "recognized_pages"
     }
 
     private fun failure(message: String): Result {

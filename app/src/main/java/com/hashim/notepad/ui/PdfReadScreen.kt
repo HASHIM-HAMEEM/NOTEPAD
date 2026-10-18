@@ -274,7 +274,8 @@ fun PdfReadScreen(
         handledOcrWorkIds = handledOcrWorkIds + finishedWork.id.toString()
         val message = if (finishedWork.state == androidx.work.WorkInfo.State.SUCCEEDED) {
             val count = finishedWork.outputData.getInt(PdfOcrWorker.KEY_RECOGNIZED_WORDS, 0)
-            if (count > 0) "Recognized $count words" else "No text found"
+            val pages = finishedWork.outputData.getInt(PdfOcrWorker.KEY_RECOGNIZED_PAGES, 0)
+            if (count > 0) "Recognized $count words on $pages pages" else "No text found"
         } else {
             finishedWork.outputData.getString(PdfOcrWorker.KEY_ERROR)
                 ?.takeIf(String::isNotBlank)

@@ -54,6 +54,10 @@ internal object StylusButtonMotionTransitions {
     }
 }
 
+internal object StylusButtonDispatchPolicy {
+    fun shouldSwitchTool(contactActive: Boolean): Boolean = !contactActive
+}
+
 object StylusInputDiagnostics {
     private val _lastEvent = MutableStateFlow("Last stylus event: none")
     val lastEvent = _lastEvent.asStateFlow()

@@ -253,8 +253,14 @@ suspend fun loadPdfTextLayer(
     loadOcrWords: suspend () -> List<OcrWord>,
     loadEmbeddedText: () -> PdfGeometryTextLayer,
 ): PdfGeometryTextLayer {
-    val embedded = PdfTextCache.getOrLoad(context, assetId, pageIndex, loadEmbeddedText)
-    if (!OcrGeometry.isScannedPage(embedded.text)) return embedded
     val words = loadOcrWords()
-    return if (words.isEmpty()) embedded else OcrGeometry.toTextLayer(words)
+    return preferOcrTextLayer(words) {
+        PdfTextCache.getOrLoad(context, assetId, pageIndex, loadEmbeddedText)
+    }
 }
+
+internal fun preferOcrTextLayer(
+    words: List<OcrWord>,
+    loadEmbeddedText: () -> PdfGeometryTextLayer,
+): PdfGeometryTextLayer =
+    if (words.isNotEmpty()) OcrGeometry.toTextLayer(words) else loadEmbeddedText()

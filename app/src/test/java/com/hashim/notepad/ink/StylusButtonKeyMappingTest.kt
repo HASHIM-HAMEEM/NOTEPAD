@@ -84,4 +84,10 @@ class StylusButtonKeyMappingTest {
         assertEquals(MotionEvent.BUTTON_STYLUS_PRIMARY, changes.pressed)
         assertEquals(0, changes.released)
     }
+
+    @Test
+    fun contactPreventsToolSwitchButIdlePressCanSwitch() {
+        assertTrue(StylusButtonDispatchPolicy.shouldSwitchTool(contactActive = false))
+        assertFalse(StylusButtonDispatchPolicy.shouldSwitchTool(contactActive = true))
+    }
 }

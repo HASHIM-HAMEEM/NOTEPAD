@@ -27,29 +27,34 @@ data class BrushSpec(
     val opacity: Float = if (tool == InkTool.HIGHLIGHTER) 0.45f else 1f,
 ) {
     @OptIn(ExperimentalInkCustomBrushApi::class)
-    fun toBrush(): Brush = when (tool) {
-        InkTool.TAPE -> Brush.createWithColorIntArgb(InkBrushFamilies.tape, colorArgb or (0xFF shl 24), size, EPSILON)
+    fun toBrush(): Brush {
+        val safeSize = HighlighterInputPolicy.brushSize(size)
+        val safeOpacity = HighlighterInputPolicy.opacity(opacity)
+        val safeColor = colorArgb.withAlpha((safeOpacity * 255f).roundToInt())
+        return when (tool) {
+        InkTool.TAPE -> Brush.createWithColorIntArgb(InkBrushFamilies.tape, colorArgb or (0xFF shl 24), safeSize, EPSILON)
         InkTool.HIGHLIGHTER -> Brush.createWithColorIntArgb(
-            StockBrushes.highlighter(), colorArgb.withAlpha((opacity.coerceIn(0f, 1f) * 255f).roundToInt()), size * 4f, EPSILON
+            StockBrushes.highlighter(), safeColor, safeSize * 4f, EPSILON
         )
         InkTool.PEN -> when (pen) {
             PenType.BALLPOINT -> Brush.createWithColorIntArgb(
-                StockBrushes.marker(), colorArgb.withAlpha((opacity.coerceIn(0f, 1f) * 255f).roundToInt()), size * 0.8f, EPSILON
+                StockBrushes.marker(), safeColor, safeSize * 0.8f, EPSILON
             )
             PenType.FOUNTAIN -> Brush.createWithColorIntArgb(
-                StockBrushes.pressurePen(), colorArgb.withAlpha((opacity.coerceIn(0f, 1f) * 255f).roundToInt()), size, EPSILON
+                StockBrushes.pressurePen(), safeColor, safeSize, EPSILON
             )
             PenType.PENCIL -> Brush.createWithColorIntArgb(
-                InkBrushFamilies.pencil, colorArgb.withAlpha((opacity.coerceIn(0f, 1f) * 255f).roundToInt()), size * 1.2f, EPSILON
+                InkBrushFamilies.pencil, safeColor, safeSize * 1.2f, EPSILON
             )
             PenType.MARKER -> Brush.createWithColorIntArgb(
-                StockBrushes.marker(), colorArgb.withAlpha((opacity.coerceIn(0f, 1f) * 255f).roundToInt()), size * 2.2f, EPSILON
+                StockBrushes.marker(), safeColor, safeSize * 2.2f, EPSILON
             )
             PenType.CALLIGRAPHY -> Brush.createWithColorIntArgb(
-                InkBrushFamilies.calligraphy, colorArgb.withAlpha((opacity.coerceIn(0f, 1f) * 255f).roundToInt()), size * 2.5f, EPSILON
+                InkBrushFamilies.calligraphy, safeColor, safeSize * 2.5f, EPSILON
             )
         }
-        else -> Brush.createWithColorIntArgb(StockBrushes.pressurePen(), colorArgb, size, EPSILON)
+        else -> Brush.createWithColorIntArgb(StockBrushes.pressurePen(), colorArgb, safeSize, EPSILON)
+        }
     }
 
     companion object { const val EPSILON = 0.1f }
