@@ -74,6 +74,13 @@ private object PreviewCache {
     val renderer: CanvasStrokeRenderer by lazy { CanvasStrokeRenderer.create(InkTextures.textureStore) }
 }
 
+internal const val MAX_PDF_PREVIEW_WIDTH_PX = 3072
+
+internal fun pdfPreviewRenderWidth(targetWidthPx: Int, cropScale: Float, renderScale: Float): Int =
+    (targetWidthPx * cropScale.coerceAtLeast(1f) * renderScale.coerceIn(0.2f, 4f))
+        .roundToInt()
+        .coerceIn(420, MAX_PDF_PREVIEW_WIDTH_PX)
+
 internal suspend fun precomposeReadPage(
     context: android.content.Context,
     repo: NotePadRepository,
@@ -82,7 +89,7 @@ internal suspend fun precomposeReadPage(
     paperColor: Color,
     bookmarkColor: Color,
 ) = withContext(Dispatchers.Default) {
-    val renderWidth = width.coerceIn(420, 1800)
+    val renderWidth = width.coerceIn(420, MAX_PDF_PREVIEW_WIDTH_PX)
     val paperArgb = paperColor.toArgbInt()
     val marks = repo.pdfMarks(page.notebookId).first().filter { it.pageId == page.id && !it.deleted }
     val key = "${page.id}:${page.updatedAt}:$renderWidth:$paperArgb:0:${marks.hashCode()}"
@@ -168,7 +175,7 @@ fun PagePreview(
 ) {
     val context = LocalContext.current
     var targetWidthPx by remember { mutableIntStateOf(0) }
-    val renderWidth = (targetWidthPx * cropScale.coerceAtLeast(1f) * renderScale.coerceIn(0.2f, 4f)).roundToInt().coerceIn(420, 1800)
+    val renderWidth = pdfPreviewRenderWidth(targetWidthPx, cropScale, renderScale)
     val bitmapKey = page?.takeIf { it.kind == PageKind.PDF && it.assetId != null }?.let {
         "${it.assetId}:${it.pdfPageIndex ?: 0}:$renderWidth"
     }

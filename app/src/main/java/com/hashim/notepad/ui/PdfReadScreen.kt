@@ -92,6 +92,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.input.pointer.pointerInput
@@ -149,6 +150,32 @@ private data class PdfReadSelection(
 )
 
 private enum class SelectionHandle { START, END }
+
+internal data class PdfReadZoomTransform(
+    val zoom: Float,
+    val panX: Float,
+    val panY: Float,
+)
+
+internal fun zoomPdfAtFocus(
+    currentZoom: Float,
+    currentPanX: Float,
+    currentPanY: Float,
+    previousFocusX: Float,
+    previousFocusY: Float,
+    currentFocusX: Float,
+    currentFocusY: Float,
+    requestedZoom: Float,
+): PdfReadZoomTransform {
+    val nextZoom = requestedZoom.coerceIn(1f, 4f)
+    if (nextZoom == 1f) return PdfReadZoomTransform(1f, 0f, 0f)
+    val zoomFactor = nextZoom / currentZoom.coerceAtLeast(1f)
+    return PdfReadZoomTransform(
+        zoom = nextZoom,
+        panX = currentFocusX - (previousFocusX - currentPanX) * zoomFactor,
+        panY = currentFocusY - (previousFocusY - currentPanY) * zoomFactor,
+    )
+}
 
 @Composable
 @OptIn(ExperimentalMaterial3Api::class)
@@ -350,6 +377,7 @@ fun PdfReadScreen(
         }
         val pageTransform = if (zoom != 1f || panX != 0f || panY != 0f) {
             Modifier.graphicsLayer {
+                transformOrigin = TransformOrigin(0f, 0f)
                 scaleX = zoom
                 scaleY = zoom
                 translationX = panX
@@ -373,9 +401,19 @@ fun PdfReadScreen(
                             val currentCenter = (first.position + second.position) * 0.5f
                             val previousDistance = (first.previousPosition - second.previousPosition).getDistance().coerceAtLeast(1f)
                             val currentDistance = (first.position - second.position).getDistance()
-                            zoom = (zoom * currentDistance / previousDistance).coerceIn(1f, 4f)
-                            panX += currentCenter.x - previousCenter.x
-                            panY += currentCenter.y - previousCenter.y
+                            val transform = zoomPdfAtFocus(
+                                currentZoom = zoom,
+                                currentPanX = panX,
+                                currentPanY = panY,
+                                previousFocusX = previousCenter.x,
+                                previousFocusY = previousCenter.y,
+                                currentFocusX = currentCenter.x,
+                                currentFocusY = currentCenter.y,
+                                requestedZoom = zoom * currentDistance / previousDistance,
+                            )
+                            zoom = transform.zoom
+                            panX = transform.panX
+                            panY = transform.panY
                             pointers.forEach { it.consume() }
                         }
                     } while (event.changes.any { it.pressed })
