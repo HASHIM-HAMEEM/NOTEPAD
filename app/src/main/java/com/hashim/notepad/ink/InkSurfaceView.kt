@@ -1728,20 +1728,14 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     }
 
     fun handleStylusKeyEvent(event: KeyEvent) {
-        val button = when (event.keyCode) {
-            STYLUS_BUTTON_PRIMARY_KEYCODE, STYLUS_BUTTON_TERTIARY_KEYCODE,
-            KeyEvent.KEYCODE_BUTTON_1 -> MotionEvent.BUTTON_STYLUS_PRIMARY
-            STYLUS_BUTTON_SECONDARY_KEYCODE, STYLUS_BUTTON_TAIL_KEYCODE,
-            KeyEvent.KEYCODE_BUTTON_2 -> MotionEvent.BUTTON_STYLUS_SECONDARY
+        if (!StylusButtonKeyMapping.shouldDispatch(event.action, event.repeatCount)) return
+        val button = StylusButtonKeyMapping.buttonForKeyCode(event.keyCode) ?: return
+        val action = when (button) {
+            MotionEvent.BUTTON_STYLUS_PRIMARY -> primaryButtonAction
+            MotionEvent.BUTTON_STYLUS_SECONDARY -> secondaryButtonAction
             else -> return
         }
-        when (event.action) {
-            KeyEvent.ACTION_DOWN -> if (event.repeatCount == 0) {
-                beginStylusButton(button, event.eventTime)
-                if (currentStrokeId != null || highlighterWet != null) pendingStylusErase = true
-            }
-            KeyEvent.ACTION_UP -> endStylusButton(button, event.eventTime)
-        }
+        onStylusToolSwitch?.invoke(action)
     }
 
     private fun beginStylusButton(button: Int, eventTime: Long) {

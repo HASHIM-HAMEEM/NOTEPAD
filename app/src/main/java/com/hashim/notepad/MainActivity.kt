@@ -120,8 +120,8 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        if (StylusInputDiagnostics.isStylusKey(event)) {
-            StylusInputDiagnostics.recordKeyEvent(event)
+        if (StylusInputDiagnostics.isStylusKey(event) && StylusInputDiagnostics.recordKeyEvent(event)) {
+            return true
         }
         return super.dispatchKeyEvent(event)
     }
