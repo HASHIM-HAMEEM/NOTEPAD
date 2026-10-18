@@ -34,6 +34,15 @@ private data class StoredTextBlock(
     val rotationDegrees: Float,
 )
 
+internal fun existingSplitPairForSave(
+    existingPair: SplitPair?,
+    leftNotebookId: String,
+    rightNotebookId: String,
+): SplitPair? = existingPair?.takeIf {
+    (it.leftNotebookId == leftNotebookId && it.rightNotebookId == rightNotebookId) ||
+        (it.leftNotebookId == rightNotebookId && it.rightNotebookId == leftNotebookId)
+}
+
 class NotePadRepository(context: Context, databaseName: String = "notepad.db") {
     internal val helper = NotePadDb(context.applicationContext ?: context, databaseName)
     internal fun changed() = notifyChanged()
@@ -230,26 +239,55 @@ class NotePadRepository(context: Context, databaseName: String = "notepad.db") {
         val database = helper.writableDatabase
         val id = UUID.randomUUID().toString()
         val now = System.currentTimeMillis()
+        var savedPair: SplitPair? = null
         database.beginTransaction()
         try {
-            database.delete(
-                "split_pairs",
-                "left_notebook_id in (?, ?) or right_notebook_id in (?, ?)",
-                arrayOf(leftNotebookId, rightNotebookId, leftNotebookId, rightNotebookId),
-            )
-            database.insertOrThrow("split_pairs", null, ContentValues().apply {
-                put("id", id)
-                put("left_notebook_id", leftNotebookId)
-                put("right_notebook_id", rightNotebookId)
-                put("divider_ratio", dividerRatio.coerceIn(0.33f, 0.67f))
-                put("swapped", if (swapped) 1 else 0)
-                put("updated_at", now)
-            })
+            val existingPair = database.rawQuery(
+                """select id, left_notebook_id, right_notebook_id, divider_ratio, swapped
+                   from split_pairs
+                   where (left_notebook_id = ? and right_notebook_id = ?)
+                      or (left_notebook_id = ? and right_notebook_id = ?)
+                   order by updated_at desc limit 1""",
+                arrayOf(leftNotebookId, rightNotebookId, rightNotebookId, leftNotebookId),
+            ).use { cursor ->
+                if (cursor.moveToFirst()) {
+                    SplitPair(
+                        cursor.getString(0),
+                        cursor.getString(1),
+                        cursor.getString(2),
+                        cursor.getFloat(3),
+                        cursor.getInt(4) != 0,
+                    )
+                } else null
+            }
+            savedPair = existingSplitPairForSave(existingPair, leftNotebookId, rightNotebookId)
+            if (savedPair == null) {
+                database.delete(
+                    "split_pairs",
+                    "left_notebook_id in (?, ?) or right_notebook_id in (?, ?)",
+                    arrayOf(leftNotebookId, rightNotebookId, leftNotebookId, rightNotebookId),
+                )
+                database.insertOrThrow("split_pairs", null, ContentValues().apply {
+                    put("id", id)
+                    put("left_notebook_id", leftNotebookId)
+                    put("right_notebook_id", rightNotebookId)
+                    put("divider_ratio", dividerRatio.coerceIn(0.33f, 0.67f))
+                    put("swapped", if (swapped) 1 else 0)
+                    put("updated_at", now)
+                })
+                savedPair = SplitPair(
+                    id,
+                    leftNotebookId,
+                    rightNotebookId,
+                    dividerRatio.coerceIn(0.33f, 0.67f),
+                    swapped,
+                )
+            }
             database.setTransactionSuccessful()
         } finally {
             database.endTransaction()
         }
-        SplitPair(id, leftNotebookId, rightNotebookId, dividerRatio.coerceIn(0.33f, 0.67f), swapped)
+        checkNotNull(savedPair)
     }
 
     suspend fun updateSplitPair(id: String, dividerRatio: Float, swapped: Boolean) = withContext(Dispatchers.IO) {

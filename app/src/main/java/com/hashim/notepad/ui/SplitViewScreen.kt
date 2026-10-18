@@ -49,6 +49,7 @@ import com.hashim.notepad.data.Page
 import com.hashim.notepad.data.PageKind
 import com.hashim.notepad.data.SplitPair
 import com.hashim.notepad.recognition.InkRecognizer
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 
@@ -62,6 +63,7 @@ internal fun splitVisualOrder(leftNotebookId: String, rightNotebookId: String, s
 fun SplitViewScreen(
     repo: NotePadRepository,
     recognizer: InkRecognizer,
+    persistScope: CoroutineScope,
     openedNotebookId: String,
     openedPageId: String,
     onClose: (notebookId: String, pageId: String) -> Unit,
@@ -113,10 +115,9 @@ fun SplitViewScreen(
         }
     }
 
-    var ratio by rememberSaveable(savedPair.id) { mutableFloatStateOf(savedPair.dividerRatio.coerceIn(0.33f, 0.67f)) }
+    var ratio by remember(savedPair.id) { mutableFloatStateOf(savedPair.dividerRatio.coerceIn(0.33f, 0.67f)) }
     var compactPane by rememberSaveable(savedPair.id) { mutableStateOf(false) }
     var containerSize by remember { mutableStateOf(IntSize.Zero) }
-    val scope = rememberCoroutineScope()
 
     BoxWithConstraints(
         Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
@@ -186,11 +187,11 @@ fun SplitViewScreen(
                     onRatioChange = { ratio = it },
                     onSwap = {
                         swapped = !swapped
-                        scope.launch { repo.updateSplitPair(savedPair.id, ratio, swapped) }
+                        persistScope.launch { repo.updateSplitPair(savedPair.id, ratio, swapped) }
                     },
                     onClose = { onClose(leftNotebook.id, leftPageId.orEmpty()) },
                     onDragFinished = { finalRatio ->
-                        scope.launch { repo.updateSplitPair(savedPair.id, finalRatio, swapped) }
+                        persistScope.launch { repo.updateSplitPair(savedPair.id, finalRatio, swapped) }
                     },
                 )
                 SplitDocumentPane(
@@ -230,12 +231,12 @@ private fun SplitDivider(
                 orientation = Orientation.Horizontal,
                 onDragStopped = {
                     val target = snapSplitDividerRatio(ratio)
+                    onDragFinished(target)
                     scope.launch {
                         val animation = Animatable(ratio)
                         animation.animateTo(target, spring(dampingRatio = 0.72f, stiffness = 420f)) {
                             onRatioChange(value)
                         }
-                        onDragFinished(target)
                     }
                 },
             ),

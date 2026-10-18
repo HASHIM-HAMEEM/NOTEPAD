@@ -346,6 +346,7 @@ fun NotePadApp(
                     is Screen.Split -> SplitViewScreen(
                         repo = repo,
                         recognizer = recognizer,
+                        persistScope = appScope,
                         openedNotebookId = s.notebookId,
                         openedPageId = s.pageId,
                         onClose = ::openSinglePage,
