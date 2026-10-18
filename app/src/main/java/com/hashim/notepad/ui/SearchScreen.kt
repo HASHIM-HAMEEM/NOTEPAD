@@ -32,7 +32,11 @@ import kotlinx.coroutines.delay
 /** Search across handwriting, typed text, PDF text layers and PDF annotations. */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
-fun SearchScreen(repo: NotePadRepository, onBack: () -> Unit, onOpenPage: (notebookId: String, pageId: String) -> Unit) {
+fun SearchScreen(
+    repo: NotePadRepository,
+    onBack: () -> Unit,
+    onOpenPage: (notebookId: String, pageId: String, query: String) -> Unit,
+) {
     var query by remember { mutableStateOf("") }
     var hits by remember { mutableStateOf<List<SearchHit>>(emptyList()) }
     val focus = remember { FocusRequester() }
@@ -81,7 +85,7 @@ fun SearchScreen(repo: NotePadRepository, onBack: () -> Unit, onOpenPage: (noteb
                 else -> LazyColumn(contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     itemsIndexed(hits, key = { index, hit -> "search-result:${hit.source}:${hit.pageId}:$index" }) { _, h ->
                         Surface(
-                            onClick = { onOpenPage(h.notebookId, h.pageId) }, shape = RoundedCornerShape(22.dp),
+                            onClick = { onOpenPage(h.notebookId, h.pageId, query) }, shape = RoundedCornerShape(22.dp),
                             color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.fillMaxWidth().animateItem(),
                         ) {
                             Column(Modifier.padding(18.dp)) {

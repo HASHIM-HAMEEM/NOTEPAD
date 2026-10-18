@@ -69,6 +69,8 @@ fun SplitViewScreen(
     openedNotebookId: String,
     openedPageId: String,
     onClose: (notebookId: String, pageId: String) -> Unit,
+    initialSearchQuery: String? = null,
+    onInitialSearchApplied: (String) -> Unit = {},
 ) {
     val notebooks by repo.notebooks().collectAsState(initial = emptyList())
     var pair by remember(openedNotebookId) { mutableStateOf<SplitPair?>(null) }
@@ -102,15 +104,25 @@ fun SplitViewScreen(
     var rightPageId by rememberSaveable(savedPair.id, visualRightId) {
         mutableStateOf(openedPageId.takeIf { openedNotebookId == visualRightId })
     }
-    LaunchedEffect(leftPages, leftNotebook, openedNotebookId, openedPageId) {
-        if (leftPageId == null || leftPages.none { it.id == leftPageId }) {
+    LaunchedEffect(leftPages, leftNotebook, openedNotebookId, openedPageId, initialSearchQuery) {
+        if (!initialSearchQuery.isNullOrBlank() &&
+            openedNotebookId == visualLeftId &&
+            leftPages.any { it.id == openedPageId }
+        ) {
+            leftPageId = openedPageId
+        } else if (leftPageId == null || leftPages.none { it.id == leftPageId }) {
             leftPageId = if (openedNotebookId == visualLeftId) openedPageId else
                 leftPages.getOrNull(leftNotebook.lastPageIndex.coerceIn(0, (leftPages.size - 1).coerceAtLeast(0)))?.id
                     ?: leftPages.firstOrNull()?.id
         }
     }
-    LaunchedEffect(rightPages, rightNotebook, openedNotebookId, openedPageId) {
-        if (rightPageId == null || rightPages.none { it.id == rightPageId }) {
+    LaunchedEffect(rightPages, rightNotebook, openedNotebookId, openedPageId, initialSearchQuery) {
+        if (!initialSearchQuery.isNullOrBlank() &&
+            openedNotebookId == visualRightId &&
+            rightPages.any { it.id == openedPageId }
+        ) {
+            rightPageId = openedPageId
+        } else if (rightPageId == null || rightPages.none { it.id == rightPageId }) {
             rightPageId = if (openedNotebookId == visualRightId) openedPageId else
                 rightPages.getOrNull(rightNotebook.lastPageIndex.coerceIn(0, (rightPages.size - 1).coerceAtLeast(0)))?.id
                     ?: rightPages.firstOrNull()?.id
@@ -118,7 +130,9 @@ fun SplitViewScreen(
     }
 
     var ratio by remember(savedPair.id) { mutableFloatStateOf(savedPair.dividerRatio.coerceIn(0.33f, 0.67f)) }
-    var compactPane by rememberSaveable(savedPair.id) { mutableStateOf(false) }
+    var compactPane by rememberSaveable(savedPair.id, openedNotebookId) {
+        mutableStateOf(openedNotebookId == visualRightId)
+    }
     var containerSize by remember { mutableStateOf(IntSize.Zero) }
 
     BoxWithConstraints(
@@ -164,6 +178,11 @@ fun SplitViewScreen(
                     notebookId = selectedNotebook.id,
                     initialPageId = selectedPage,
                     recognizer = recognizer,
+                    initialSearchQuery = initialSearchQuery.takeIf { selectedNotebook.id == openedNotebookId },
+                    searchTargetPageId = openedPageId.takeIf {
+                        !initialSearchQuery.isNullOrBlank() && selectedNotebook.id == openedNotebookId
+                    },
+                    onInitialSearchApplied = onInitialSearchApplied,
                     modifier = Modifier.fillMaxWidth().weight(1f),
                     onPageChange = { pageId ->
                         if (compactPane) rightPageId = pageId else leftPageId = pageId
@@ -178,6 +197,11 @@ fun SplitViewScreen(
                     notebookId = leftNotebook.id,
                     initialPageId = leftPageId,
                     recognizer = recognizer,
+                    initialSearchQuery = initialSearchQuery.takeIf { leftNotebook.id == openedNotebookId },
+                    searchTargetPageId = openedPageId.takeIf {
+                        !initialSearchQuery.isNullOrBlank() && leftNotebook.id == openedNotebookId
+                    },
+                    onInitialSearchApplied = onInitialSearchApplied,
                     modifier = Modifier.weight(ratio),
                     onPageChange = { leftPageId = it },
                     onClose = { onClose(leftNotebook.id, leftPageId.orEmpty()) },
@@ -201,6 +225,11 @@ fun SplitViewScreen(
                     notebookId = rightNotebook.id,
                     initialPageId = rightPageId,
                     recognizer = recognizer,
+                    initialSearchQuery = initialSearchQuery.takeIf { rightNotebook.id == openedNotebookId },
+                    searchTargetPageId = openedPageId.takeIf {
+                        !initialSearchQuery.isNullOrBlank() && rightNotebook.id == openedNotebookId
+                    },
+                    onInitialSearchApplied = onInitialSearchApplied,
                     modifier = Modifier.weight(1f - ratio),
                     onPageChange = { rightPageId = it },
                     onClose = { onClose(rightNotebook.id, rightPageId.orEmpty()) },
@@ -273,14 +302,22 @@ private fun SplitDocumentPane(
     initialPageId: String?,
     recognizer: InkRecognizer,
     modifier: Modifier = Modifier,
+    initialSearchQuery: String? = null,
+    searchTargetPageId: String? = null,
+    onInitialSearchApplied: (String) -> Unit = {},
     onPageChange: (String) -> Unit,
     onClose: () -> Unit,
 ) {
     val pages by repo.pages(notebookId).collectAsState(initial = emptyList())
     var pageId by rememberSaveable(notebookId) { mutableStateOf(initialPageId) }
     var editingPdfPageId by rememberSaveable(notebookId) { mutableStateOf<String?>(null) }
-    LaunchedEffect(initialPageId, pages) {
-        if (pageId == null || pages.none { it.id == pageId }) {
+    LaunchedEffect(initialPageId, pages, initialSearchQuery) {
+        if (!initialSearchQuery.isNullOrBlank() &&
+            initialPageId != null &&
+            pages.any { it.id == initialPageId }
+        ) {
+            pageId = initialPageId
+        } else if (pageId == null || pages.none { it.id == pageId }) {
             pageId = initialPageId ?: pages.firstOrNull()?.id
         }
     }
@@ -299,6 +336,8 @@ private fun SplitDocumentPane(
                 notebookId = notebookId,
                 startPageId = page.id,
                 onBack = onClose,
+                initialSearchQuery = initialSearchQuery.takeIf { page.id == searchTargetPageId },
+                onInitialSearchApplied = onInitialSearchApplied,
                 onWrite = {
                     pageId = it
                     onPageChange(it)

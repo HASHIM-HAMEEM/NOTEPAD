@@ -135,6 +135,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -193,6 +194,11 @@ internal fun clampPdfReadZoomTransform(
     )
 }
 
+internal fun firstPdfTextSearchHitOnPage(
+    hits: List<PdfTextSearchHit>,
+    pageId: String,
+): PdfTextSearchHit? = hits.firstOrNull { it.pageId == pageId }
+
 @Composable
 @OptIn(ExperimentalMaterial3Api::class)
 fun PdfReadScreen(
@@ -202,6 +208,8 @@ fun PdfReadScreen(
     onBack: () -> Unit,
     onWrite: (String) -> Unit,
     onOpenSideBySide: ((String, String) -> Unit)? = null,
+    initialSearchQuery: String? = null,
+    onInitialSearchApplied: (String) -> Unit = {},
 ) {
     val context = LocalContext.current
     val notebooks by repo.notebooks().collectAsState(initial = emptyList())
@@ -325,7 +333,18 @@ fun PdfReadScreen(
     }
     fun acceptSearchResults(hits: List<PdfTextSearchHit>) {
         searchResults = hits
-        if (hits.isEmpty()) {
+        if (!initialSearchQuery.isNullOrBlank()) {
+            val targetHit = firstPdfTextSearchHitOnPage(hits, startPageId)
+            if (targetHit == null) {
+                currentHit = null
+                searchHitIndex = -1
+            } else {
+                val targetIndex = hits.indexOf(targetHit)
+                if (searchHitIndex != targetIndex || currentHit != targetHit) {
+                    showSearchHit(targetIndex)
+                }
+            }
+        } else if (hits.isEmpty()) {
             currentHit = null
             searchHitIndex = -1
         } else if (searchHitIndex < 0) {
@@ -336,6 +355,35 @@ fun PdfReadScreen(
             if (kotlin.math.abs(target - currentIndex) > 3) backPage = currentIndex
             scope.launch { listState.animateScrollToItem(target) }
         }
+    }
+    LaunchedEffect(initialSearchQuery, startPageId, pages) {
+        val query = initialSearchQuery?.takeIf(String::isNotBlank) ?: return@LaunchedEffect
+        if (pages.none { it.id == startPageId }) return@LaunchedEffect
+        searchQuery = query
+        currentHit = null
+        searchHitIndex = -1
+        searchResults = emptyList()
+        listState.scrollToItem(initialIndex.coerceIn(pages.indices))
+        val initialMarks = repo.pdfMarks(notebookId).first()
+        val hits = try {
+            searchPageSidebar(
+                context = context,
+                repo = repo,
+                assetId = pages.firstOrNull()?.assetId,
+                pages = pages,
+                marks = initialMarks,
+                query = query,
+            )
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            emptyList()
+        }
+        searchResults = hits
+        firstPdfTextSearchHitOnPage(hits, startPageId)?.let { hit ->
+            showSearchHit(hits.indexOf(hit))
+        }
+        onInitialSearchApplied(query)
     }
     fun enqueueOcr(pageId: String?) {
         val data = androidx.work.Data.Builder().putString(PdfOcrWorker.KEY_NOTEBOOK_ID, notebookId)
@@ -353,6 +401,9 @@ fun PdfReadScreen(
 
     BoxWithConstraints(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         val tabletWidth = maxWidth >= 840.dp
+        LaunchedEffect(initialSearchQuery, tabletWidth) {
+            if (!initialSearchQuery.isNullOrBlank() && tabletWidth) sidebarOpen = true
+        }
         val dockedSidebar = maxWidth >= 840.dp && sidebarOpen
         val sidebarWidth = if (dockedSidebar) 300.dp else 0.dp
         val pageWidth = maxWidth - sidebarWidth - 32.dp

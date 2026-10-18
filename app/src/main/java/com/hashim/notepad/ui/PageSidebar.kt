@@ -1,5 +1,6 @@
 package com.hashim.notepad.ui
 
+import android.content.Context
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -78,6 +79,60 @@ import java.util.Date
 import java.text.DateFormat
 import kotlinx.coroutines.launch
 
+internal suspend fun searchPageSidebar(
+    context: Context,
+    repo: NotePadRepository,
+    assetId: String?,
+    pages: List<Page>,
+    marks: List<PdfMark>,
+    query: String,
+    onResults: suspend (List<PdfTextSearchHit>) -> Unit = {},
+): List<PdfTextSearchHit> {
+    val id = assetId ?: return emptyList()
+    if (query.isBlank()) return emptyList()
+    val asset = repo.asset(id) ?: return emptyList()
+    var results = emptyList<PdfTextSearchHit>()
+    searchPdfText(
+        context = context,
+        assetId = id,
+        file = File(asset.localPath),
+        password = PdfPasswordVault(context).read(asset.id),
+        pages = pages,
+        query = query,
+        loadOcrWords = { pageId -> repo.ocrWords(pageId) },
+    ) { hit ->
+        results = results + hit
+        onResults(results)
+    }
+    val normalizedQuery = TextNormalizer.normalize(query).text
+    if (normalizedQuery.isNotEmpty()) {
+        val markHits = marks.asSequence().filterNot(PdfMark::deleted).mapNotNull { mark ->
+            val combined = listOf(mark.text, mark.note.orEmpty()).filter(String::isNotBlank).joinToString(" ")
+            val normalized = TextNormalizer.normalize(combined)
+            val at = normalized.text.indexOf(normalizedQuery)
+            if (mark.pageId.isBlank() || at < 0) null else {
+                val pageIndex = pages.indexOfFirst { it.id == mark.pageId }.coerceAtLeast(0)
+                PdfTextSearchHit(
+                    pageId = mark.pageId,
+                    pageIndex = pageIndex,
+                    snippet = combined,
+                    matchStart = mark.charStart ?: at,
+                    matchEnd = mark.charEnd ?: at + normalizedQuery.length,
+                    snippetMatchStart = at,
+                    snippetMatchEnd = at + normalizedQuery.length,
+                    rects = PdfWordSnap.topLeftRects(mark.quads, pages.getOrNull(pageIndex)?.heightPt ?: 0f),
+                    resultKey = PdfSearchResultKey.mark(mark.id),
+                )
+            }
+        }.toList()
+        if (markHits.isNotEmpty()) {
+            results = results + markHits
+            onResults(results)
+        }
+    }
+    return results
+}
+
 @Composable
 internal fun PageSidebar(
     repo: NotePadRepository,
@@ -155,46 +210,18 @@ internal fun PageSidebar(
         val id = assetId ?: return@LaunchedEffect
         if (query.isBlank()) return@LaunchedEffect
         delay(250)
-        val asset = repo.asset(id) ?: return@LaunchedEffect
         searching = true
         try {
-            searchPdfText(
+            searchPageSidebar(
                 context = context,
+                repo = repo,
                 assetId = id,
-                file = File(asset.localPath),
-                password = PdfPasswordVault(context).read(asset.id),
                 pages = pages,
+                marks = marks,
                 query = query,
-                loadOcrWords = { pageId -> repo.ocrWords(pageId) },
             ) { hit ->
                 withContext(Dispatchers.Main.immediate) {
-                    searchHits = searchHits + hit
-                    onSearchResults(searchHits)
-                }
-            }
-            val normalizedQuery = TextNormalizer.normalize(query).text
-            if (normalizedQuery.isNotEmpty()) {
-                val markHits = marks.asSequence().filterNot(PdfMark::deleted).mapNotNull { mark ->
-                    val combined = listOf(mark.text, mark.note.orEmpty()).filter(String::isNotBlank).joinToString(" ")
-                    val normalized = TextNormalizer.normalize(combined)
-                    val at = normalized.text.indexOf(normalizedQuery)
-                    if (mark.pageId.isBlank() || at < 0) null else {
-                        val pageIndex = pages.indexOfFirst { it.id == mark.pageId }.coerceAtLeast(0)
-                        PdfTextSearchHit(
-                            pageId = mark.pageId,
-                            pageIndex = pageIndex,
-                            snippet = combined,
-                            matchStart = mark.charStart ?: at,
-                            matchEnd = mark.charEnd ?: at + normalizedQuery.length,
-                            snippetMatchStart = at,
-                            snippetMatchEnd = at + normalizedQuery.length,
-                            rects = PdfWordSnap.topLeftRects(mark.quads, pages.getOrNull(pageIndex)?.heightPt ?: 0f),
-                            resultKey = PdfSearchResultKey.mark(mark.id),
-                        )
-                    }
-                }.toList()
-                if (markHits.isNotEmpty()) {
-                    searchHits = searchHits + markHits
+                    searchHits = hit
                     onSearchResults(searchHits)
                 }
             }

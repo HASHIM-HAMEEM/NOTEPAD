@@ -51,8 +51,8 @@ sealed interface Screen {
     data object Notebooks : Screen
     data class Pages(val notebookId: String) : Screen
     data class Editor(val notebookId: String, val pageId: String, val returnToRead: Boolean = false) : Screen
-    data class Read(val notebookId: String, val pageId: String) : Screen
-    data class Split(val notebookId: String, val pageId: String) : Screen
+    data class Read(val notebookId: String, val pageId: String, val searchQuery: String? = null) : Screen
+    data class Split(val notebookId: String, val pageId: String, val searchQuery: String? = null) : Screen
     data object Search : Screen
     data object Account : Screen
 }
@@ -73,8 +73,8 @@ private val screenSaver = listSaver<Screen, String>(
             Screen.Notebooks -> listOf("notebooks")
             is Screen.Pages -> listOf("pages", screen.notebookId)
             is Screen.Editor -> listOf("editor", screen.notebookId, screen.pageId, screen.returnToRead.toString())
-            is Screen.Read -> listOf("read", screen.notebookId, screen.pageId)
-            is Screen.Split -> listOf("split", screen.notebookId, screen.pageId)
+            is Screen.Read -> listOf("read", screen.notebookId, screen.pageId, screen.searchQuery.orEmpty())
+            is Screen.Split -> listOf("split", screen.notebookId, screen.pageId, screen.searchQuery.orEmpty())
             Screen.Search -> listOf("search")
             Screen.Account -> listOf("account")
         }
@@ -91,12 +91,14 @@ private val screenSaver = listSaver<Screen, String>(
             "read" -> {
                 val notebookId = state.getOrNull(1)
                 val pageId = state.getOrNull(2)
-                if (notebookId == null || pageId == null) Screen.Notebooks else Screen.Read(notebookId, pageId)
+                if (notebookId == null || pageId == null) Screen.Notebooks
+                else Screen.Read(notebookId, pageId, state.getOrNull(3)?.takeIf(String::isNotEmpty))
             }
             "split" -> {
                 val notebookId = state.getOrNull(1)
                 val pageId = state.getOrNull(2)
-                if (notebookId == null || pageId == null) Screen.Notebooks else Screen.Split(notebookId, pageId)
+                if (notebookId == null || pageId == null) Screen.Notebooks
+                else Screen.Split(notebookId, pageId, state.getOrNull(3)?.takeIf(String::isNotEmpty))
             }
             "search" -> Screen.Search
             "account" -> Screen.Account
@@ -134,18 +136,25 @@ fun NotePadApp(
     var splitRequest by remember { mutableStateOf<SplitRequest?>(null) }
     var importing by rememberSaveable { mutableStateOf(false) }
 
-    suspend fun destinationForPage(notebookId: String, pageId: String): Screen {
-        if (repo.splitPair(notebookId) != null) return Screen.Split(notebookId, pageId)
+    suspend fun destinationForPage(notebookId: String, pageId: String, searchQuery: String? = null): Screen {
+        if (repo.splitPair(notebookId) != null) {
+            val page = repo.page(pageId)
+            return Screen.Split(
+                notebookId,
+                pageId,
+                searchQuery.takeIf { page?.kind == com.hashim.notepad.data.PageKind.PDF },
+            )
+        }
         val page = repo.page(pageId) ?: return Screen.Pages(notebookId)
         return if (page.kind == com.hashim.notepad.data.PageKind.PDF) {
-            Screen.Read(notebookId, pageId)
+            Screen.Read(notebookId, pageId, searchQuery)
         } else {
             Screen.Editor(notebookId, pageId)
         }
     }
 
-    fun openPage(notebookId: String, pageId: String) {
-        appScope.launch { screen = destinationForPage(notebookId, pageId) }
+    fun openPage(notebookId: String, pageId: String, searchQuery: String? = null) {
+        appScope.launch { screen = destinationForPage(notebookId, pageId, searchQuery) }
     }
 
     fun openSinglePage(notebookId: String, pageId: String) {
@@ -340,6 +349,10 @@ fun NotePadApp(
                                 onBack = { screen = Screen.Notebooks },
                                 onWrite = { screen = Screen.Editor(s.notebookId, it, returnToRead = true) },
                                 onOpenSideBySide = { notebookId, pageId -> splitRequest = SplitRequest(notebookId, pageId) },
+                                initialSearchQuery = s.searchQuery,
+                                onInitialSearchApplied = { query ->
+                                    if (screen == s && s.searchQuery == query) screen = s.copy(searchQuery = null)
+                                },
                             )
                         }
                     }
@@ -349,6 +362,10 @@ fun NotePadApp(
                         persistScope = appScope,
                         openedNotebookId = s.notebookId,
                         openedPageId = s.pageId,
+                        initialSearchQuery = s.searchQuery,
+                        onInitialSearchApplied = { query ->
+                            if (screen == s && s.searchQuery == query) screen = s.copy(searchQuery = null)
+                        },
                         onClose = ::openSinglePage,
                     )
                 }
