@@ -42,6 +42,18 @@ internal class StylusButtonDebouncer(private val windowMs: Long = 250L) {
     }
 }
 
+internal data class StylusButtonChanges(val pressed: Int, val released: Int)
+
+internal object StylusButtonMotionTransitions {
+    fun changes(previous: Int, current: Int, action: Int, actionButton: Int): StylusButtonChanges {
+        val pressed = (current and previous.inv()) or
+            if (action == MotionEvent.ACTION_BUTTON_PRESS) actionButton else 0
+        val released = (previous and current.inv()) or
+            if (action == MotionEvent.ACTION_BUTTON_RELEASE) actionButton else 0
+        return StylusButtonChanges(pressed, released)
+    }
+}
+
 object StylusInputDiagnostics {
     private val _lastEvent = MutableStateFlow("Last stylus event: none")
     val lastEvent = _lastEvent.asStateFlow()

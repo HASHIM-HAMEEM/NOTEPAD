@@ -58,4 +58,30 @@ class StylusButtonKeyMappingTest {
         assertTrue(debouncer.accept(primaryButton, 1_000L))
         assertTrue(debouncer.accept(primaryButton, 1_251L))
     }
+
+    @Test
+    fun buttonStateStartsSwitchOnPressWithoutWaitingForRelease() {
+        val changes = StylusButtonMotionTransitions.changes(
+            previous = 0,
+            current = MotionEvent.BUTTON_STYLUS_PRIMARY,
+            action = MotionEvent.ACTION_HOVER_MOVE,
+            actionButton = 0,
+        )
+
+        assertEquals(MotionEvent.BUTTON_STYLUS_PRIMARY, changes.pressed)
+        assertEquals(0, changes.released)
+    }
+
+    @Test
+    fun actionButtonPressStartsSwitchEvenWhenStateWasAlreadyObserved() {
+        val changes = StylusButtonMotionTransitions.changes(
+            previous = MotionEvent.BUTTON_STYLUS_PRIMARY,
+            current = MotionEvent.BUTTON_STYLUS_PRIMARY,
+            action = MotionEvent.ACTION_BUTTON_PRESS,
+            actionButton = MotionEvent.BUTTON_STYLUS_PRIMARY,
+        )
+
+        assertEquals(MotionEvent.BUTTON_STYLUS_PRIMARY, changes.pressed)
+        assertEquals(0, changes.released)
+    }
 }

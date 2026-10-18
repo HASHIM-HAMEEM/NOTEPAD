@@ -70,7 +70,6 @@ private const val STYLUS_BUTTON_PRIMARY_KEYCODE = 308
 private const val STYLUS_BUTTON_SECONDARY_KEYCODE = 309
 private const val STYLUS_BUTTON_TERTIARY_KEYCODE = 310
 private const val STYLUS_BUTTON_TAIL_KEYCODE = 311
-private const val STYLUS_CLICK_TIMEOUT_MS = 400L
 
 /**
  * Pen surface. World coordinates are PDF points on the page (origin top-left). A page bitmap
@@ -285,8 +284,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     private data class ShapeStrokeContext(val enabled: Boolean, val pageToInput: Matrix)
     private val shapeStrokeContexts = HashMap<InProgressStrokeId, ShapeStrokeContext>()
     private var highlighterWet: InProgressStroke? = null
-    private data class StylusButtonPress(val downTime: Long, var strokeIntervened: Boolean)
-    private val stylusButtonPresses = HashMap<Int, StylusButtonPress>()
+    private val stylusButtonPresses = HashSet<Int>()
     private val stylusButtonStates = HashMap<Int, Int>()
     private val stylusButtonDebouncer = StylusButtonDebouncer()
     private var highlighterStoredBrush: Brush? = null
@@ -1731,29 +1729,19 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     fun handleStylusKeyEvent(event: KeyEvent) {
         if (!StylusButtonKeyMapping.shouldDispatch(event.action, event.repeatCount)) return
         val button = StylusButtonKeyMapping.buttonForKeyCode(event.keyCode) ?: return
-        val action = when (button) {
-            MotionEvent.BUTTON_STYLUS_PRIMARY -> primaryButtonAction
-            MotionEvent.BUTTON_STYLUS_SECONDARY -> secondaryButtonAction
-            else -> return
-        }
-        val listener = onStylusToolSwitch ?: return
-        if (!stylusButtonDebouncer.accept(button, event.eventTime)) return
-        listener(action)
+        dispatchStylusButtonAction(button, event.eventTime)
     }
 
     private fun beginStylusButton(button: Int, eventTime: Long) {
-        if (!stylusButtonPresses.containsKey(button)) {
-            stylusButtonPresses[button] = StylusButtonPress(
-                downTime = eventTime,
-                strokeIntervened = currentStrokeId != null || highlighterWet != null || erasing,
-            )
-        }
+        stylusButtonPresses.add(button)
+        dispatchStylusButtonAction(button, eventTime)
     }
 
-    private fun endStylusButton(button: Int, eventTime: Long) {
-        val press = stylusButtonPresses.remove(button) ?: return
-        val duration = eventTime - press.downTime
-        if (press.strokeIntervened || duration !in 0 until STYLUS_CLICK_TIMEOUT_MS) return
+    private fun endStylusButton(button: Int) {
+        stylusButtonPresses.remove(button)
+    }
+
+    private fun dispatchStylusButtonAction(button: Int, eventTime: Long) {
         val action = when (button) {
             MotionEvent.BUTTON_STYLUS_PRIMARY -> primaryButtonAction
             MotionEvent.BUTTON_STYLUS_SECONDARY -> secondaryButtonAction
@@ -1775,19 +1763,15 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         val current = event.buttonState and mask
         val previous = stylusButtonStates[event.deviceId] ?: 0
         val actionButton = event.actionButton and mask
-        val pressed = (current and previous.inv()) or
-            if (event.actionMasked == MotionEvent.ACTION_BUTTON_PRESS) actionButton else 0
-        val released = (previous and current.inv()) or
-            if (event.actionMasked == MotionEvent.ACTION_BUTTON_RELEASE) actionButton else 0
+        val changes = StylusButtonMotionTransitions.changes(previous, current, event.actionMasked, actionButton)
 
         for (button in intArrayOf(MotionEvent.BUTTON_STYLUS_PRIMARY, MotionEvent.BUTTON_STYLUS_SECONDARY)) {
-            if (pressed and button != 0) beginStylusButton(button, event.eventTime)
-            if (released and button != 0) endStylusButton(button, event.eventTime)
+            if (changes.pressed and button != 0) beginStylusButton(button, event.eventTime)
+            if (changes.released and button != 0) endStylusButton(button)
         }
-        if (pressed != 0 && (currentStrokeId != null || highlighterWet != null)) {
+        if (changes.pressed != 0 && (currentStrokeId != null || highlighterWet != null)) {
             val pointerIndex = event.findPointerIndex(currentPointerId)
                 .takeIf { it >= 0 } ?: index
-            markStylusButtonStroke()
             cancelCurrent(event)
             currentPointerId = event.getPointerId(pointerIndex)
             erasing = true
@@ -1801,14 +1785,10 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         if (
             event.actionMasked == MotionEvent.ACTION_BUTTON_PRESS ||
             event.actionMasked == MotionEvent.ACTION_BUTTON_RELEASE ||
-            pressed != 0 || released != 0
+            changes.pressed != 0 || changes.released != 0
         ) {
             StylusInputDiagnostics.recordMotionEvent(event)
         }
-    }
-
-    private fun markStylusButtonStroke() {
-        stylusButtonPresses.values.forEach { it.strokeIntervened = true }
     }
 
     override fun onGenericMotionEvent(event: MotionEvent): Boolean {
@@ -1911,13 +1891,12 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         }
         val eraserNow = toolType == MotionEvent.TOOL_TYPE_ERASER || brushSpec.tool == InkTool.ERASER ||
             (event.buttonState and MotionEvent.BUTTON_STYLUS_PRIMARY) != 0 ||
-            stylusButtonPresses.containsKey(MotionEvent.BUTTON_STYLUS_PRIMARY)
+            stylusButtonPresses.contains(MotionEvent.BUTTON_STYLUS_PRIMARY)
 
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
                 if (currentStrokeId != null || highlighterWet != null || erasing) return true
                 setDrawingInputActive(true)
-                if (isStylus) markStylusButtonStroke()
                 currentPointerId = event.getPointerId(idx)
                 erasing = eraserNow
                 if (erasing) { lastErase = null; snapshot(); eraseDirty = false; eraseAt(event.getX(idx), event.getY(idx)) }
@@ -1993,7 +1972,6 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
             ?: event.actionIndex.takeIf { it in 0 until event.pointerCount }
             ?: return
         pendingStylusErase = false
-        markStylusButtonStroke()
         cancelCurrent(event)
         currentPointerId = event.getPointerId(pointerIndex)
         erasing = true

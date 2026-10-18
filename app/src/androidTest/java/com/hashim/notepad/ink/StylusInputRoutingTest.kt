@@ -34,20 +34,30 @@ class StylusInputRoutingTest {
     }
 
     @Test
-    fun hoverButtonStateRunsConfiguredActionOnRelease() {
+    fun hoverButtonStateRunsConfiguredActionOnPressEvenWhenHeld() {
         withView { view ->
             val actions = mutableListOf<StylusButtonAction>()
             view.secondaryButtonAction = StylusButtonAction.PREVIOUS_PEN
             view.onStylusToolSwitch = actions::add
 
             hover(view, 1000, MotionEvent.BUTTON_STYLUS_SECONDARY)
-            hover(view, 1010, 0)
+            assertEquals(listOf(StylusButtonAction.PREVIOUS_PEN), actions)
 
+            hover(view, 1600, 0)
             assertEquals(listOf(StylusButtonAction.PREVIOUS_PEN), actions)
         }
     }
 
     private fun hover(view: InkSurfaceView, eventTime: Long, buttonState: Int) {
+        val event = hoverEvent(eventTime, buttonState)
+        try {
+            view.onHoverEvent(event)
+        } finally {
+            event.recycle()
+        }
+    }
+
+    private fun hoverEvent(eventTime: Long, buttonState: Int): MotionEvent {
         val properties = MotionEvent.PointerProperties().apply {
             id = 0
             toolType = MotionEvent.TOOL_TYPE_STYLUS
@@ -58,7 +68,7 @@ class StylusInputRoutingTest {
             pressure = 0f
             size = 0f
         }
-        val event = MotionEvent.obtain(
+        return MotionEvent.obtain(
             eventTime,
             eventTime,
             MotionEvent.ACTION_HOVER_MOVE,
@@ -74,11 +84,6 @@ class StylusInputRoutingTest {
             InputDevice.SOURCE_STYLUS,
             0,
         )
-        try {
-            view.onHoverEvent(event)
-        } finally {
-            event.recycle()
-        }
     }
 
     private fun withView(block: (InkSurfaceView) -> Unit) {
