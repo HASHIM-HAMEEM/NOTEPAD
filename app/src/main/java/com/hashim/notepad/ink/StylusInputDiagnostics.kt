@@ -23,6 +23,8 @@ object StylusInputDiagnostics {
 
     fun isStylusKey(event: KeyEvent): Boolean =
         event.keyCode in STYLUS_BUTTON_PRIMARY..STYLUS_BUTTON_TAIL ||
+            event.keyCode == KeyEvent.KEYCODE_BUTTON_1 ||
+            event.keyCode == KeyEvent.KEYCODE_BUTTON_2 ||
             (event.device?.sources?.and(InputDevice.SOURCE_STYLUS) == InputDevice.SOURCE_STYLUS)
 
     fun recordKeyEvent(event: KeyEvent) {

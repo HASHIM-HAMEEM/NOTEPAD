@@ -68,6 +68,8 @@ private const val LASER_FADE_DURATION_MS = 1000L
 private const val POINT_STROKE_UNIT_LENGTH_CM = 2.54f / 72f
 private const val STYLUS_BUTTON_PRIMARY_KEYCODE = 308
 private const val STYLUS_BUTTON_SECONDARY_KEYCODE = 309
+private const val STYLUS_BUTTON_TERTIARY_KEYCODE = 310
+private const val STYLUS_BUTTON_TAIL_KEYCODE = 311
 private const val STYLUS_CLICK_TIMEOUT_MS = 400L
 
 /**
@@ -156,14 +158,18 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         val images: List<PageImage>,
         val textBlocks: List<TextBlock>,
         val externalUndo: (() -> Unit)? = null,
+        val externalRedo: (() -> Unit)? = null,
     )
     private val history = ArrayList<Snapshot>()
     private val future = ArrayList<Snapshot>()
     private var eraseDirty = false
 
     /** Call before any mutation of [strokes]; keeps the last 100 states. */
-    private fun snapshot() {
-        history.add(Snapshot(ArrayList(strokes), ArrayList(pageImages), ArrayList(textBlocks)))
+    private fun snapshot(
+        externalUndo: (() -> Unit)? = null,
+        externalRedo: (() -> Unit)? = null,
+    ) {
+        history.add(Snapshot(ArrayList(strokes), ArrayList(pageImages), ArrayList(textBlocks), externalUndo, externalRedo))
         if (history.size > 100) history.removeAt(0)
         future.clear()
         notifyUndoRedoChanged()
@@ -291,17 +297,21 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     private var highlighterStartEventTime = 0L
     private var highlighterLastElapsed = -1L
     private var highlighterStartedInStrip = false
+    private val highlighterLifecycle = HighlighterStrokeLifecycle()
     private var highlighterDownX = 0f
     private var highlighterDownY = 0f
     private var currentPointerId = -1
     private var erasing = false
+    private var pendingStylusErase = false
     private var drawingInputActive = false
     private var lastPanX = 0f
     private var lastPanY = 0f
     private var panning = false
     private var zoomAnimator: ValueAnimator? = null
     private val highlighterStraightenRunnable = Runnable {
-        if (highlighterWet != null && !highlighterStraight && !highlighterHoldCancelled) {
+        if (highlighterLifecycle.acceptsInput() && highlighterWet != null &&
+            !highlighterStraight && !highlighterHoldCancelled
+        ) {
             straightenHighlighterForHold()
         }
     }
@@ -503,6 +513,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
 
     @OptIn(androidx.ink.authoring.ExperimentalInkHandoffApi::class)
     override fun onDetachedFromWindow() {
+        resetHighlighterStroke()
         val detachedLayer = wetLayer
         wetLayerGeneration++
         runCatching { detachedLayer.cancelUnfinishedStrokes() }
@@ -1022,8 +1033,16 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     fun canRedo() = future.isNotEmpty()
     fun undo() {
         if (history.isEmpty()) return
-        future.add(Snapshot(ArrayList(strokes), ArrayList(pageImages), ArrayList(textBlocks)))
         val target = history.removeAt(history.size - 1)
+        future.add(
+            Snapshot(
+                ArrayList(strokes),
+                ArrayList(pageImages),
+                ArrayList(textBlocks),
+                target.externalUndo,
+                target.externalRedo,
+            ),
+        )
         if (target.externalUndo != null) {
             target.externalUndo.invoke()
             notifyUndoRedoChanged()
@@ -1031,12 +1050,19 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
             restoreSnapshot(target)
         }
     }
-    fun convertLastStrokeToExternalUndo(stroke: Stroke, undoAction: () -> Unit): Boolean {
+    fun recordExternalAction(undoAction: () -> Unit, redoAction: () -> Unit) {
+        snapshot(undoAction, redoAction)
+    }
+    fun convertLastStrokeToExternalUndo(
+        stroke: Stroke,
+        undoAction: () -> Unit,
+        redoAction: () -> Unit,
+    ): Boolean {
         if (strokes.lastOrNull() != stroke) return false
         if (history.isNotEmpty()) history.removeAt(history.lastIndex)
         strokes.removeAt(strokes.lastIndex)
         future.clear()
-        history.add(Snapshot(ArrayList(strokes), ArrayList(pageImages), ArrayList(textBlocks), undoAction))
+        history.add(Snapshot(ArrayList(strokes), ArrayList(pageImages), ArrayList(textBlocks), undoAction, redoAction))
         strokeLayer.invalidate()
         notifyChanged()
         notifyUndoRedoChanged()
@@ -1044,8 +1070,22 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     }
     fun redo() {
         if (future.isEmpty()) return
-        history.add(Snapshot(ArrayList(strokes), ArrayList(pageImages), ArrayList(textBlocks)))
-        restoreSnapshot(future.removeAt(future.size - 1))
+        val target = future.removeAt(future.size - 1)
+        history.add(
+            Snapshot(
+                ArrayList(strokes),
+                ArrayList(pageImages),
+                ArrayList(textBlocks),
+                target.externalUndo,
+                target.externalRedo,
+            ),
+        )
+        if (target.externalRedo != null) {
+            target.externalRedo.invoke()
+            notifyUndoRedoChanged()
+        } else {
+            restoreSnapshot(target)
+        }
     }
     private fun restoreSnapshot(snapshot: Snapshot) {
         strokes.clear(); strokes.addAll(snapshot.strokes)
@@ -1689,12 +1729,17 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
 
     fun handleStylusKeyEvent(event: KeyEvent) {
         val button = when (event.keyCode) {
-            STYLUS_BUTTON_PRIMARY_KEYCODE -> MotionEvent.BUTTON_STYLUS_PRIMARY
-            STYLUS_BUTTON_SECONDARY_KEYCODE -> MotionEvent.BUTTON_STYLUS_SECONDARY
+            STYLUS_BUTTON_PRIMARY_KEYCODE, STYLUS_BUTTON_TERTIARY_KEYCODE,
+            KeyEvent.KEYCODE_BUTTON_1 -> MotionEvent.BUTTON_STYLUS_PRIMARY
+            STYLUS_BUTTON_SECONDARY_KEYCODE, STYLUS_BUTTON_TAIL_KEYCODE,
+            KeyEvent.KEYCODE_BUTTON_2 -> MotionEvent.BUTTON_STYLUS_SECONDARY
             else -> return
         }
         when (event.action) {
-            KeyEvent.ACTION_DOWN -> if (event.repeatCount == 0) beginStylusButton(button, event.eventTime)
+            KeyEvent.ACTION_DOWN -> if (event.repeatCount == 0) {
+                beginStylusButton(button, event.eventTime)
+                if (currentStrokeId != null || highlighterWet != null) pendingStylusErase = true
+            }
             KeyEvent.ACTION_UP -> endStylusButton(button, event.eventTime)
         }
     }
@@ -1740,6 +1785,19 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
             if (pressed and button != 0) beginStylusButton(button, event.eventTime)
             if (released and button != 0) endStylusButton(button, event.eventTime)
         }
+        if (pressed != 0 && (currentStrokeId != null || highlighterWet != null)) {
+            val pointerIndex = event.findPointerIndex(currentPointerId)
+                .takeIf { it >= 0 } ?: index
+            markStylusButtonStroke()
+            cancelCurrent(event)
+            currentPointerId = event.getPointerId(pointerIndex)
+            erasing = true
+            setDrawingInputActive(true)
+            lastErase = null
+            snapshot()
+            eraseDirty = false
+            eraseAt(event.getX(pointerIndex), event.getY(pointerIndex))
+        }
         stylusButtonStates[event.deviceId] = current
         if (
             event.actionMasked == MotionEvent.ACTION_BUTTON_PRESS ||
@@ -1759,8 +1817,14 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         return super.onGenericMotionEvent(event)
     }
 
+    override fun onHoverEvent(event: MotionEvent): Boolean {
+        observeStylusButtons(event)
+        return super.onHoverEvent(event)
+    }
+
     override fun onTouchEvent(event: MotionEvent): Boolean {
         observeStylusButtons(event)
+        applyPendingStylusEraser(event)
         if (event.actionMasked == MotionEvent.ACTION_BUTTON_PRESS || event.actionMasked == MotionEvent.ACTION_BUTTON_RELEASE) return true
         predictor.record(event)
         val idx = event.actionIndex
@@ -1916,6 +1980,31 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         return false
     }
 
+    private fun applyPendingStylusEraser(event: MotionEvent) {
+        if (!pendingStylusErase || event.actionMasked == MotionEvent.ACTION_CANCEL) {
+            pendingStylusErase = false
+            return
+        }
+        if (currentStrokeId == null && highlighterWet == null) {
+            pendingStylusErase = false
+            return
+        }
+        val pointerIndex = event.findPointerIndex(currentPointerId)
+            .takeIf { it >= 0 }
+            ?: event.actionIndex.takeIf { it in 0 until event.pointerCount }
+            ?: return
+        pendingStylusErase = false
+        markStylusButtonStroke()
+        cancelCurrent(event)
+        currentPointerId = event.getPointerId(pointerIndex)
+        erasing = true
+        setDrawingInputActive(true)
+        lastErase = null
+        snapshot()
+        eraseDirty = false
+        eraseAt(event.getX(pointerIndex), event.getY(pointerIndex))
+    }
+
     private fun tapeStrokeAt(viewX: Float, viewY: Float): Int? {
         val point = floatArrayOf(viewX, viewY)
         viewToPage.mapPoints(point)
@@ -1938,12 +2027,16 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     }
 
     private fun startHighlighterStroke(event: MotionEvent, index: Int) {
+        if (!highlighterLifecycle.begin()) return
         highlighterStoredBrush = brushSpec.toBrush()
         highlighterRenderBrush = highlighterStoredBrush?.let { brush ->
             val paperDark = android.graphics.Color.luminance(paperPaint.color) < 0.5f
             brush.copyWithColorIntArgb(opaqueHighlighterColor(brush.colorIntArgb, paperDark))
         }
-        val renderBrush = highlighterRenderBrush ?: return
+        val renderBrush = highlighterRenderBrush ?: run {
+            resetHighlighterStroke()
+            return
+        }
         highlighterWet = InProgressStroke().also { it.start(renderBrush) }
         highlighterStartedInStrip = zoomEnabled && inStrip
         highlighterStartEventTime = event.eventTime
@@ -1961,6 +2054,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     }
 
     private fun addToHighlighterStroke(event: MotionEvent, index: Int) {
+        if (!highlighterLifecycle.acceptsInput() || highlighterWet == null) return
         val inputs = highlighterInputs(event, index, includeHistory = true)
         if (inputs.isEmpty()) return
         highlighterLastInput = inputs.last()
@@ -1972,7 +2066,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
                 straightenHighlighterForHold()
             }
         }
-        if (highlighterStraight) rebuildStraightHighlighter(highlighterLastInput!!)
+        if (highlighterStraight) highlighterLastInput?.let(::rebuildStraightHighlighter)
         else enqueueHighlighterInputs(inputs)
         strokeLayer.invalidate()
     }
@@ -1992,19 +2086,27 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     }
 
     private fun finishHighlighterStroke(event: MotionEvent, index: Int) {
+        if (!highlighterLifecycle.finish()) return
         val inputs = highlighterInputs(event, index, includeHistory = true)
         if (inputs.isNotEmpty()) highlighterLastInput = inputs.last()
         if (highlighterStraight) {
-            rebuildStraightHighlighter(highlighterLastInput ?: highlighterFirstInput ?: return)
+            val endpoint = highlighterLastInput ?: highlighterFirstInput ?: run {
+                resetHighlighterStroke()
+                return
+            }
+            rebuildStraightHighlighter(endpoint)
         } else {
             enqueueHighlighterInputs(inputs)
         }
         removeCallbacks(highlighterStraightenRunnable)
-        val wet = highlighterWet
+        val wet = highlighterWet ?: run {
+            resetHighlighterStroke()
+            return
+        }
         val finished = runCatching {
-            wet?.finishInput()
-            wet?.updateShape(SystemClock.uptimeMillis())
-            wet?.toImmutable()?.copy(highlighterStoredBrush ?: brushSpec.toBrush())
+            wet.finishInput()
+            wet.updateShape(SystemClock.uptimeMillis())
+            wet.toImmutable().copy(highlighterStoredBrush ?: brushSpec.toBrush())
         }.getOrNull()
         highlighterWet = null
         if (finished != null) {
@@ -2018,9 +2120,12 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     }
 
     private fun straightenHighlighterForHold() {
-        if (highlighterStraight || highlighterWet == null || highlighterHoldCancelled) return
+        if (!highlighterLifecycle.acceptsInput() || highlighterStraight || highlighterWet == null ||
+            highlighterHoldCancelled
+        ) return
+        val endpoint = highlighterLastInput ?: highlighterFirstInput ?: return
         highlighterStraight = true
-        rebuildStraightHighlighter(highlighterLastInput ?: highlighterFirstInput ?: return)
+        rebuildStraightHighlighter(endpoint)
         performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
         strokeLayer.invalidate()
     }
@@ -2105,6 +2210,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     }
 
     private fun resetHighlighterStroke() {
+        highlighterLifecycle.cancel()
         highlighterWet = null
         highlighterStoredBrush = null
         highlighterRenderBrush = null

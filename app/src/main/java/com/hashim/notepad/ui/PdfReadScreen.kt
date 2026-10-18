@@ -199,6 +199,8 @@ fun PdfReadScreen(
     val ocrWorkInfo = ocrWorkInfos.firstOrNull { !it.state.isFinished }
     val ocrProgress = ocrWorkInfo?.progress?.getInt(PdfOcrWorker.KEY_COMPLETED, 0) ?: 0
     val ocrTotal = ocrWorkInfo?.progress?.getInt(PdfOcrWorker.KEY_TOTAL, 0) ?: 0
+    var hasObservedOcrWork by remember(notebookId) { mutableStateOf(false) }
+    var handledOcrWorkIds by remember(notebookId) { mutableStateOf(emptySet<String>()) }
     val optionalOcrModel = OcrModelCatalog.optionalCodeFor(notebook?.language ?: "ar")
     val modelWorkName = optionalOcrModel?.let { "ocr-model-$it" } ?: "ocr-model-none"
     val modelWorkInfos by ocrWorkManager.getWorkInfosForUniqueWorkFlow(modelWorkName).collectAsState(initial = emptyList())
@@ -209,6 +211,26 @@ fun PdfReadScreen(
     var noteDialog by remember { mutableStateOf(false) }
     var noteDraft by remember { mutableStateOf("") }
     val snackbarHost = remember { androidx.compose.material3.SnackbarHostState() }
+    LaunchedEffect(ocrWorkInfos) {
+        if (!hasObservedOcrWork) {
+            handledOcrWorkIds = ocrWorkInfos.map { it.id.toString() }.toSet()
+            hasObservedOcrWork = true
+            return@LaunchedEffect
+        }
+        val finishedWork = ocrWorkInfos.firstOrNull {
+            it.state.isFinished && it.id.toString() !in handledOcrWorkIds
+        } ?: return@LaunchedEffect
+        handledOcrWorkIds = handledOcrWorkIds + finishedWork.id.toString()
+        val message = if (finishedWork.state == androidx.work.WorkInfo.State.SUCCEEDED) {
+            val count = finishedWork.outputData.getInt(PdfOcrWorker.KEY_RECOGNIZED_WORDS, 0)
+            if (count > 0) "Recognized $count words" else "No text found"
+        } else {
+            finishedWork.outputData.getString(PdfOcrWorker.KEY_ERROR)
+                ?.takeIf(String::isNotBlank)
+                ?: "Recognition failed. Check the app log for details."
+        }
+        snackbarHost.showSnackbar(message)
+    }
     val clipboard = LocalClipboardManager.current
     fun recordSavedMark(mark: com.hashim.notepad.data.PdfMark) {
         scope.launch {
@@ -279,7 +301,11 @@ fun PdfReadScreen(
         val request = androidx.work.OneTimeWorkRequestBuilder<PdfOcrWorker>()
             .setInputData(data.build())
             .build()
-        ocrWorkManager.enqueueUniqueWork(ocrWorkName, androidx.work.ExistingWorkPolicy.KEEP, request)
+        android.util.Log.i(
+            "PdfOcrRequest",
+            "Replacing unique work=$ocrWorkName activeId=${ocrWorkInfo?.id} activeState=${ocrWorkInfo?.state}; OCR request has no network/charging constraints",
+        )
+        ocrWorkManager.enqueueUniqueWork(ocrWorkName, androidx.work.ExistingWorkPolicy.REPLACE, request)
     }
 
     BoxWithConstraints(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
@@ -663,7 +689,17 @@ fun PdfReadScreen(
                     statusLabel?.let { label ->
                         AssistChip(
                             onClick = {},
-                            label = { Text(label, maxLines = 1) },
+                            label = {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(label, maxLines = 1)
+                                    if (ocrWorkInfo != null) {
+                                        Spacer(Modifier.width(8.dp))
+                                        androidx.compose.material3.LinearProgressIndicator(
+                                            modifier = Modifier.width(44.dp),
+                                        )
+                                    }
+                                }
+                            },
                             colors = AssistChipDefaults.assistChipColors(
                                 containerColor = MaterialTheme.colorScheme.secondaryContainer,
                                 labelColor = MaterialTheme.colorScheme.onSecondaryContainer,
@@ -737,6 +773,10 @@ fun PdfReadScreen(
                                                         java.util.concurrent.TimeUnit.SECONDS,
                                                     )
                                                     .build()
+                                                android.util.Log.i(
+                                                    "PdfOcrRequest",
+                                                    "Enqueue model work=$modelWorkName policy=KEEP activeId=${modelWorkInfo?.id} activeState=${modelWorkInfo?.state} requiredNetwork=CONNECTED",
+                                                )
                                                 ocrWorkManager.enqueueUniqueWork(
                                                     modelWorkName,
                                                     androidx.work.ExistingWorkPolicy.KEEP,

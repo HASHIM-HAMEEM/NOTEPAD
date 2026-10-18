@@ -359,6 +359,7 @@ fun EditorScreen(
     var showPenButtonSettings by remember { mutableStateOf(false) }
     var zoomPercent by remember { mutableIntStateOf(100) }
     var rulerVisible by remember { mutableStateOf(false) }
+    var stylusConfirmation by remember { mutableStateOf<String?>(null) }
     var drawingActive by remember { mutableStateOf(false) }
     var toolbarAutoHidden by remember { mutableStateOf(false) }
     var toolbarSize by remember { mutableStateOf(IntSize.Zero) }
@@ -668,9 +669,11 @@ fun EditorScreen(
         if (created != null) {
             repo.savePdfMark(created)
             recordAudioItem(created.pageId, "mark", created.id)
-            val converted = target.convertLastStrokeToExternalUndo(stroke) {
-                scope.launch { repo.deletePdfMark(created.id) }
-            }
+            val converted = target.convertLastStrokeToExternalUndo(
+                stroke,
+                undoAction = { scope.launch { repo.deletePdfMark(created.id) } },
+                redoAction = { scope.launch { repo.savePdfMark(created) } },
+            )
             if (!converted) scope.launch { repo.deletePdfMark(created.id) }
         }
     }
@@ -790,8 +793,21 @@ fun EditorScreen(
 
     fun handleStylusToolSwitch(action: StylusButtonAction) {
         when (action) {
-            StylusButtonAction.SWITCH_TO_ERASER -> switchToEraser()
-            StylusButtonAction.PREVIOUS_PEN -> switchToPreviousPen()
+            StylusButtonAction.SWITCH_TO_ERASER -> {
+                switchToEraser()
+                stylusConfirmation = "Eraser"
+            }
+            StylusButtonAction.PREVIOUS_PEN -> {
+                switchToPreviousPen()
+                stylusConfirmation = "Previous pen"
+            }
+        }
+    }
+
+    LaunchedEffect(stylusConfirmation) {
+        if (stylusConfirmation != null) {
+            delay(1200)
+            stylusConfirmation = null
         }
     }
 
@@ -1453,6 +1469,37 @@ fun EditorScreen(
             Box(edgeHintModifier.background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)))
         }
 
+        stylusConfirmation?.let { message ->
+            val chipWidthPx = with(density) { 112.dp.roundToPx() }
+            val gapPx = with(density) { 8.dp.roundToPx() }
+            val toolbarXpx = toolbarX.value.roundToInt()
+            val toolbarYpx = toolbarY.value.roundToInt()
+            val chipX = when (toolbarEdge) {
+                EditorToolbarEdge.TOP, EditorToolbarEdge.BOTTOM ->
+                    toolbarXpx + (toolbarSize.width - chipWidthPx) / 2
+                EditorToolbarEdge.START -> toolbarXpx + toolbarSize.width + gapPx
+                EditorToolbarEdge.END -> toolbarXpx - chipWidthPx - gapPx
+            }.coerceIn(0, (containerWidthPx - chipWidthPx).coerceAtLeast(0))
+            val chipY = when (toolbarEdge) {
+                EditorToolbarEdge.TOP -> toolbarYpx + toolbarSize.height + gapPx
+                EditorToolbarEdge.BOTTOM -> toolbarYpx - with(density) { 40.dp.roundToPx() } - gapPx
+                EditorToolbarEdge.START, EditorToolbarEdge.END ->
+                    toolbarYpx + (toolbarSize.height - with(density) { 40.dp.roundToPx() }) / 2
+            }.coerceIn(0, (containerHeightPx - with(density) { 40.dp.roundToPx() }).coerceAtLeast(0))
+            Surface(
+                modifier = Modifier.offset { IntOffset(chipX, chipY) },
+                shape = MaterialTheme.shapes.large,
+                color = MaterialTheme.colorScheme.secondaryContainer,
+            ) {
+                Text(
+                    message,
+                    Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                )
+            }
+        }
+
         Surface(
             modifier = Modifier.offset { IntOffset(with(density) { 12.dp.roundToPx() }, safeTopPx) }
                 .graphicsLayer {
@@ -1761,14 +1808,51 @@ fun EditorScreen(
     newBlockAt?.let { (x, y) ->
         TextBlockDialog(initial = "", onDismiss = { newBlockAt = null }, onDelete = null) { content ->
             val p = page
-            if (p != null) scope.launch { repo.addTextBlock(p.id, (x - 10f).coerceIn(0f, p.widthPt - 120f), y, (p.widthPt - x).coerceIn(120f, p.widthPt - 24f), content) }
+            if (p != null) {
+                val xPt = (x - 10f).coerceIn(0f, p.widthPt - 120f)
+                val widthPt = (p.widthPt - x).coerceIn(120f, p.widthPt - 24f)
+                scope.launch {
+                    var textBlockId = repo.addTextBlock(p.id, xPt, y, widthPt, content)
+                    surface?.recordExternalAction(
+                        undoAction = { scope.launch { repo.deleteTextBlock(textBlockId, p.id) } },
+                        redoAction = {
+                            scope.launch {
+                                textBlockId = repo.addTextBlock(p.id, xPt, y, widthPt, content)
+                            }
+                        },
+                    )
+                }
+            }
             newBlockAt = null
         }
     }
     editingBlock?.let { b ->
         TextBlockDialog(initial = b.content, onDismiss = { editingBlock = null },
-            onDelete = { scope.launch { repo.deleteTextBlock(b.id, b.pageId) }; editingBlock = null }) { content ->
-            scope.launch { repo.updateTextBlock(b.id, b.pageId, content = content) }
+            onDelete = {
+                var textBlockId = b.id
+                scope.launch {
+                    repo.deleteTextBlock(textBlockId, b.pageId)
+                    surface?.recordExternalAction(
+                        undoAction = {
+                            scope.launch {
+                                textBlockId = repo.addTextBlock(
+                                    b.pageId, b.xPt, b.yPt, b.wPt, b.content,
+                                    b.fontSizePt, b.colorArgb, b.rotationDegrees,
+                                )
+                            }
+                        },
+                        redoAction = { scope.launch { repo.deleteTextBlock(textBlockId, b.pageId) } },
+                    )
+                }
+                editingBlock = null
+            }) { content ->
+            scope.launch {
+                repo.updateTextBlock(b.id, b.pageId, content = content)
+                surface?.recordExternalAction(
+                    undoAction = { scope.launch { repo.updateTextBlock(b.id, b.pageId, content = b.content) } },
+                    redoAction = { scope.launch { repo.updateTextBlock(b.id, b.pageId, content = content) } },
+                )
+            }
             editingBlock = null
         }
     }
