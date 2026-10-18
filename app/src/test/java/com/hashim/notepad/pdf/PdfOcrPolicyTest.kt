@@ -13,6 +13,13 @@ class PdfOcrPolicyTest {
     }
 
     @Test
+    fun arabicPagesUseLowerRenderDpiWhileOtherLanguagesKeepStandardDpi() {
+        assertEquals(200, PdfOcrPolicy.renderDpi("ar"))
+        assertEquals(200, PdfOcrPolicy.renderDpi("ar-SA"))
+        assertEquals(300, PdfOcrPolicy.renderDpi("en"))
+    }
+
+    @Test
     fun explicitRecognitionDoesNotReuseExistingOcrWords() {
         assertFalse(PdfOcrPolicy.shouldSkipPage(isScannedPage = true, hasOcrWords = true, forceRecognition = true))
         assertTrue(PdfOcrPolicy.shouldSkipPage(isScannedPage = true, hasOcrWords = true, forceRecognition = false))

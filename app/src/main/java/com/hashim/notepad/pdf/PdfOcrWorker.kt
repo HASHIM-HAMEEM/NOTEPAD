@@ -52,7 +52,9 @@ class PdfOcrWorker(
                     setProgress(Data.Builder().putInt(KEY_COMPLETED, pageOrder + 1).putInt(KEY_TOTAL, pdfPages.size).build())
                     return@forEachIndexed
                 }
-                val targetWidth = (page.widthPt * 300f / 72f).roundToInt().coerceIn(256, 4096)
+                val targetDpi = PdfOcrPolicy.renderDpi(notebook.language)
+                val targetWidth = (page.widthPt * targetDpi / 72f).roundToInt().coerceIn(256, 4096)
+                Log.i(TAG, "Rendering OCR page=${page.id} width=$targetWidth dpi=$targetDpi")
                 val bitmap = withContext(PdfiumDispatcher.dispatcher) {
                     PdfPageSource(
                         applicationContext,

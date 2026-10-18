@@ -1170,6 +1170,8 @@ fun PdfReadScreen(
                     onSearchHit = { hit -> showSearchHit(searchResults.indexOf(hit).coerceAtLeast(0)) },
                     onSearchResults = ::acceptSearchResults,
                     initialQuery = searchQuery,
+                    onQueryChange = { searchQuery = it },
+                    searchRefreshKey = ocrWorkInfos.map { it.id to it.state },
                     onAudioRecordingSelected = { selectedAudioRecordingId = it; sidebarOpen = false },
                     modifier = Modifier.fillMaxSize(),
                 )
@@ -1190,6 +1192,8 @@ fun PdfReadScreen(
                     onSearchHit = { hit -> showSearchHit(searchResults.indexOf(hit).coerceAtLeast(0)) },
                     onSearchResults = ::acceptSearchResults,
                     initialQuery = searchQuery,
+                    onQueryChange = { searchQuery = it },
+                    searchRefreshKey = ocrWorkInfos.map { it.id to it.state },
                     onAudioRecordingSelected = { selectedAudioRecordingId = it; sidebarOpen = false },
                     modifier = Modifier.fillMaxWidth().heightIn(max = 640.dp),
                 )

@@ -3,6 +3,9 @@ package com.hashim.notepad.pdf
 internal object PdfOcrPolicy {
     private const val MIN_ARABIC_WORDS_FOR_RETRY = 3
 
+    fun renderDpi(language: String): Int =
+        if (language.lowercase().substringBefore('-') == "ar") 200 else 300
+
     fun shouldSkipPage(isScannedPage: Boolean, hasOcrWords: Boolean, forceRecognition: Boolean): Boolean =
         !isScannedPage || (hasOcrWords && !forceRecognition)
 

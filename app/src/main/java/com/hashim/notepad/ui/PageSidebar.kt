@@ -144,6 +144,8 @@ internal fun PageSidebar(
     onSearchHit: (PdfTextSearchHit) -> Unit = {},
     onSearchResults: (List<PdfTextSearchHit>) -> Unit = {},
     initialQuery: String = "",
+    onQueryChange: (String) -> Unit = {},
+    searchRefreshKey: Any? = null,
     onAudioRecordingSelected: (String) -> Unit = {},
 ) {
     val context = LocalContext.current
@@ -204,7 +206,7 @@ internal fun PageSidebar(
         val notebookId = pages.firstOrNull()?.notebookId ?: return@LaunchedEffect
         repo.pdfMarks(notebookId).collect { marks = it.filterNot(PdfMark::deleted) }
     }
-    LaunchedEffect(query, assetId, pages, marks) {
+    LaunchedEffect(query, assetId, pages, marks, searchRefreshKey) {
         searchHits = emptyList()
         onSearchResults(emptyList())
         val id = assetId ?: return@LaunchedEffect
@@ -452,7 +454,10 @@ internal fun PageSidebar(
                 Column(Modifier.fillMaxSize().padding(12.dp)) {
                     OutlinedTextField(
                         value = query,
-                        onValueChange = { query = it },
+                        onValueChange = {
+                            query = it
+                            onQueryChange(it)
+                        },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
                         label = { Text("Search this PDF") },
