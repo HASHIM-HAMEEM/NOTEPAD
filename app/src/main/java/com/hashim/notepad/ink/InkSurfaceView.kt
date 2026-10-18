@@ -288,6 +288,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     private data class StylusButtonPress(val downTime: Long, var strokeIntervened: Boolean)
     private val stylusButtonPresses = HashMap<Int, StylusButtonPress>()
     private val stylusButtonStates = HashMap<Int, Int>()
+    private val stylusButtonDebouncer = StylusButtonDebouncer()
     private var highlighterStoredBrush: Brush? = null
     private var highlighterRenderBrush: Brush? = null
     private var highlighterFirstInput: StrokeInput? = null
@@ -1735,7 +1736,9 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
             MotionEvent.BUTTON_STYLUS_SECONDARY -> secondaryButtonAction
             else -> return
         }
-        onStylusToolSwitch?.invoke(action)
+        val listener = onStylusToolSwitch ?: return
+        if (!stylusButtonDebouncer.accept(button, event.eventTime)) return
+        listener(action)
     }
 
     private fun beginStylusButton(button: Int, eventTime: Long) {
@@ -1756,7 +1759,9 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
             MotionEvent.BUTTON_STYLUS_SECONDARY -> secondaryButtonAction
             else -> return
         }
-        onStylusToolSwitch?.invoke(action)
+        val listener = onStylusToolSwitch ?: return
+        if (!stylusButtonDebouncer.accept(button, eventTime)) return
+        listener(action)
     }
 
     private fun observeStylusButtons(event: MotionEvent) {

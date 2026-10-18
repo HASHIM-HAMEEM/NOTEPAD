@@ -32,4 +32,30 @@ class StylusButtonKeyMappingTest {
         assertFalse(StylusButtonKeyMapping.shouldDispatch(KeyEvent.ACTION_DOWN, 1))
         assertFalse(StylusButtonKeyMapping.shouldDispatch(KeyEvent.ACTION_UP, 0))
     }
+
+    @Test
+    fun suppressesMotionButtonEventAfterMatchingKeyEvent() {
+        val debouncer = StylusButtonDebouncer()
+        val secondaryButton = MotionEvent.BUTTON_STYLUS_SECONDARY
+
+        assertTrue(debouncer.accept(secondaryButton, 1_000L))
+        assertFalse(debouncer.accept(secondaryButton, 1_200L))
+    }
+
+    @Test
+    fun acceptsDifferentButtonsWithinTheSameWindow() {
+        val debouncer = StylusButtonDebouncer()
+
+        assertTrue(debouncer.accept(MotionEvent.BUTTON_STYLUS_SECONDARY, 1_000L))
+        assertTrue(debouncer.accept(MotionEvent.BUTTON_STYLUS_PRIMARY, 1_100L))
+    }
+
+    @Test
+    fun acceptsTheSameButtonAgainAfterTheDebounceWindow() {
+        val debouncer = StylusButtonDebouncer()
+        val primaryButton = MotionEvent.BUTTON_STYLUS_PRIMARY
+
+        assertTrue(debouncer.accept(primaryButton, 1_000L))
+        assertTrue(debouncer.accept(primaryButton, 1_251L))
+    }
 }

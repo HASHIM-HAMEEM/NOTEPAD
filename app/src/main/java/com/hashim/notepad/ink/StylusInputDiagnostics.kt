@@ -29,6 +29,19 @@ internal object StylusButtonKeyMapping {
         action == KeyEvent.ACTION_DOWN && repeatCount == 0
 }
 
+internal class StylusButtonDebouncer(private val windowMs: Long = 250L) {
+    private val lastAcceptedEventByButton = mutableMapOf<Int, Long>()
+
+    fun accept(button: Int, eventTimeMs: Long): Boolean {
+        val previousEventTime = lastAcceptedEventByButton[button]
+        if (previousEventTime != null && eventTimeMs - previousEventTime in 0L..windowMs) {
+            return false
+        }
+        lastAcceptedEventByButton[button] = eventTimeMs
+        return true
+    }
+}
+
 object StylusInputDiagnostics {
     private val _lastEvent = MutableStateFlow("Last stylus event: none")
     val lastEvent = _lastEvent.asStateFlow()
