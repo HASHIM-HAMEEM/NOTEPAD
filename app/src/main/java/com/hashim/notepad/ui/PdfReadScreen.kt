@@ -90,6 +90,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.TransformOrigin
@@ -174,6 +175,21 @@ internal fun zoomPdfAtFocus(
         zoom = nextZoom,
         panX = currentFocusX - (previousFocusX - currentPanX) * zoomFactor,
         panY = currentFocusY - (previousFocusY - currentPanY) * zoomFactor,
+    )
+}
+
+internal fun clampPdfReadZoomTransform(
+    transform: PdfReadZoomTransform,
+    viewportWidth: Float,
+    viewportHeight: Float,
+): PdfReadZoomTransform {
+    val zoom = transform.zoom.coerceIn(1f, 4f)
+    if (zoom == 1f) return PdfReadZoomTransform(1f, 0f, 0f)
+    if (viewportWidth <= 0f || viewportHeight <= 0f) return transform.copy(zoom = zoom)
+    return transform.copy(
+        zoom = zoom,
+        panX = transform.panX.coerceIn(viewportWidth * (1f - zoom), 0f),
+        panY = transform.panY.coerceIn(viewportHeight * (1f - zoom), 0f),
     )
 }
 
@@ -377,18 +393,23 @@ fun PdfReadScreen(
         }
         val pageTransform = if (zoom != 1f || panX != 0f || panY != 0f) {
             Modifier.graphicsLayer {
+                val bounded = clampPdfReadZoomTransform(
+                    PdfReadZoomTransform(zoom, panX, panY),
+                    size.width,
+                    size.height,
+                )
                 transformOrigin = TransformOrigin(0f, 0f)
-                scaleX = zoom
-                scaleY = zoom
-                translationX = panX
-                translationY = panY
+                scaleX = bounded.zoom
+                scaleY = bounded.zoom
+                translationX = bounded.panX
+                translationY = bounded.panY
             }
         } else {
             Modifier
         }
         LazyColumn(
             state = listState,
-            modifier = Modifier.fillMaxSize().padding(start = sidebarWidth).pointerInput(Unit) {
+            modifier = Modifier.fillMaxSize().padding(start = sidebarWidth).clipToBounds().pointerInput(Unit) {
                 awaitEachGesture {
                     awaitFirstDown(requireUnconsumed = false)
                     do {
@@ -411,9 +432,14 @@ fun PdfReadScreen(
                                 currentFocusY = currentCenter.y,
                                 requestedZoom = zoom * currentDistance / previousDistance,
                             )
-                            zoom = transform.zoom
-                            panX = transform.panX
-                            panY = transform.panY
+                            val bounded = clampPdfReadZoomTransform(
+                                transform,
+                                size.width.toFloat(),
+                                size.height.toFloat(),
+                            )
+                            zoom = bounded.zoom
+                            panX = bounded.panX
+                            panY = bounded.panY
                             pointers.forEach { it.consume() }
                         }
                     } while (event.changes.any { it.pressed })

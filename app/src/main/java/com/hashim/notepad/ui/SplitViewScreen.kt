@@ -38,9 +38,11 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.spring
 import com.hashim.notepad.data.NotePadRepository
@@ -225,7 +227,7 @@ private fun SplitDivider(
         onRatioChange((ratio + delta / (widthPx - dividerWidthPx).coerceAtLeast(1f)).coerceIn(0.25f, 0.75f))
     }
     Column(
-        Modifier.width(40.dp).fillMaxHeight()
+        Modifier.width(40.dp).fillMaxHeight().zIndex(1f)
             .draggable(
                 state = draggableState,
                 orientation = Orientation.Horizontal,
@@ -290,7 +292,7 @@ private fun SplitDocumentPane(
         return
     }
     val writePdf = page.kind == PageKind.PDF && editingPdfPageId == page.id
-    Box(modifier.fillMaxSize()) {
+    Box(modifier.fillMaxSize().clipToBounds()) {
         if (page.kind == PageKind.PDF && !writePdf) {
             PdfReadScreen(
                 repo = repo,

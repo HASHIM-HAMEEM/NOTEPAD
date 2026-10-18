@@ -30,6 +30,37 @@ class PdfReadZoomTransformTest {
     }
 
     @Test
+    fun clampsPanToKeepTheZoomedContentInsideTheViewport() {
+        val leftAndBottom = clampPdfReadZoomTransform(
+            PdfReadZoomTransform(2.6f, -2_000f, 1_000f),
+            viewportWidth = 600f,
+            viewportHeight = 800f,
+        )
+        assertEquals(-960f, leftAndBottom.panX, 0.001f)
+        assertEquals(0f, leftAndBottom.panY, 0.001f)
+
+        val rightAndTop = clampPdfReadZoomTransform(
+            PdfReadZoomTransform(2.6f, 2_000f, -2_000f),
+            viewportWidth = 600f,
+            viewportHeight = 800f,
+        )
+        assertEquals(0f, rightAndTop.panX, 0.001f)
+        assertEquals(-1_280f, rightAndTop.panY, 0.001f)
+    }
+
+    @Test
+    fun resetsPanWhenTheZoomedTransformReturnsToBaseScale() {
+        assertEquals(
+            PdfReadZoomTransform(1f, 0f, 0f),
+            clampPdfReadZoomTransform(
+                PdfReadZoomTransform(1f, -400f, 300f),
+                viewportWidth = 600f,
+                viewportHeight = 800f,
+            ),
+        )
+    }
+
+    @Test
     fun rendersHigherResolutionPreviewsUpToThePixelBudgetCap() {
         assertEquals(2400, pdfPreviewRenderWidth(1200, 1f, 2f))
         assertEquals(MAX_PDF_PREVIEW_WIDTH_PX, pdfPreviewRenderWidth(1800, 1f, 4f))
