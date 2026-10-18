@@ -1,12 +1,16 @@
 package com.hashim.notepad.export
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import com.hashim.notepad.data.NotePadRepository
 import com.hashim.notepad.data.Page
 import com.hashim.notepad.data.PageKind
 import com.hashim.notepad.data.PdfMark
+import com.hashim.notepad.data.TextBlock
 import com.hashim.notepad.ink.InkBrushFamilies
 import com.hashim.notepad.ink.StrokeStore
+import com.hashim.notepad.ink.TextBlockPainter
 import com.hashim.notepad.pdf.PdfMarkGeometry
 import com.tom_roush.pdfbox.pdmodel.PDPageContentStream
 import com.tom_roush.pdfbox.pdmodel.PDDocument
@@ -16,6 +20,7 @@ import com.tom_roush.pdfbox.pdmodel.graphics.color.PDColor
 import com.tom_roush.pdfbox.pdmodel.graphics.color.PDDeviceRGB
 import com.tom_roush.pdfbox.pdmodel.graphics.blend.BlendMode
 import com.tom_roush.pdfbox.pdmodel.graphics.image.PDImageXObject
+import com.tom_roush.pdfbox.pdmodel.graphics.image.LosslessFactory
 import com.tom_roush.pdfbox.pdmodel.graphics.state.PDExtendedGraphicsState
 import com.tom_roush.pdfbox.pdmodel.graphics.state.RenderingMode
 import com.tom_roush.pdfbox.pdmodel.font.PDType0Font
@@ -31,6 +36,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.IOException
+import java.text.Bidi
 
 data class PdfExportOptions(
     val pageRange: IntRange? = null,
@@ -250,12 +256,9 @@ class PdfBoxExporter(private val context: Context, private val repo: NotePadRepo
                     document = document,
                     stream = stream,
                     fontFile = font,
-                    text = block.content,
-                    colorArgb = block.colorArgb ?: android.graphics.Color.BLACK,
-                    fontSize = block.fontSizePt,
-                    x = block.xPt,
-                    baseline = page.heightPt - block.yPt - block.fontSizePt,
-                    rotationDegrees = -block.rotationDegrees,
+                    block = block,
+                    pageHeight = page.heightPt,
+                    context = context,
                 )
             }
         }
@@ -271,14 +274,14 @@ class PdfBoxExporter(private val context: Context, private val repo: NotePadRepo
                 stream.setFont(font, 10f)
                 words.sortedBy { it.index }.forEach { word ->
                     val sanitizedText = PdfTextSanitizer.sanitize(word.text) { codePoint ->
-                        runCatching { font.hasGlyph(codePoint) }.getOrDefault(false)
+                        fontCanEncode(font, codePoint)
                     }
                     if (sanitizedText.isEmpty()) return@forEach
                     stream.beginText()
                     try {
                         stream.setFont(font, (word.bottom - word.top).coerceAtLeast(1f))
                         stream.newLineAtOffset(word.left, model.heightPt - word.bottom)
-                        stream.showText(sanitizedText)
+                        stream.showText(pdfTextLayerOrder(sanitizedText))
                     } finally {
                         stream.endText()
                     }
@@ -352,9 +355,65 @@ internal fun drawTextBlock(
 ) {
     val font = PDType0Font.load(document, fontFile, true)
     val sanitizedText = PdfTextSanitizer.sanitize(text) { codePoint ->
-        runCatching { font.hasGlyph(codePoint) }.getOrDefault(false)
+        fontCanEncode(font, codePoint)
     }
     if (sanitizedText.isEmpty()) return
+    drawVectorTextBlock(stream, font, pdfTextLayerOrder(sanitizedText), colorArgb, fontSize, x, baseline, rotationDegrees)
+}
+
+private fun drawTextBlock(
+    document: PDDocument,
+    stream: PDPageContentStream,
+    fontFile: java.io.InputStream,
+    block: TextBlock,
+    pageHeight: Float,
+    context: Context,
+) {
+    val font = PDType0Font.load(document, fontFile, true)
+    val canEncode: (Int) -> Boolean = { codePoint -> fontCanEncode(font, codePoint) }
+    val baseline = pageHeight - block.yPt - block.fontSizePt
+    val rotationDegrees = -block.rotationDegrees
+    if (requiresRasterText(block.content, canEncode)) {
+        drawRasterTextBlock(document, stream, block, pageHeight, context)
+        val searchableText = PdfTextSanitizer.sanitize(block.content, canEncode)
+        if (searchableText.isNotEmpty()) {
+            drawInvisibleTextBlock(
+                stream,
+                font,
+                pdfTextLayerOrder(searchableText),
+                block.fontSizePt,
+                block.xPt,
+                baseline,
+                rotationDegrees,
+            )
+        }
+    } else {
+        val sanitizedText = PdfTextSanitizer.sanitize(block.content, canEncode)
+        if (sanitizedText.isNotEmpty()) {
+            drawVectorTextBlock(
+                stream,
+                font,
+                pdfTextLayerOrder(sanitizedText),
+                block.colorArgb ?: android.graphics.Color.BLACK,
+                block.fontSizePt,
+                block.xPt,
+                baseline,
+                rotationDegrees,
+            )
+        }
+    }
+}
+
+private fun drawVectorTextBlock(
+    stream: PDPageContentStream,
+    font: PDType0Font,
+    text: String,
+    colorArgb: Int,
+    fontSize: Float,
+    x: Float,
+    baseline: Float,
+    rotationDegrees: Float,
+) {
     stream.setNonStrokingColor(
         colorArgb ushr 16 and 0xff,
         colorArgb ushr 8 and 0xff,
@@ -370,8 +429,132 @@ internal fun drawTextBlock(
                 baseline,
             ),
         )
-        stream.showText(sanitizedText)
+        stream.showText(text)
     } finally {
         stream.endText()
+    }
+}
+
+private fun drawRasterTextBlock(
+    document: PDDocument,
+    stream: PDPageContentStream,
+    block: TextBlock,
+    pageHeight: Float,
+    context: Context,
+) {
+    val layout = TextBlockPainter.layout(block, android.graphics.Color.WHITE, context)
+    val width = layout.width.coerceAtLeast(1)
+    val height = layout.height.coerceAtLeast(1)
+    val bitmap = Bitmap.createBitmap(width * 4, height * 4, Bitmap.Config.ARGB_8888)
+    try {
+        bitmap.eraseColor(android.graphics.Color.TRANSPARENT)
+        Canvas(bitmap).apply {
+            scale(4f, 4f)
+            layout.draw(this)
+        }
+        val image = LosslessFactory.createFromImage(document, bitmap)
+        stream.saveGraphicsState()
+        try {
+            val angle = Math.toRadians(-block.rotationDegrees.toDouble())
+            val cosine = Math.cos(angle).toFloat()
+            val sine = Math.sin(angle).toFloat()
+            val pivotX = block.xPt
+            val pivotY = pageHeight - block.yPt - block.fontSizePt
+            val translateX = pivotX - cosine * pivotX + sine * pivotY
+            val translateY = pivotY - sine * pivotX - cosine * pivotY
+            stream.transform(
+                Matrix(
+                    cosine,
+                    sine,
+                    -sine,
+                    cosine,
+                    translateX,
+                    translateY,
+                ),
+            )
+            stream.drawImage(
+                image,
+                block.xPt,
+                pageHeight - block.yPt - height,
+                width.toFloat(),
+                height.toFloat(),
+            )
+        } finally {
+            stream.restoreGraphicsState()
+        }
+    } finally {
+        bitmap.recycle()
+    }
+}
+
+private fun drawInvisibleTextBlock(
+    stream: PDPageContentStream,
+    font: PDType0Font,
+    text: String,
+    fontSize: Float,
+    x: Float,
+    baseline: Float,
+    rotationDegrees: Float,
+) {
+    stream.saveGraphicsState()
+    try {
+        stream.setRenderingMode(RenderingMode.NEITHER)
+        stream.beginText()
+        try {
+            stream.setFont(font, fontSize.coerceAtLeast(1f))
+            stream.setTextMatrix(
+                Matrix.getRotateInstance(
+                    Math.toRadians(rotationDegrees.toDouble()),
+                    x,
+                    baseline,
+                ),
+            )
+            stream.showText(text)
+        } finally {
+            stream.endText()
+        }
+    } finally {
+        stream.restoreGraphicsState()
+    }
+}
+
+private fun requiresRasterText(text: String, canEncode: (Int) -> Boolean): Boolean {
+    var index = 0
+    while (index < text.length) {
+        val codePoint = text.codePointAt(index)
+        if (codePoint in 0x0590..0x08FF ||
+            codePoint in 0xFB50..0xFDFF ||
+            codePoint in 0xFE70..0xFEFF ||
+            !canEncode(codePoint)
+        ) {
+            return true
+        }
+        index += Character.charCount(codePoint)
+    }
+    return false
+}
+
+private fun fontCanEncode(font: PDType0Font, codePoint: Int): Boolean =
+    runCatching { font.encode(String(Character.toChars(codePoint))).isNotEmpty() }.getOrDefault(false)
+
+private fun pdfTextLayerOrder(text: String): String {
+    val bidi = Bidi(text, Bidi.DIRECTION_DEFAULT_LEFT_TO_RIGHT)
+    if (bidi.runCount == 0) return text
+    return buildString(text.length) {
+        for (run in 0 until bidi.runCount) {
+            val start = bidi.getRunStart(run)
+            val end = bidi.getRunLimit(run)
+            val runText = text.substring(start, end)
+            if (bidi.getRunLevel(run) and 1 == 0) {
+                append(runText)
+            } else {
+                var index = runText.length
+                while (index > 0) {
+                    val codePoint = runText.codePointBefore(index)
+                    index -= Character.charCount(codePoint)
+                    appendCodePoint(codePoint)
+                }
+            }
+        }
     }
 }

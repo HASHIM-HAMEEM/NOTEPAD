@@ -35,6 +35,13 @@ class PdfTextSanitizerTest {
     }
 
     @Test
+    fun keepsEncodableArabicAndStripsBidiControls() {
+        val text = "Release \u200Fلغة"
+
+        assertEquals("Release لغة", PdfTextSanitizer.sanitize(text) { true })
+    }
+
+    @Test
     fun processesSurrogatePairsAsSingleCodePoints() {
         val text = "A\uD83D\uDE00ب"
         val checkedCodePoints = mutableListOf<Int>()

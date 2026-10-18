@@ -7,8 +7,10 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.hashim.notepad.data.Asset
 import com.hashim.notepad.data.NotePadRepository
 import com.hashim.notepad.data.OcrWord
+import com.hashim.notepad.data.PageKind
 import com.hashim.notepad.data.PdfMark
 import com.hashim.notepad.data.PdfMarkKind
+import com.hashim.notepad.ink.TextBlockPainter
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import com.tom_roush.pdfbox.pdmodel.PDDocument
 import com.tom_roush.pdfbox.pdmodel.PDPage
@@ -24,6 +26,7 @@ import com.hashim.notepad.pdf.PdfGeometryText
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import java.io.File
+import java.text.Normalizer
 import java.util.UUID
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertEquals
@@ -34,6 +37,74 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class PdfBoxTextExportInstrumentedTest {
+    @Test
+    fun arabicTextBlockExportsVisibleRasterAndSearchableText() = runBlocking {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val context = instrumentation.targetContext
+        val databaseName = "arabic-text-export-test.db"
+        context.deleteDatabase(databaseName)
+        val repo = NotePadRepository(context, databaseName)
+        val outputName = "arabic-text-export"
+        try {
+            val notebookId = repo.createNotebook("Arabic text export", null)
+            repo.addPage(notebookId, PageKind.BLANK, widthPt = 420f, heightPt = 320f)
+            val page = repo.pages(notebookId).first().single()
+            repo.addTextBlock(
+                pageId = page.id,
+                xPt = 20f,
+                yPt = 80f,
+                wPt = 360f,
+                content = "Release121 text hello 😀 لغة",
+                fontSizePt = 18f,
+                colorArgb = AndroidColor.BLACK,
+            )
+            val block = repo.textBlocks(page.id).first().single()
+            val layout = TextBlockPainter.layout(block, AndroidColor.WHITE, context)
+
+            val output = PdfBoxExporter(context, repo).exportNotebook(notebookId, outputName)
+            PDDocument.load(output).use { exported ->
+                val text = Normalizer.normalize(PDFTextStripper().getText(exported), Normalizer.Form.NFKC)
+                assertTrue("Expected Release121 in extracted text: $text", text.contains("Release121"))
+                assertTrue("Expected Arabic in extracted text: $text", text.contains("لغة"))
+            }
+
+            val bitmap = PdfPageSource(context, output).use { it.render(0, 840) }
+            val arabicStart = block.content.indexOf("لغة")
+            val arabicEnd = arabicStart + "لغة".length
+            val arabicPositions = (arabicStart..arabicEnd).flatMap { offset ->
+                listOf(layout.getPrimaryHorizontal(offset), layout.getSecondaryHorizontal(offset))
+            }
+            val line = layout.getLineForOffset(arabicStart)
+            val left = ((block.xPt + arabicPositions.minOrNull()!! - 2f) / page.widthPt * bitmap.width)
+                .toInt().coerceIn(0, bitmap.width - 1)
+            val right = ((block.xPt + arabicPositions.maxOrNull()!! + 2f) / page.widthPt * bitmap.width)
+                .toInt().coerceIn(left + 1, bitmap.width)
+            val top = ((block.yPt + layout.getLineTop(line)) / page.heightPt * bitmap.height).toInt().coerceIn(0, bitmap.height - 1)
+            val bottom = ((block.yPt + layout.getLineBottom(line)) / page.heightPt * bitmap.height)
+                .toInt().coerceIn(top + 1, bitmap.height)
+            var darkPixelsInRightHalf = 0
+            for (y in top until bottom) {
+                for (x in left until right) {
+                    val pixel = bitmap.getPixel(x, y)
+                    if (AndroidColor.red(pixel) < 100 &&
+                        AndroidColor.green(pixel) < 100 &&
+                        AndroidColor.blue(pixel) < 100
+                    ) {
+                        darkPixelsInRightHalf++
+                    }
+                }
+            }
+            assertTrue(
+                "Expected visible Arabic glyph pixels in the right half of the text block",
+                darkPixelsInRightHalf > 0,
+            )
+        } finally {
+            repo.helper.close()
+            context.deleteDatabase(databaseName)
+            File(context.cacheDir, "exports/$outputName.pdf").delete()
+        }
+    }
+
     @Test
     fun textBlockExportsAsSearchableEmbeddedText() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
@@ -306,6 +377,44 @@ class PdfBoxTextExportInstrumentedTest {
             repo.helper.close()
             context.deleteDatabase(databaseName)
             source.delete()
+            File(context.cacheDir, "exports/$outputName.pdf").delete()
+        }
+    }
+
+    @Test
+    fun arabicOcrTextExportsAsInvisibleSearchableText() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val databaseName = "arabic-ocr-export-test.db"
+        context.deleteDatabase(databaseName)
+        val repo = NotePadRepository(context, databaseName)
+        val outputName = "arabic-ocr-export"
+        try {
+            val notebookId = repo.createNotebook("Arabic OCR export", null)
+            repo.addPage(notebookId, PageKind.BLANK, widthPt = 300f, heightPt = 300f)
+            val page = repo.pages(notebookId).first().single()
+            repo.replaceOcrWords(
+                page.id,
+                listOf(OcrWord(page.id, 0, "لغة", 40f, 50f, 120f, 70f, 99f)),
+                "ara",
+            )
+
+            val output = PdfBoxExporter(context, repo).exportNotebook(notebookId, outputName)
+            PDDocument.load(output).use { exported ->
+                val text = Normalizer.normalize(PDFTextStripper().getText(exported), Normalizer.Form.NFKC)
+                assertTrue("Expected Arabic OCR text in the invisible text layer: $text", text.contains("لغة"))
+            }
+
+            val bitmap = PdfPageSource(context, output).use { it.render(0, 600) }
+            var nonWhitePixels = 0
+            for (y in 0 until bitmap.height) {
+                for (x in 0 until bitmap.width) {
+                    if (bitmap.getPixel(x, y) != AndroidColor.WHITE) nonWhitePixels++
+                }
+            }
+            assertEquals("Invisible OCR text must not add visible pixels", 0, nonWhitePixels)
+        } finally {
+            repo.helper.close()
+            context.deleteDatabase(databaseName)
             File(context.cacheDir, "exports/$outputName.pdf").delete()
         }
     }
