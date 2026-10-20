@@ -334,7 +334,7 @@ fun NotebooksScreen(
             },
             modifier = Modifier.weight(1f).fillMaxHeight(),
             contentPadding = if (phoneLayout) {
-                PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 120.dp)
+                PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 168.dp)
             } else {
                 PaddingValues(start = 24.dp, end = 24.dp, top = 8.dp, bottom = 184.dp)
             },
@@ -1218,7 +1218,7 @@ private fun ContinueReadingCard(
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val scale by animateFloatAsState(
-        if (pressed) 0.98f else 1f,
+        if (pressed) Motion.pressScale else 1f,
         tween(Motion.press, easing = Motion.emphasized),
         label = "continue-press",
     )
@@ -1305,7 +1305,7 @@ private fun NotebookCard(
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val scale by animateFloatAsState(
-        if (pressed) 0.96f else 1f,
+        if (pressed) Motion.pressScale else 1f,
         tween(Motion.press, easing = Motion.emphasized),
         label = "press",
     )
@@ -1468,17 +1468,17 @@ private fun EmptyLibrary(onNew: () -> Unit, onImport: () -> Unit) {
 
 @Composable
 internal fun SheetTitle(text: String) {
-    Text(text, style = MaterialTheme.typography.titleLarge.copy(fontFamily = titleFontFamily(text)), fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 8.dp))
+    Text(text, style = MaterialTheme.typography.headlineSmall.copy(fontFamily = titleFontFamily(text)), modifier = Modifier.padding(start = 24.dp, end = 24.dp, top = 4.dp, bottom = 12.dp))
 }
 
 @Composable
 internal fun SheetRow(icon: ImageVector, title: String, subtitle: String? = null, tint: Color = MaterialTheme.colorScheme.onSurface, onClick: () -> Unit) {
     ListItem(
-        leadingContent = { Icon(icon, null, tint = tint) },
-        headlineContent = { Text(title, color = tint) },
-        supportingContent = subtitle?.let { { Text(it) } },
+        leadingContent = { Icon(icon, null, tint = tint, modifier = Modifier.size(22.dp)) },
+        headlineContent = { Text(title, color = tint, style = MaterialTheme.typography.bodyLarge) },
+        supportingContent = subtitle?.let { { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) } },
         colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-        modifier = Modifier.clickable(onClick = onClick).padding(horizontal = 8.dp),
+        modifier = Modifier.heightIn(min = 52.dp).clickable(onClick = onClick).padding(horizontal = 8.dp),
     )
 }
 
@@ -1532,9 +1532,9 @@ internal fun NameDialog(title: String, initial: String, confirm: String, onDismi
         onDismissRequest = onDismiss,
         title = { Text(title) },
         text = { OutlinedTextField(value = text, onValueChange = { text = it }, singleLine = true, placeholder = { Text("Title") }, shape = MaterialTheme.shapes.medium, modifier = Modifier.fillMaxWidth()) },
-        confirmButton = { Button(enabled = text.isNotBlank(), onClick = { onConfirm(text.trim()) }, shape = CircleShape) { Text(confirm) } },
+        confirmButton = { Button(enabled = text.isNotBlank(), onClick = { onConfirm(text.trim()) }, shape = MaterialTheme.shapes.small) { Text(confirm) } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-        shape = MaterialTheme.shapes.extraLarge,
+        shape = MaterialTheme.shapes.large,
     )
 }
 

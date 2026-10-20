@@ -2812,7 +2812,7 @@ private fun ColorDot(
     enabled: Boolean = true,
     onClick: () -> Unit,
 ) {
-    val ring by animateFloatAsState(if (selected) 1f else 0f, label = "ring")
+    val ring by animateFloatAsState(if (selected) 1f else 0f, tween(Motion.press, easing = Motion.emphasized), label = "ring")
     val hairline = android.graphics.Color.luminance(argb) > 0.78f
     val ringColor = MaterialTheme.colorScheme.onSurface
     val hairlineColor = MaterialTheme.colorScheme.outlineVariant

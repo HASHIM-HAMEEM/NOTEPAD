@@ -165,6 +165,8 @@ object Motion {
     const val medium = 200
     const val long = 300
     const val press = 150
+    /** Every tappable card/tile scales to this while pressed, so the whole app answers touch the same way. */
+    const val pressScale = 0.97f
     const val chrome = 200
     const val shared = 300
 }
