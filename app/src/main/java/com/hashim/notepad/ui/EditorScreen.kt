@@ -300,14 +300,16 @@ fun EditorScreen(
     var pageSidebarOpen by rememberSaveable { mutableStateOf(false) }
     var selectedAudioRecordingId by rememberSaveable(notebookId) { mutableStateOf<String?>(null) }
     var requestedAudioSeekMs by remember { mutableStateOf<Long?>(null) }
+    // Phones keep the tool pill within thumb reach; tablets dock it at the top. A dragged position wins.
+    val defaultToolbarEdge = if (androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 600) EditorToolbarEdge.BOTTOM else EditorToolbarEdge.TOP
     var toolbarEdge by remember(preferences) {
         mutableStateOf(
             runCatching {
                 EditorToolbarEdge.valueOf(
-                    preferences.getString("editor_toolbar_edge", EditorToolbarEdge.TOP.name)
-                        ?: EditorToolbarEdge.TOP.name,
+                    preferences.getString("editor_toolbar_edge", defaultToolbarEdge.name)
+                        ?: defaultToolbarEdge.name,
                 )
-            }.getOrDefault(EditorToolbarEdge.TOP),
+            }.getOrDefault(defaultToolbarEdge),
         )
     }
     var toolbarPinned by remember(preferences) {

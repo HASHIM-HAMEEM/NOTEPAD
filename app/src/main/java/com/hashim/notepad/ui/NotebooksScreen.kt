@@ -816,8 +816,8 @@ private fun AppearanceSheet(
 ) {
     ModalBottomSheet(
         onDismissRequest = onDismiss,
-        shape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp),
-        containerColor = MaterialTheme.colorScheme.surfaceContainer,
+        shape = RoundedCornerShape(topStart = Spec.sheetRadius, topEnd = Spec.sheetRadius),
+        containerColor = NotePadTheme.tokens.surface,
     ) {
         SheetTitle("Appearance")
         Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -826,8 +826,8 @@ private fun AppearanceSheet(
                 Surface(
                     onClick = { onThemeChange(mode) },
                     shape = MaterialTheme.shapes.medium,
-                    color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer,
-                    border = if (selected) BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary) else null,
+                    color = if (selected) NotePadTheme.tokens.accentSoft else NotePadTheme.tokens.bg,
+                    border = BorderStroke(Spec.hairline, if (selected) NotePadTheme.tokens.accent else NotePadTheme.tokens.border),
                     modifier = Modifier.weight(1f),
                 ) {
                     Column(Modifier.padding(vertical = 14.dp), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -1447,10 +1447,10 @@ private fun LanguageRow(current: String, onPick: (String) -> Unit) {
 @Composable
 private fun ThemeSwatch(mode: ThemeMode) {
     val (bg, fg) = when (mode) {
-        ThemeMode.LIGHT -> Color(0xFFF5F5F7) to Color(0xFFB4532A)
-        ThemeMode.DARK -> Color(0xFF1B1916) to Color(0xFFF0A47C)
-        ThemeMode.SEPIA -> Color(0xFFF1E8D8) to Color(0xFFB4532A)
-        ThemeMode.SYSTEM -> MaterialTheme.colorScheme.surfaceContainerLowest to MaterialTheme.colorScheme.primary
+        ThemeMode.LIGHT -> LightTokens.bg to LightTokens.ink
+        ThemeMode.DARK -> DarkTokens.bg to DarkTokens.ink
+        ThemeMode.SEPIA -> PaperTokens.bg to PaperTokens.ink
+        ThemeMode.SYSTEM -> NotePadTheme.tokens.surface to NotePadTheme.tokens.accent
     }
     Box(Modifier.size(40.dp, 28.dp).clip(RoundedCornerShape(6.dp)).background(bg).border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(6.dp))) {
         Box(Modifier.padding(6.dp).size(14.dp, 3.dp).background(fg, CircleShape))

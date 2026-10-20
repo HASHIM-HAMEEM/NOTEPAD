@@ -460,7 +460,7 @@ fun PdfReadScreen(
         val pageWidth = maxWidth - sidebarWidth - 32.dp
         val compactBar = maxWidth < 600.dp
         val density = LocalDensity.current
-        val pagePaper = if (MaterialTheme.colorScheme.background.luminance() < 0.5f) Color(0xFF202024) else Color.White
+        val pagePaper = NotePadTheme.tokens.page
         val bookmarkColor = MaterialTheme.colorScheme.primary
         LaunchedEffect(listState, pages, pageWidth, maxHeight, fitPage, zoom, pagePaper, bookmarkColor) {
             snapshotFlow { listState.isScrollInProgress }
@@ -828,8 +828,8 @@ fun PdfReadScreen(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 PillIconButton(Icons.AutoMirrored.Outlined.ArrowBack, "Back", onClick = onBack)
-                FloatingPill(Modifier.widthIn(max = 420.dp), contentPadding = PaddingValues(horizontal = 14.dp)) {
-                    Column(Modifier.widthIn(min = 160.dp)) {
+                FloatingPill(Modifier.weight(1f, fill = false).widthIn(max = 420.dp), contentPadding = PaddingValues(horizontal = 14.dp)) {
+                    Column {
                         Text(
                             notebook?.title.orEmpty(),
                             Modifier.fillMaxWidth(),

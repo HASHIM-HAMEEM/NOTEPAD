@@ -383,6 +383,8 @@ fun PagePreview(
     }
 
     val ruling = lineColor ?: if (paperColor.luminance() < 0.5f) Color(0xFF3A3A40) else Color(0xFFCDD1D8)
+    // Paper theme warms rendered PDF pages toward the paper colour so reading feels like print, not a screen.
+    val pageTint = LocalTokens.current.pageTint?.takeIf { !LocalTokens.current.isDark }
     val measuredModifier = modifier.onSizeChanged { if (it.width > 0) targetWidthPx = it.width }
     if (precomposedOnly && page?.rotation == 0) {
         val previewBitmap = compositeBitmap ?: bitmap
@@ -438,7 +440,11 @@ fun PagePreview(
                 bitmap?.let { b ->
                     val m = Matrix().apply { preScale(p.widthPt / b.width, p.heightPt / b.height) }
                     val bitmapPaint = Paint(Paint.FILTER_BITMAP_FLAG).apply {
-                        if (paperColor.luminance() < 0.5f) colorFilter = PdfInvert.darkPaperFilter
+                        colorFilter = when {
+                            paperColor.luminance() < 0.5f -> PdfInvert.darkPaperFilter
+                            pageTint != null -> PorterDuffColorFilter(pageTint.toArgbInt(), PorterDuff.Mode.MULTIPLY)
+                            else -> null
+                        }
                     }
                     n.drawBitmap(b, m, bitmapPaint)
                 }
@@ -454,7 +460,11 @@ fun PagePreview(
                 bitmap?.let { b ->
                     val m = Matrix().apply { preScale(p.widthPt / b.width, p.heightPt / b.height) }
                     val bitmapPaint = Paint(Paint.FILTER_BITMAP_FLAG).apply {
-                        if (paperColor.luminance() < 0.5f) colorFilter = PdfInvert.darkPaperFilter
+                        colorFilter = when {
+                            paperColor.luminance() < 0.5f -> PdfInvert.darkPaperFilter
+                            pageTint != null -> PorterDuffColorFilter(pageTint.toArgbInt(), PorterDuff.Mode.MULTIPLY)
+                            else -> null
+                        }
                     }
                     n.drawBitmap(b, m, bitmapPaint)
                 }
