@@ -1,17 +1,28 @@
 package com.hashim.notepad.ui
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import android.widget.Toast
+import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.IntentSenderRequest
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.AnimatedVisibilityScope
+import androidx.compose.animation.ExperimentalSharedTransitionApi
+import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -21,48 +32,96 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
+import androidx.compose.material.icons.automirrored.outlined.ViewList
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
-import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.draw.drawBehind
+import com.hashim.notepad.data.Folder
 import com.hashim.notepad.data.Notebook
 import com.hashim.notepad.data.NotePadRepository
 import com.hashim.notepad.data.PageKind
+import com.hashim.notepad.data.Tag
+import com.hashim.notepad.data.displayWidthPt
+import com.hashim.notepad.data.displayHeightPt
 import com.hashim.notepad.export.BundleCodec
+import com.hashim.notepad.export.BundleFileClassifier
+import com.hashim.notepad.export.ImportFileKind
 import com.hashim.notepad.export.PdfExporter
-import com.hashim.notepad.ink.PaperTexture
 import com.hashim.notepad.pdf.PdfImporter
+import com.hashim.notepad.pdf.FileImporter
+import com.hashim.notepad.pdf.ImportProgress
+import com.hashim.notepad.pdf.ImportStorage
+import com.hashim.notepad.pdf.PdfPasswordRequiredException
+import com.hashim.notepad.pdf.PdfPasswordIncorrectException
+import com.hashim.notepad.pdf.PageImageImporter
+import com.hashim.notepad.data.ImportedImageContent
+import com.google.mlkit.vision.documentscanner.GmsDocumentScanning
+import com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions
+import com.google.mlkit.vision.documentscanner.GmsDocumentScanningResult
 import com.hashim.notepad.recognition.InkRecognizer
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
+import java.io.File
 import java.text.DateFormat
 import java.util.Date
 
+internal const val ALL_FOLDERS = "all"
+
+private fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
+}
+
+private fun showScannerFallback(host: SnackbarHostState, scope: kotlinx.coroutines.CoroutineScope, choosePhotos: () -> Unit) {
+    scope.launch {
+        if (host.showSnackbar(
+                message = "Scanner isn't available on this device",
+                actionLabel = "Choose photos",
+                withDismissAction = true,
+                duration = SnackbarDuration.Indefinite,
+            ) == SnackbarResult.ActionPerformed
+        ) choosePhotos()
+    }
+}
+
+private data class FolderSnapshot(val value: List<Folder>?)
+
 /** The library: every notebook as a true miniature of its first page. */
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class, ExperimentalSharedTransitionApi::class)
 @Composable
 fun NotebooksScreen(
     repo: NotePadRepository,
@@ -72,130 +131,356 @@ fun NotebooksScreen(
     importing: Boolean,
     onImportingChanged: (Boolean) -> Unit,
     onOpen: (String) -> Unit,
+    onContinueAtPosition: (String, Int) -> Unit = { id, _ -> onOpen(id) },
     onSearch: () -> Unit,
     onAccount: () -> Unit = {},
+    selectedFolderId: String,
+    onSelectedFolderChange: (String) -> Unit,
     themeMode: ThemeMode,
     dynamicColor: Boolean,
     onThemeChange: (ThemeMode) -> Unit,
     onDynamicChange: (Boolean) -> Unit,
-    selectedId: String? = null,
     compact: Boolean = false,
+    showAccountButton: Boolean = true,
+    sharedItems: List<Uri> = emptyList(),
+    sharedMimeType: String? = null,
+    sharedIntentId: String? = null,
+    onSharedIntentConsumed: (String) -> Unit = {},
+    sharedTransitionScope: SharedTransitionScope? = null,
+    animatedVisibilityScope: AnimatedVisibilityScope? = null,
+    onMenu: (() -> Unit)? = null,
+    externalNewRequest: Int = 0,
+    externalImportRequest: Int = 0,
+    externalFolderRequest: Int = 0,
 ) {
     val context = LocalContext.current
+    val screenWidthDp = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp
+    val tabletLayout = screenWidthDp >= 600 && !compact
+    val phoneLayout = screenWidthDp < 600 && !compact
     val scope = rememberCoroutineScope()
     val haptics = LocalHapticFeedback.current
     val notebooks by repo.notebooks().collectAsState(initial = emptyList())
+    val foldersFlow = remember(repo) { repo.folders().map(::FolderSnapshot) }
+    val folderSnapshot by foldersFlow.collectAsState(initial = FolderSnapshot(null))
+    val folders = folderSnapshot.value.orEmpty()
+    val tags by repo.tags().collectAsState(initial = emptyList())
+    val gridState = rememberLazyGridState()
+    val renderThumbnails = !gridState.isScrollInProgress
+    val libraryPrefs = remember(context) { context.getSharedPreferences("notepad", 0) }
+    var librarySort by remember {
+        mutableStateOf(runCatching { LibrarySort.valueOf(libraryPrefs.getString("library_sort", "RECENT") ?: "RECENT") }.getOrDefault(LibrarySort.RECENT))
+    }
+    var selectedTagId by remember { mutableStateOf<String?>(null) }
     var showAppearance by remember { mutableStateOf(false) }
     var showNew by remember { mutableStateOf(false) }
     var showCreate by remember { mutableStateOf(false) }
     var actionsFor by remember { mutableStateOf<Notebook?>(null) }
     var renameFor by remember { mutableStateOf<Notebook?>(null) }
     var deleteFor by remember { mutableStateOf<Notebook?>(null) }
-
-    val pickPdf = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        uri ?: return@rememberLauncherForActivityResult
+    var showCreateFolder by remember { mutableStateOf(false) }
+    var libraryView by remember {
+        mutableStateOf(runCatching { LibraryView.valueOf(libraryPrefs.getString("library_view", "LIST") ?: "LIST") }.getOrDefault(LibraryView.LIST))
+    }
+    LaunchedEffect(libraryView) { libraryPrefs.edit().putString("library_view", libraryView.name).apply() }
+    LaunchedEffect(externalNewRequest) { if (externalNewRequest > 0) showNew = true }
+    LaunchedEffect(externalFolderRequest) { if (externalFolderRequest > 0) showCreateFolder = true }
+    var newFolderForNotebook by remember { mutableStateOf<Notebook?>(null) }
+    var folderActionsFor by remember { mutableStateOf<Folder?>(null) }
+    var renameFolderFor by remember { mutableStateOf<Folder?>(null) }
+    var deleteFolderFor by remember { mutableStateOf<Folder?>(null) }
+    var moveNotebookFor by remember { mutableStateOf<Notebook?>(null) }
+    var tagsForNotebook by remember { mutableStateOf<Notebook?>(null) }
+    var selectedTagIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var newTagName by remember { mutableStateOf("") }
+    var importProgress by remember { mutableStateOf<ImportProgress?>(null) }
+    var importJob by remember { mutableStateOf<Job?>(null) }
+    var showSaveShared by remember { mutableStateOf(false) }
+    var handledSharedIntentId by rememberSaveable { mutableStateOf("") }
+    var sharedTitle by remember { mutableStateOf("") }
+    var sharedFolderId by remember { mutableStateOf<String?>(null) }
+    var pendingImportUris by remember { mutableStateOf<List<Uri>>(emptyList()) }
+    var pendingImportMimeType by remember { mutableStateOf<String?>(null) }
+    var passwordUri by remember { mutableStateOf<Uri?>(null) }
+    var passwordEntry by remember { mutableStateOf("") }
+    var passwordFolderId by remember { mutableStateOf<String?>(null) }
+    var passwordTitle by remember { mutableStateOf<String?>(null) }
+    var passwordFolderPending by remember { mutableStateOf(false) }
+    val snackbarHostState = remember { SnackbarHostState() }
+    val pageImageImporter = remember(context) { PageImageImporter(context) }
+    val fileImporter = remember(context, repo) { FileImporter(context, repo) }
+    fun requestImportDetails(uris: List<Uri>, title: String? = null, mimeType: String? = null) {
+        if (uris.isEmpty()) return
+        pendingImportUris = uris
+        pendingImportMimeType = mimeType
+        val filename = runCatching { ImportStorage(context).displayName(uris.first()) }.getOrDefault("Imported file")
+        sharedTitle = title ?: filename.substringBeforeLast('.', filename)
+        sharedFolderId = selectedFolderId.takeUnless { it == ALL_FOLDERS }
+        showSaveShared = true
+    }
+    fun openStoredFile(notebook: Notebook) {
         scope.launch {
-            onImportingChanged(true)
-            runCatching { importer.importAsNotebook(uri) }
-                .onSuccess { onOpen(it) }
-                .onFailure { Toast.makeText(context, "Could not import PDF: ${it.message}", Toast.LENGTH_LONG).show() }
-            onImportingChanged(false)
+            val asset = notebook.fileAssetId?.let { repo.asset(it) }
+            if (asset == null) {
+                snackbarHostState.showSnackbar("This file is no longer available")
+                return@launch
+            }
+            val contentUri = androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.files", File(asset.localPath))
+            val viewIntent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+                setDataAndType(contentUri, notebook.fileMimeType ?: "*/*")
+                addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            if (context.packageManager.resolveActivity(viewIntent, 0) == null) {
+                snackbarHostState.showSnackbar("No app can open this file")
+            } else {
+                runCatching { context.startActivity(android.content.Intent.createChooser(viewIntent, "Open file")) }
+                    .onFailure { snackbarHostState.showSnackbar("No app can open this file") }
+            }
         }
+    }
+    LaunchedEffect(sharedIntentId) {
+        val intentId = sharedIntentId ?: return@LaunchedEffect
+        if (sharedItems.isNotEmpty() && intentId != handledSharedIntentId) {
+            handledSharedIntentId = intentId
+            requestImportDetails(sharedItems, mimeType = sharedMimeType)
+            onSharedIntentConsumed(intentId)
+        }
+    }
+    LaunchedEffect(librarySort) { libraryPrefs.edit().putString("library_sort", librarySort.name).apply() }
+    LaunchedEffect(folderSnapshot, selectedFolderId) {
+        val loadedFolders = folderSnapshot.value ?: return@LaunchedEffect
+        if (selectedFolderId != ALL_FOLDERS && loadedFolders.none { it.id == selectedFolderId }) {
+            onSelectedFolderChange(ALL_FOLDERS)
+        }
+    }
+    LaunchedEffect(tags, selectedTagId) {
+        if (selectedTagId != null && tags.none { it.id == selectedTagId }) selectedTagId = null
+    }
+    val visibleNotebooks = remember(notebooks, selectedFolderId, selectedTagId) {
+        notebooks.filter { notebook ->
+            (selectedFolderId == ALL_FOLDERS || notebook.folderId == selectedFolderId) &&
+                (selectedTagId == null || selectedTagId in notebook.tagIds)
+        }
+    }
+    val sortedNotebooks = remember(visibleNotebooks, librarySort) { sortNotebooks(visibleNotebooks, librarySort) }
+
+    val pickPdf = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (uris.isEmpty()) return@rememberLauncherForActivityResult
+        requestImportDetails(uris)
+    }
+    val pickImages = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(20)) { uris ->
+        if (uris.isEmpty()) return@rememberLauncherForActivityResult
+        requestImportDetails(uris)
+    }
+    val pickAnyFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (uris.isEmpty()) return@rememberLauncherForActivityResult
+        requestImportDetails(uris)
+    }
+    val scannerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val scan = GmsDocumentScanningResult.fromActivityResultIntent(result.data)
+            val pdfUri = scan?.pdf?.uri
+            val imageUris = scan?.pages.orEmpty().map { it.imageUri }
+            if (pdfUri != null) requestImportDetails(listOf(pdfUri), "Scanned notes")
+            else if (imageUris.isNotEmpty()) requestImportDetails(imageUris, "Scanned notes")
+            else showScannerFallback(snackbarHostState, scope) { pickImages.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
+        } else {
+            showScannerFallback(snackbarHostState, scope) { pickImages.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
+        }
+    }
+    fun startScanner() {
+        val activity = context.findActivity()
+        if (activity == null) {
+            showScannerFallback(snackbarHostState, scope) { pickImages.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
+            return
+        }
+        val options = GmsDocumentScannerOptions.Builder()
+            .setScannerMode(GmsDocumentScannerOptions.SCANNER_MODE_FULL)
+            .setResultFormats(GmsDocumentScannerOptions.RESULT_FORMAT_PDF, GmsDocumentScannerOptions.RESULT_FORMAT_JPEG)
+            .setPageLimit(100)
+            .setGalleryImportAllowed(true)
+            .build()
+        GmsDocumentScanning.getClient(options).getStartScanIntent(activity)
+            .addOnSuccessListener { scannerLauncher.launch(IntentSenderRequest.Builder(it).build()) }
+            .addOnFailureListener {
+                showScannerFallback(snackbarHostState, scope) { pickImages.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
+            }
     }
     val pickBundle = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri ?: return@rememberLauncherForActivityResult
         scope.launch {
             onImportingChanged(true)
-            runCatching { context.contentResolver.openInputStream(uri)!!.use { bundles.import(it) } }
+            runCatching {
+                val name = ImportStorage(context).displayName(uri)
+                val kind = context.contentResolver.openInputStream(uri)!!.use { BundleFileClassifier.classify(name, it) }
+                check(kind == ImportFileKind.NOTEPAD_BUNDLE) { "This file is not a NotePad bundle" }
+                context.contentResolver.openInputStream(uri)!!.use { bundles.import(it) }
+            }
                 .onSuccess { onOpen(it) }
                 .onFailure { Toast.makeText(context, "Could not import bundle: ${it.message}", Toast.LENGTH_LONG).show() }
             onImportingChanged(false)
         }
     }
 
+    LaunchedEffect(externalImportRequest) { if (externalImportRequest > 0) pickPdf.launch(arrayOf("application/pdf")) }
+
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         containerColor = MaterialTheme.colorScheme.background,
         floatingActionButton = {
-            if (!compact) ExtendedFloatingActionButton(
+            if (!compact && !tabletLayout && !phoneLayout) FloatingActionButton(
                 onClick = { showNew = true },
-                icon = { Icon(Icons.Default.Add, null) },
-                text = { Text("New") },
-                containerColor = MaterialTheme.colorScheme.primary,
-                contentColor = MaterialTheme.colorScheme.onPrimary,
-                shape = MaterialTheme.shapes.large,
-            )
+                containerColor = NotePadTheme.tokens.ink,
+                contentColor = NotePadTheme.tokens.onAccent,
+                shape = CircleShape,
+                elevation = FloatingActionButtonDefaults.elevation(2.dp, 2.dp),
+            ) { Icon(Icons.Default.Add, "New") }
         },
     ) { padding ->
+        Row(Modifier.fillMaxSize().padding(padding)) {
+        Box(Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.TopCenter) {
         LazyVerticalGrid(
-            columns = GridCells.Adaptive(200.dp),
-            modifier = Modifier.fillMaxSize().padding(padding),
-            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 112.dp),
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
-            verticalArrangement = Arrangement.spacedBy(20.dp),
+            state = gridState,
+            columns = when {
+                libraryView == LibraryView.LIST -> GridCells.Fixed(1)
+                tabletLayout -> GridCells.Adaptive(168.dp)
+                phoneLayout -> GridCells.Adaptive(150.dp)
+                else -> GridCells.Fixed(1)
+            },
+            modifier = Modifier.fillMaxHeight().widthIn(max = 1040.dp),
+            contentPadding = if (phoneLayout) {
+                PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 168.dp)
+            } else {
+                PaddingValues(start = 24.dp, end = 24.dp, top = 8.dp, bottom = 184.dp)
+            },
+            horizontalArrangement = Arrangement.spacedBy(if (phoneLayout) 16.dp else 20.dp),
+            verticalArrangement = Arrangement.spacedBy(if (phoneLayout) 16.dp else 20.dp),
         ) {
-            item(span = { GridItemSpan(maxLineSpan) }) {
+            item(span = { GridItemSpan(maxLineSpan) }, contentType = "library-header") {
                 LibraryHeader(
-                    count = notebooks.size, compact = compact, importing = importing,
+                    count = visibleNotebooks.size, compact = compact, importing = importing, progress = importProgress,
+                    onCancelImport = { importJob?.cancel() }, showAccountButton = showAccountButton,
+                    librarySort = librarySort, onSortChange = { librarySort = it },
+                    tabletLayout = tabletLayout,
                     onSearch = onSearch, onAccount = onAccount, onAppearance = { showAppearance = true },
-                    onNew = { showNew = true },
+                    onNew = { showNew = true }, onImport = { pickPdf.launch(arrayOf("application/pdf")) },
+                    libraryView = libraryView, onViewChange = { libraryView = it }, onMenu = onMenu,
+                    folders = folders, selectedFolderId = selectedFolderId,
+                    onSelectFolder = onSelectedFolderChange,
+                    onAddFolder = { showCreateFolder = true }, onFolderLongPress = { folderActionsFor = it },
                 )
             }
-            if (notebooks.size >= 4) {
-                val recent = notebooks.sortedByDescending { it.updatedAt }.take(3)
-                item(span = { GridItemSpan(maxLineSpan) }) {
+            val recent = notebooks.filter { it.lastOpenedAt != null }.sortedByDescending { it.lastOpenedAt }.take(3)
+            if (recent.isNotEmpty()) {
+                item(span = { GridItemSpan(maxLineSpan) }, contentType = "continue-reading") {
                     Column {
-                        Text("Recent", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                        SectionLabel("Continue")
                         Spacer(Modifier.height(12.dp))
                         Row(
                             Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                             horizontalArrangement = Arrangement.spacedBy(16.dp),
                         ) {
                             recent.forEach { nb ->
-                                NotebookCard(
-                                    repo, nb, nb.id == selectedId, compact, Modifier.width(208.dp),
-                                    onOpen = { onOpen(nb.id) },
-                                    onMore = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); actionsFor = nb },
+                                ContinueReadingCard(
+                                    repo = repo,
+                                    notebook = nb,
+                                    subjectColor = subjectColor(nb, folders),
+                                    renderThumbnail = renderThumbnails,
+                                    phoneLayout = phoneLayout,
+                                    onOpen = { onContinueAtPosition(nb.id, nb.lastPageIndex) },
                                 )
                             }
                         }
                     }
                 }
-                item(span = { GridItemSpan(maxLineSpan) }) {
-                    Text("All notebooks", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            }
+            if (tags.isNotEmpty()) item(span = { GridItemSpan(maxLineSpan) }, contentType = "tag-row") {
+                Row(
+                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    tags.forEach { tag ->
+                        FilterChip(
+                            selected = selectedTagId == tag.id,
+                            onClick = { selectedTagId = if (selectedTagId == tag.id) null else tag.id },
+                            label = { Text("#${tag.name}", maxLines = 1) },
+                            shape = CircleShape,
+                        )
+                    }
                 }
             }
-            if (notebooks.isEmpty() && !importing) item(span = { GridItemSpan(maxLineSpan) }) {
+            item(span = { GridItemSpan(maxLineSpan) }, contentType = "library-title") {
+                SectionLabel("All notebooks")
+            }
+            if (notebooks.isEmpty() && !importing) item(span = { GridItemSpan(maxLineSpan) }, contentType = "empty-state") {
                 EmptyLibrary(onNew = { showNew = true }, onImport = { pickPdf.launch(arrayOf("application/pdf")) })
             }
-            items(notebooks, key = { it.id }) { nb ->
-                NotebookCard(
-                    repo = repo, notebook = nb, selected = nb.id == selectedId, compact = compact,
+            if (notebooks.isNotEmpty() && visibleNotebooks.isEmpty()) item(span = { GridItemSpan(maxLineSpan) }, contentType = "filtered-empty-state") {
+                Text("No notebooks match these filters.", modifier = Modifier.padding(vertical = 24.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            items(sortedNotebooks, key = { it.id }, contentType = { if (libraryView == LibraryView.LIST) "notebook-row" else "notebook-card" }) { nb ->
+                if (libraryView == LibraryView.LIST) NotebookRow(
+                    repo = repo, notebook = nb, modifier = Modifier.animateItem(),
+                    subjectColor = subjectColor(nb, folders), renderThumbnail = renderThumbnails,
+                    onOpen = { if (nb.documentKind == "file") openStoredFile(nb) else onContinueAtPosition(nb.id, nb.lastPageIndex) },
+                    onMore = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); actionsFor = nb },
+                ) else NotebookCard(
+                    repo = repo, notebook = nb, tags = tags, compact = compact,
                     modifier = Modifier.animateItem(),
-                    onOpen = { onOpen(nb.id) },
+                    subjectColor = subjectColor(nb, folders),
+                    renderThumbnail = renderThumbnails,
+                    sharedTransitionScope = sharedTransitionScope,
+                    animatedVisibilityScope = animatedVisibilityScope,
+                    onOpen = { if (nb.documentKind == "file") openStoredFile(nb) else onContinueAtPosition(nb.id, nb.lastPageIndex) },
                     onMore = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); actionsFor = nb },
                 )
             }
+        }
+        }
         }
     }
 
     // ---- sheets & dialogs
     if (showNew) ModalBottomSheet(onDismissRequest = { showNew = false }, shape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp), containerColor = MaterialTheme.colorScheme.surfaceContainer) {
-        SheetTitle("New notebook")
-        SheetRow(Icons.Outlined.Description, "Blank notebook", "Plain, lined or grid pages") { showNew = false; showCreate = true }
-        SheetRow(Icons.Outlined.PictureAsPdf, "From a PDF", "Write directly on a textbook") { showNew = false; pickPdf.launch(arrayOf("application/pdf")) }
-        SheetRow(Icons.Outlined.Unarchive, "Import .notepad.zip", "A notebook exported from NotePad") { showNew = false; pickBundle.launch(arrayOf("application/zip", "application/octet-stream")) }
-        Spacer(Modifier.height(24.dp))
+        Column(Modifier.fillMaxWidth().navigationBarsPadding().verticalScroll(rememberScrollState())) {
+            SheetTitle("Import")
+            SheetRow(Icons.Outlined.PictureAsPdf, "PDF", "Add one or more lecture notes and books") { showNew = false; pickPdf.launch(arrayOf("application/pdf")) }
+            SheetRow(Icons.Outlined.Image, "Images", "Turn photos into notebook pages") { showNew = false; pickImages.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
+            SheetRow(Icons.Outlined.DocumentScanner, "Scan", "Capture a multipage document") { showNew = false; startScanner() }
+            SheetRow(Icons.Outlined.AttachFile, "Any file", "Keep a copy and open it in another app") { showNew = false; pickAnyFile.launch(arrayOf("*/*")) }
+            SheetRow(Icons.Outlined.Description, "Blank notebook", "Plain, lined or grid pages") { showNew = false; showCreate = true }
+            SheetRow(Icons.Outlined.Unarchive, "Import .notepad.zip", "A notebook exported from NotePad") { showNew = false; pickBundle.launch(arrayOf("application/zip", "application/octet-stream")) }
+            Spacer(Modifier.height(24.dp))
+        }
     }
 
     actionsFor?.let { nb ->
         val pages by repo.pages(nb.id).collectAsState(initial = emptyList())
         ModalBottomSheet(onDismissRequest = { actionsFor = null }, shape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp), containerColor = MaterialTheme.colorScheme.surfaceContainer) {
             Row(Modifier.padding(horizontal = 24.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                BookCover(nb.title, bookCoverColor(nb), pages.any { it.kind == PageKind.PDF }, Modifier.width(44.dp).aspectRatio(0.72f).clip(RoundedCornerShape(6.dp)))
+                BookCover(
+                    nb.title, bookCoverColor(nb), pages.any { it.kind == PageKind.PDF },
+                    Modifier.width(44.dp).aspectRatio(0.72f).clip(RoundedCornerShape(6.dp)),
+                    tags.filter { it.id in nb.tagIds }.take(2).map { it.name },
+                )
                 Spacer(Modifier.width(16.dp))
                 Column { Text(nb.title, style = MaterialTheme.typography.titleLarge.copy(fontFamily = titleFontFamily(nb.title)), maxLines = 1, overflow = TextOverflow.Ellipsis); Text(meta(nb), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
             }
             HorizontalDivider(Modifier.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.outlineVariant)
+            SheetRow(Icons.Outlined.GridView, "Browse pages", "Open the notebook page grid") {
+                actionsFor = null
+                onOpen(nb.id)
+            }
+            SheetRow(Icons.Outlined.FolderOpen, "Move to subject", "Choose a subject or create one") {
+                actionsFor = null
+                moveNotebookFor = nb
+            }
+            SheetRow(Icons.Outlined.Tag, "Tags", "Add or remove notebook tags") {
+                actionsFor = null
+                selectedTagIds = nb.tagIds
+                newTagName = ""
+                tagsForNotebook = nb
+            }
             SheetRow(Icons.Outlined.DriveFileRenameOutline, "Rename") { actionsFor = null; renameFor = nb }
             PaperRow(nb.coverColor) { hex -> scope.launch { repo.setNotebookPaper(nb.id, hex) } }
             LanguageRow(nb.language) { tag -> scope.launch { repo.setNotebookLanguage(nb.id, tag) } }
@@ -223,8 +508,306 @@ fun NotebooksScreen(
         }
     }
 
+    if (passwordUri != null) AlertDialog(
+        onDismissRequest = { passwordUri = null; passwordFolderId = null; passwordTitle = null; passwordFolderPending = false },
+        title = { Text("Password-protected PDF") },
+        text = {
+            OutlinedTextField(
+                value = passwordEntry,
+                onValueChange = { passwordEntry = it },
+                label = { Text("PDF password") },
+                singleLine = true,
+                visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+            )
+        },
+        confirmButton = {
+            TextButton(enabled = passwordEntry.isNotEmpty(), onClick = {
+                val uri = passwordUri ?: return@TextButton
+                importJob = scope.launch {
+                    onImportingChanged(true)
+                    try {
+                        val id = importer.importAsNotebook(
+                            uri,
+                            if (passwordFolderPending) passwordFolderId else selectedFolderId.takeUnless { it == ALL_FOLDERS },
+                            passwordTitle,
+                            passwordEntry,
+                        ) { importProgress = it }
+                        passwordUri = null
+                        passwordFolderId = null
+                        passwordTitle = null
+                        passwordFolderPending = false
+                        onContinueAtPosition(id, 0)
+                    } catch (error: Throwable) {
+                        if (error is kotlinx.coroutines.CancellationException) throw error
+                        if (error is PdfPasswordIncorrectException) Toast.makeText(context, "Incorrect PDF password", Toast.LENGTH_LONG).show()
+                        else Toast.makeText(context, error.message ?: "Could not open PDF", Toast.LENGTH_LONG).show()
+                    } finally {
+                        importProgress = null
+                        onImportingChanged(false)
+                    }
+                }
+            }) { Text("Open") }
+        },
+        dismissButton = { TextButton(onClick = { passwordUri = null; passwordFolderId = null; passwordTitle = null; passwordFolderPending = false }) { Text("Cancel") } },
+    )
+
+    val saveItems = pendingImportUris.ifEmpty { sharedItems }
+    if (showSaveShared) ModalBottomSheet(onDismissRequest = {
+        showSaveShared = false
+        pendingImportUris = emptyList()
+        pendingImportMimeType = null
+    }) {
+        SheetTitle("Save to NotePad")
+        OutlinedTextField(
+            value = sharedTitle,
+            onValueChange = { sharedTitle = it },
+            label = { Text("Title") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+        )
+        Spacer(Modifier.height(12.dp))
+        Text("Subject", Modifier.padding(horizontal = 20.dp), style = MaterialTheme.typography.labelLarge)
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(selected = sharedFolderId == null, onClick = { sharedFolderId = null }, label = { Text("All") })
+            folders.forEach { folder ->
+                FilterChip(selected = sharedFolderId == folder.id, onClick = { sharedFolderId = folder.id }, label = { Text(folder.name) })
+            }
+        }
+        Button(
+            onClick = {
+                val folder = sharedFolderId
+                val itemsToSave = saveItems
+                val mimeTypeForImport = pendingImportMimeType
+                showSaveShared = false
+                pendingImportUris = emptyList()
+                pendingImportMimeType = null
+                importJob = scope.launch {
+                    onImportingChanged(true)
+                    try {
+                        var firstOpenedId: String? = null
+                        var firstOpenedIsBundle = false
+                        val imageUris = itemsToSave.filter { uri ->
+                            val name = ImportStorage(context).displayName(uri)
+                            context.contentResolver.getType(uri)?.startsWith("image/") == true ||
+                                (uri in sharedItems && sharedMimeType?.startsWith("image/") == true) ||
+                                (uri in itemsToSave && mimeTypeForImport?.startsWith("image/") == true) ||
+                                name.substringAfterLast('.', "").lowercase() in setOf("png", "jpg", "jpeg", "webp")
+                        }
+                        if (imageUris.isNotEmpty()) {
+                            val images = mutableListOf<ImportedImageContent>()
+                            var committed = false
+                            try {
+                                imageUris.forEachIndexed { index, uri ->
+                                    importProgress = ImportProgress("image ${index + 1} of ${imageUris.size}", (index * 100 / imageUris.size).coerceIn(0, 99))
+                                    val image = pageImageImporter.import(uri)
+                                    val fit = PageImageImporter.fitToA4(image.widthPx, image.heightPx)
+                                    images += ImportedImageContent(image.asset, fit[0], fit[1], fit[2], fit[3])
+                                }
+                                val id = kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                                    repo.createImageNotebook(sharedTitle.ifBlank { "Image notes" }, images, folder).also { committed = true }
+                                }
+                                if (firstOpenedId == null) firstOpenedId = id
+                            } catch (error: Throwable) {
+                                if (!committed) images.forEach { File(it.asset.localPath).delete() }
+                                throw error
+                            }
+                        }
+                        itemsToSave.filterNot { it in imageUris }.forEachIndexed { index, uri ->
+                            if (passwordUri != null) return@forEachIndexed
+                            val name = ImportStorage(context).displayName(uri).ifBlank { "Shared file" }
+                            val title = sharedTitle.takeIf { index == 0 && it.isNotBlank() }
+                            val kind = context.contentResolver.openInputStream(uri)!!.use {
+                                BundleFileClassifier.classify(name, it)
+                            }
+                            val id = try {
+                                when (kind) {
+                                    ImportFileKind.NOTEPAD_BUNDLE ->
+                                        context.contentResolver.openInputStream(uri)!!.use { bundles.import(it) }
+                                    ImportFileKind.PDF ->
+                                        importer.importAsNotebook(uri, folder, title) { importProgress = it }
+                                    ImportFileKind.ZIP, ImportFileKind.OTHER ->
+                                        fileImporter.import(uri, folder, title) { importProgress = it }
+                                }
+                            } catch (error: PdfPasswordRequiredException) {
+                                passwordUri = uri
+                                passwordEntry = ""
+                                passwordFolderId = folder
+                                passwordTitle = title
+                                passwordFolderPending = true
+                                return@forEachIndexed
+                            }
+                            if (firstOpenedId == null && kind in setOf(ImportFileKind.PDF, ImportFileKind.NOTEPAD_BUNDLE)) {
+                                firstOpenedId = id
+                                firstOpenedIsBundle = kind == ImportFileKind.NOTEPAD_BUNDLE
+                            }
+                        }
+                        if (passwordUri == null) {
+                            firstOpenedId?.let { if (firstOpenedIsBundle) onOpen(it) else onContinueAtPosition(it, 0) }
+                        }
+                    } catch (error: Throwable) {
+                        if (error is kotlinx.coroutines.CancellationException) throw error
+                        Toast.makeText(context, error.message ?: "Could not save shared items", Toast.LENGTH_LONG).show()
+                    } finally {
+                        importProgress = null
+                        onImportingChanged(false)
+                    }
+                }
+            },
+            enabled = sharedTitle.isNotBlank(),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp),
+        ) { Text("Save ${saveItems.size} item${if (saveItems.size == 1) "" else "s"}") }
+        Spacer(Modifier.height(24.dp))
+    }
+
     if (showCreate) NameDialog(title = "New notebook", initial = "", confirm = "Create", onDismiss = { showCreate = false }) { name ->
-        scope.launch { val id = repo.createNotebook(name, null); repo.addPage(id, PageKind.BLANK); showCreate = false; onOpen(id) }
+        scope.launch {
+            val id = repo.createNotebook(name, null, selectedFolderId.takeUnless { it == ALL_FOLDERS })
+            repo.addPage(id, PageKind.BLANK)
+            showCreate = false
+            onOpen(id)
+        }
+    }
+    if (showCreateFolder) SubjectDialog(
+        title = "New subject", initial = "", initialColor = null,
+        onDismiss = { showCreateFolder = false; newFolderForNotebook = null },
+    ) { name, color ->
+        scope.launch {
+            val id = repo.createFolder(name, color)
+            val notebook = newFolderForNotebook
+            if (notebook == null) {
+                onSelectedFolderChange(id)
+            } else {
+                repo.moveNotebookToFolder(notebook.id, id)
+            }
+            newFolderForNotebook = null
+            showCreateFolder = false
+        }
+    }
+    folderActionsFor?.let { folder ->
+        AlertDialog(
+            onDismissRequest = { folderActionsFor = null },
+            title = { Text(folder.name) },
+            text = { Text("Subject actions") },
+            confirmButton = {
+                TextButton(onClick = { renameFolderFor = folder; folderActionsFor = null }) { Text("Rename") }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = { deleteFolderFor = folder; folderActionsFor = null }, colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)) { Text("Delete") }
+                    TextButton(onClick = { folderActionsFor = null }) { Text("Cancel") }
+                }
+            },
+        )
+    }
+    renameFolderFor?.let { folder ->
+        SubjectDialog(title = "Rename subject", initial = folder.name, initialColor = folder.color, onDismiss = { renameFolderFor = null }) { name, color ->
+            scope.launch { repo.renameFolder(folder.id, name, color) }
+            renameFolderFor = null
+        }
+    }
+    deleteFolderFor?.let { folder ->
+        AlertDialog(
+            onDismissRequest = { deleteFolderFor = null },
+            title = { Text("Delete “${folder.name}”?") },
+            text = { Text("The notebooks in this subject will be kept and moved to All.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        scope.launch { repo.deleteFolder(folder.id) }
+                        if (selectedFolderId == folder.id) onSelectedFolderChange(ALL_FOLDERS)
+                        deleteFolderFor = null
+                    },
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                ) { Text("Delete") }
+            },
+            dismissButton = { TextButton(onClick = { deleteFolderFor = null }) { Text("Cancel") } },
+        )
+    }
+    moveNotebookFor?.let { notebook ->
+        AlertDialog(
+            onDismissRequest = { moveNotebookFor = null },
+            title = { Text("Move to subject") },
+            text = {
+                Column(Modifier.fillMaxWidth().heightIn(max = 400.dp).verticalScroll(rememberScrollState())) {
+                    TextButton(
+                        onClick = {
+                            scope.launch { repo.moveNotebookToFolder(notebook.id, null) }
+                            moveNotebookFor = null
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("No subject", Modifier.fillMaxWidth()) }
+                    folders.forEach { folder ->
+                        TextButton(
+                            onClick = {
+                                scope.launch { repo.moveNotebookToFolder(notebook.id, folder.id) }
+                                moveNotebookFor = null
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text(folder.name, Modifier.fillMaxWidth()) }
+                    }
+                    TextButton(
+                        onClick = {
+                            moveNotebookFor = null
+                            newFolderForNotebook = notebook
+                            showCreateFolder = true
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("New subject…", Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.primary) }
+                }
+            },
+            confirmButton = { TextButton(onClick = { moveNotebookFor = null }) { Text("Cancel") } },
+        )
+    }
+    tagsForNotebook?.let { notebook ->
+        AlertDialog(
+            onDismissRequest = { tagsForNotebook = null },
+            title = { Text("Tags") },
+            text = {
+                Column(Modifier.fillMaxWidth().heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
+                    if (tags.isEmpty()) {
+                        Text("No tags yet. Add one below.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    tags.forEach { tag ->
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(
+                                checked = tag.id in selectedTagIds,
+                                onCheckedChange = { checked ->
+                                    selectedTagIds = if (checked) selectedTagIds + tag.id else selectedTagIds - tag.id
+                                },
+                            )
+                            Text(tag.name, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedTextField(
+                            value = newTagName,
+                            onValueChange = { newTagName = it },
+                            singleLine = true,
+                            label = { Text("New tag") },
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(
+                            onClick = {
+                                val name = newTagName.trim()
+                                if (name.isNotEmpty()) scope.launch {
+                                    val id = repo.createTag(name)
+                                    selectedTagIds = selectedTagIds + id
+                                    newTagName = ""
+                                }
+                            },
+                            enabled = newTagName.isNotBlank(),
+                        ) { Text("Add") }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    scope.launch { repo.setNotebookTags(notebook.id, selectedTagIds) }
+                    tagsForNotebook = null
+                }) { Text("Save") }
+            },
+            dismissButton = { TextButton(onClick = { tagsForNotebook = null }) { Text("Cancel") } },
+        )
     }
     renameFor?.let { nb ->
         NameDialog(title = "Rename notebook", initial = nb.title, confirm = "Save", onDismiss = { renameFor = null }) { name -> scope.launch { repo.renameNotebook(nb.id, name) }; renameFor = null }
@@ -239,90 +822,586 @@ fun NotebooksScreen(
             dismissButton = { TextButton(onClick = { deleteFor = null }) { Text("Cancel") } },
         )
     }
-    if (showAppearance) ModalBottomSheet(onDismissRequest = { showAppearance = false }, shape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp), containerColor = MaterialTheme.colorScheme.surfaceContainer) {
-        SheetTitle("Appearance")
-        Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            ThemeMode.entries.forEach { m ->
-                val selected = themeMode == m
-                Surface(
-                    onClick = { onThemeChange(m) }, shape = MaterialTheme.shapes.medium,
-                    color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer,
-                    border = if (selected) BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary) else null,
-                    modifier = Modifier.weight(1f),
-                ) {
-                    Column(Modifier.padding(vertical = 14.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                        ThemeSwatch(m)
-                        Spacer(Modifier.height(8.dp))
-                        Text(m.label, style = MaterialTheme.typography.labelLarge)
-                    }
-                }
-            }
-        }
-        ListItem(
-            headlineContent = { Text("Use wallpaper colours") }, supportingContent = { Text("Material You accent from your wallpaper") },
-            trailingContent = { Switch(checked = dynamicColor, onCheckedChange = onDynamicChange) },
-            colors = ListItemDefaults.colors(containerColor = Color.Transparent), modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
-        )
-        Spacer(Modifier.height(24.dp))
-    }
+    if (showAppearance) AppearanceSheet(themeMode, dynamicColor, onThemeChange, onDynamicChange) { showAppearance = false }
 }
 
 /* ---------------------------------------------------------------- pieces */
 
 @Composable
-private fun LibraryHeader(count: Int, compact: Boolean, importing: Boolean, onSearch: () -> Unit, onAccount: () -> Unit, onAppearance: () -> Unit, onNew: () -> Unit) {
-    Column(Modifier.statusBarsPadding().padding(top = 12.dp, bottom = 4.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text("Library", style = if (compact) MaterialTheme.typography.headlineSmall else MaterialTheme.typography.displaySmall)
-                Text(
-                    if (importing) "Importing…" else if (count == 0) "Nothing here yet" else "$count notebook${if (count == 1) "" else "s"}",
-                    style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+@OptIn(ExperimentalMaterial3Api::class)
+internal fun AppearanceSheet(
+    themeMode: ThemeMode,
+    dynamicColor: Boolean,
+    onThemeChange: (ThemeMode) -> Unit,
+    onDynamicChange: (Boolean) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        shape = RoundedCornerShape(topStart = Spec.sheetRadius, topEnd = Spec.sheetRadius),
+        containerColor = NotePadTheme.tokens.surface,
+    ) {
+        SheetTitle("Appearance")
+        Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            ThemeMode.entries.forEach { mode ->
+                val selected = themeMode == mode
+                Surface(
+                    onClick = { onThemeChange(mode) },
+                    shape = MaterialTheme.shapes.medium,
+                    color = if (selected) NotePadTheme.tokens.surface2 else NotePadTheme.tokens.bg,
+                    border = BorderStroke(Spec.hairline, if (selected) NotePadTheme.tokens.ink else NotePadTheme.tokens.border),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Column(Modifier.padding(vertical = 14.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        ThemeSwatch(mode)
+                        Spacer(Modifier.height(8.dp))
+                        Text(mode.label, style = MaterialTheme.typography.labelLarge)
+                    }
+                }
             }
-            if (compact) IconButton(onClick = onNew) { Icon(Icons.Default.Add, "New") }
-            IconButton(onClick = onAppearance) { Icon(Icons.Outlined.Palette, "Appearance") }
-            IconButton(onClick = onAccount) { Icon(Icons.Outlined.AccountCircle, "Sync & account") }
         }
-        Spacer(Modifier.height(12.dp))
-        Surface(
-            onClick = onSearch, shape = RoundedCornerShape(26.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh,
-            modifier = Modifier.fillMaxWidth().height(50.dp),
-        ) {
-            Row(Modifier.padding(horizontal = 18.dp), verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Outlined.Search, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.width(12.dp))
-                Text("Search handwriting, text and PDFs", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-        }
-        AnimatedVisibility(importing, enter = fadeIn(), exit = fadeOut()) { LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 10.dp).clip(CircleShape)) }
-        Spacer(Modifier.height(8.dp))
+        ListItem(
+            headlineContent = { Text("Use wallpaper colours") },
+            supportingContent = { Text("Material You accent from your wallpaper") },
+            trailingContent = { Switch(checked = dynamicColor, onCheckedChange = onDynamicChange) },
+            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
+        )
+        Spacer(Modifier.height(24.dp))
     }
 }
 
 @Composable
-private fun NotebookCard(repo: NotePadRepository, notebook: Notebook, selected: Boolean, compact: Boolean, modifier: Modifier, onOpen: () -> Unit, onMore: () -> Unit) {
+@OptIn(ExperimentalFoundationApi::class)
+private fun LibraryHeader(
+    count: Int,
+    compact: Boolean,
+    importing: Boolean,
+    progress: ImportProgress?,
+    onCancelImport: () -> Unit,
+    librarySort: LibrarySort,
+    onSortChange: (LibrarySort) -> Unit,
+    tabletLayout: Boolean,
+    showAccountButton: Boolean,
+    onSearch: () -> Unit,
+    onAccount: () -> Unit,
+    onAppearance: () -> Unit,
+    onNew: () -> Unit,
+    onImport: () -> Unit,
+    libraryView: LibraryView,
+    onViewChange: (LibraryView) -> Unit,
+    onMenu: (() -> Unit)?,
+    folders: List<Folder>,
+    selectedFolderId: String,
+    onSelectFolder: (String) -> Unit,
+    onAddFolder: () -> Unit,
+    onFolderLongPress: (Folder) -> Unit,
+) {
+    var sortExpanded by remember { mutableStateOf(false) }
+    val t = NotePadTheme.tokens
+    val phoneLayout = compact || androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 600
+    val sortMenu: @Composable () -> Unit = {
+        DropdownMenu(expanded = sortExpanded, onDismissRequest = { sortExpanded = false }, shape = RoundedCornerShape(16.dp), containerColor = t.surface) {
+            listOf(LibrarySort.RECENT to "Recent", LibrarySort.NAME to "Name", LibrarySort.DATE_ADDED to "Date added").forEach { (sort, label) ->
+                DropdownMenuItem(
+                    text = { Text(label) },
+                    trailingIcon = { if (librarySort == sort) Icon(Icons.Outlined.Check, null, tint = t.ink) },
+                    onClick = { onSortChange(sort); sortExpanded = false },
+                )
+            }
+            if (phoneLayout) {
+                HorizontalDivider(color = t.border)
+                DropdownMenuItem(
+                    text = { Text(if (libraryView == LibraryView.LIST) "Show as grid" else "Show as list") },
+                    leadingIcon = { Icon(if (libraryView == LibraryView.LIST) Icons.Outlined.GridView else Icons.AutoMirrored.Outlined.ViewList, null) },
+                    onClick = { onViewChange(if (libraryView == LibraryView.LIST) LibraryView.GRID else LibraryView.LIST); sortExpanded = false },
+                )
+            }
+        }
+    }
+    val subtitle = if (importing) "Importing…" else "$count item${if (count == 1) "" else "s"}"
+    Column(Modifier.statusBarsPadding().padding(top = if (phoneLayout) 0.dp else 8.dp, bottom = 4.dp)) {
+        if (phoneLayout) {
+            // ChatGPT mobile header: menu · centred title · compose.
+            PhoneTopBar(title = "Library", subtitle = subtitle, onMenu = { onMenu?.invoke() ?: onAppearance() }) {
+                Box {
+                    IconButton(onClick = { sortExpanded = true }) { Icon(Icons.Outlined.Tune, "Sort and view", tint = t.ink) }
+                    sortMenu()
+                }
+                IconButton(onClick = onNew) { Icon(Icons.Outlined.EditNote, "New notebook", tint = t.ink) }
+            }
+            Spacer(Modifier.height(4.dp))
+        } else {
+            Row(Modifier.fillMaxWidth().height(44.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("Library", style = MaterialTheme.typography.titleLarge, color = t.ink)
+                Spacer(Modifier.width(10.dp))
+                Text(subtitle, style = MaterialTheme.typography.bodyMedium, color = t.ink3)
+                Spacer(Modifier.weight(1f))
+                Box {
+                    PillIconButton(Icons.Outlined.Sort, "Sort", onClick = { sortExpanded = true })
+                    sortMenu()
+                }
+                Spacer(Modifier.width(8.dp))
+                ViewToggle(libraryView, onViewChange)
+                if (!tabletLayout) { Spacer(Modifier.width(8.dp)); PillIconButton(Icons.Outlined.Palette, "Appearance", onClick = onAppearance) }
+                if (showAccountButton) { Spacer(Modifier.width(8.dp)); PillIconButton(Icons.Outlined.AccountCircle, "Sync & account", onClick = onAccount) }
+                Spacer(Modifier.width(8.dp))
+                AppButton("New", onClick = onNew, icon = Icons.Default.Add)
+            }
+            // ChatGPT hero: a short prompt and a centred composer, here a search box.
+            Column(Modifier.fillMaxWidth().padding(top = 36.dp, bottom = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("What do you want to study?", style = MaterialTheme.typography.headlineMedium, color = t.ink)
+                Spacer(Modifier.height(18.dp))
+                ComposerSearch(
+                    placeholder = "Search notes, PDFs and handwriting",
+                    onSearch = onSearch, onNew = onNew, onImport = onImport,
+                    modifier = Modifier.widthIn(max = 720.dp).fillMaxWidth(),
+                )
+                Spacer(Modifier.height(16.dp))
+            }
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = if (phoneLayout) Arrangement.Start else Arrangement.Center) {
+            Row(
+                Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                AppChip("All", selected = selectedFolderId == ALL_FOLDERS, onClick = { onSelectFolder(ALL_FOLDERS) })
+                folders.forEach { folder ->
+                    val selected = selectedFolderId == folder.id
+                    val dot = folder.color?.let { runCatching { Color(android.graphics.Color.parseColor(it)) }.getOrNull() }
+                    Box(Modifier.combinedClickable(onClick = { onSelectFolder(folder.id) }, onLongClick = { onFolderLongPress(folder) })) {
+                        AppChip(folder.name, selected = selected, onClick = { onSelectFolder(folder.id) })
+                        if (dot != null) Box(Modifier.align(Alignment.CenterStart).padding(start = 6.dp).size(6.dp).clip(CircleShape).background(dot))
+                    }
+                }
+                AppChip("+ Subject", selected = false, onClick = onAddFolder)
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        AnimatedVisibility(importing || progress != null, enter = fadeIn(), exit = fadeOut()) {
+            Column(Modifier.fillMaxWidth().padding(top = 10.dp)) {
+                if (progress != null) Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(importProgressLabel(progress.filename, progress.percent), Modifier.weight(1f), style = MaterialTheme.typography.labelMedium)
+                    IconButton(onClick = onCancelImport, modifier = Modifier.size(32.dp)) { Icon(Icons.Default.Close, "Cancel import") }
+                }
+                LinearProgressIndicator(
+                    progress = { progress?.percent?.div(100f) ?: 0f },
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp).clip(CircleShape),
+                    color = t.ink, trackColor = t.surface2,
+                )
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+    }
+}
+
+/** Perplexity-Library-style row: small page thumbnail, title, meta, kebab; hairline between rows. */
+@Composable
+private fun NotebookRow(
+    repo: NotePadRepository,
+    notebook: Notebook,
+    modifier: Modifier,
+    subjectColor: Color,
+    renderThumbnail: Boolean,
+    onOpen: () -> Unit,
+    onMore: () -> Unit,
+) {
+    val t = NotePadTheme.tokens
+    val pages by repo.pages(notebook.id).collectAsState(initial = emptyList())
+    val interaction = remember { MutableInteractionSource() }
+    val isPdf = pages.any { it.kind == PageKind.PDF }
+    val radius = RoundedCornerShape(6.dp)
+    Column(modifier) {
+        Row(
+            Modifier.fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .combinedClickable(interactionSource = interaction, indication = null, onClick = onOpen, onLongClick = onMore)
+                .pressable(interaction)
+                .padding(horizontal = 8.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(Modifier.size(width = 44.dp, height = 58.dp).clip(radius).border(Spec.hairline, t.border, radius).background(if (isPdf) t.page else paperOf(notebook))) {
+                when {
+                    notebook.documentKind == "file" -> FileCover(notebook, Modifier.fillMaxSize())
+                    pages.isNotEmpty() -> PagePreview(repo, pages.firstOrNull(), if (isPdf) t.page else paperOf(notebook), Modifier.fillMaxSize(), renderEnabled = renderThumbnail)
+                    else -> BookCover(notebook.title, bookCoverColor(notebook), false, Modifier.fillMaxSize())
+                }
+            }
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f)) {
+                Text(notebook.title, style = MaterialTheme.typography.bodyLarge.copy(fontFamily = titleFontFamily(notebook.title)), fontWeight = FontWeight.Medium, color = t.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Spacer(Modifier.height(2.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(7.dp).clip(CircleShape).background(subjectColor))
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        buildString {
+                            if (isPdf) append("PDF · ")
+                            append(meta(notebook))
+                            if (notebook.lastOpenedAt != null && notebook.pageCount > 0) append(" · ").append(progressLabel(notebook.lastPageIndex, notebook.pageCount))
+                        },
+                        style = MaterialTheme.typography.bodySmall, color = t.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            if (notebook.lastOpenedAt != null && notebook.pageCount > 0) {
+                Spacer(Modifier.width(12.dp))
+                LibraryProgressTrack(((notebook.lastPageIndex + 1f) / notebook.pageCount).coerceIn(0f, 1f), subjectColor, Modifier.width(56.dp))
+            }
+            IconButton(onClick = onMore, modifier = Modifier.size(36.dp)) { Icon(Icons.Default.MoreVert, "More", tint = t.ink3) }
+        }
+        Hairline(Modifier.padding(start = 66.dp))
+    }
+}
+
+@Composable
+private fun LibrarySearchButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val t = NotePadTheme.tokens
+    Surface(
+        onClick = onClick,
+        shape = CircleShape,
+        color = t.surface,
+        border = BorderStroke(Spec.hairline, t.border),
+        shadowElevation = Spec.pillShadow,
+        modifier = modifier.height(Spec.pillHeight),
+    ) {
+        Row(Modifier.padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Outlined.Search, null, tint = t.ink3, modifier = Modifier.size(20.dp))
+            Spacer(Modifier.width(10.dp))
+            Text("Search notes, PDFs and handwriting", style = MaterialTheme.typography.bodyMedium, color = t.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+internal fun LibrarySidebar(
+    repo: NotePadRepository,
+    selectedFolderId: String,
+    onSelectFolder: (String) -> Unit,
+    screen: Screen,
+    onNavigate: (Screen) -> Unit,
+    themeMode: ThemeMode,
+    dynamicColor: Boolean,
+    onThemeChange: (ThemeMode) -> Unit,
+    onDynamicChange: (Boolean) -> Unit,
+) {
+    val folders by repo.folders().collectAsState(initial = emptyList())
+    val notebooks by repo.notebooks().collectAsState(initial = emptyList())
+    val counts = remember(notebooks) { notebooks.groupingBy { it.folderId }.eachCount() }
+    val scope = rememberCoroutineScope()
+    var folderActionsFor by remember { mutableStateOf<Folder?>(null) }
+    var renameFolderFor by remember { mutableStateOf<Folder?>(null) }
+    var deleteFolderFor by remember { mutableStateOf<Folder?>(null) }
+    var showCreateFolder by remember { mutableStateOf(false) }
+    var showAppearance by remember { mutableStateOf(false) }
+    val selectedLibrary = screen == Screen.Notebooks || screen is Screen.Pages || screen is Screen.Read
+
+    NavRail(
+        items = listOf(
+            NavItem("Library", Icons.Outlined.Book, selectedLibrary) { onNavigate(Screen.Notebooks) },
+            NavItem("Search", Icons.Outlined.Search, screen == Screen.Search) { onNavigate(Screen.Search) },
+            NavItem("Sync", Icons.Outlined.Cloud, screen == Screen.Account) { onNavigate(Screen.Account) },
+        ),
+        modifier = Modifier.statusBarsPadding(),
+        bottom = { ToolCell(Icons.Outlined.Palette, "Appearance", onClick = { showAppearance = true }) },
+    )
+    // Subjects are managed from the chip rail in the library header; only the dialogs remain here.
+    if (folders.isEmpty() && counts.isEmpty()) Unit
+
+    if (showCreateFolder) SubjectDialog(
+        title = "New subject",
+        initial = "",
+        initialColor = null,
+        onDismiss = { showCreateFolder = false },
+    ) { name, color ->
+        scope.launch {
+            onSelectFolder(repo.createFolder(name, color))
+            showCreateFolder = false
+        }
+    }
+    folderActionsFor?.let { folder ->
+        AlertDialog(
+            onDismissRequest = { folderActionsFor = null },
+            title = { Text(folder.name) },
+            text = { Text("Subject actions") },
+            confirmButton = {
+                TextButton(onClick = { renameFolderFor = folder; folderActionsFor = null }) { Text("Rename") }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(
+                        onClick = { deleteFolderFor = folder; folderActionsFor = null },
+                        colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                    ) { Text("Delete") }
+                    TextButton(onClick = { folderActionsFor = null }) { Text("Cancel") }
+                }
+            },
+        )
+    }
+    renameFolderFor?.let { folder ->
+        SubjectDialog(
+            title = "Rename subject",
+            initial = folder.name,
+            initialColor = folder.color,
+            onDismiss = { renameFolderFor = null },
+        ) { name, color ->
+            scope.launch { repo.renameFolder(folder.id, name, color) }
+            renameFolderFor = null
+        }
+    }
+    deleteFolderFor?.let { folder ->
+        AlertDialog(
+            onDismissRequest = { deleteFolderFor = null },
+            title = { Text("Delete “${folder.name}”?") },
+            text = { Text("The notebooks in this subject will be kept and moved to All.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        scope.launch { repo.deleteFolder(folder.id) }
+                        if (selectedFolderId == folder.id) onSelectFolder(ALL_FOLDERS)
+                        deleteFolderFor = null
+                    },
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                ) { Text("Delete") }
+            },
+            dismissButton = { TextButton(onClick = { deleteFolderFor = null }) { Text("Cancel") } },
+        )
+    }
+    if (showAppearance) {
+        AppearanceSheet(themeMode, dynamicColor, onThemeChange, onDynamicChange) { showAppearance = false }
+    }
+}
+
+@Composable
+private fun SidebarDestination(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, selected: Boolean, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(12.dp)
+    val contentColor = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+    Row(
+        Modifier.fillMaxWidth().height(44.dp).clip(shape)
+            .background(if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, contentDescription = null, modifier = Modifier.size(24.dp), tint = contentColor)
+        Spacer(Modifier.width(12.dp))
+        Text(label, style = MaterialTheme.typography.labelLarge, color = contentColor)
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun SidebarFolderRow(
+    name: String,
+    count: Int,
+    selected: Boolean,
+    dotColor: Color? = null,
+    onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
+) {
+    val shape = RoundedCornerShape(12.dp)
+    Row(
+        Modifier.fillMaxWidth().height(40.dp).clip(shape)
+            .background(if (selected) MaterialTheme.colorScheme.surfaceContainerHighest else Color.Transparent)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            .padding(horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(24.dp), contentAlignment = Alignment.Center) {
+            Box(
+                Modifier.size(if (dotColor == null) 8.dp else 10.dp)
+                    .clip(CircleShape)
+                    .background(dotColor ?: MaterialTheme.colorScheme.onSurfaceVariant),
+            )
+        }
+        Spacer(Modifier.width(12.dp))
+        Text(
+            name,
+            Modifier.weight(1f),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text("$count", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+private fun SidebarActionRow(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().height(48.dp).clip(RoundedCornerShape(24.dp)).clickable(onClick = onClick).padding(horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, contentDescription = null, modifier = Modifier.size(24.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.width(12.dp))
+        Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
+    }
+}
+
+@Composable
+private fun ContinueReadingCard(
+    repo: NotePadRepository,
+    notebook: Notebook,
+    subjectColor: Color,
+    renderThumbnail: Boolean,
+    phoneLayout: Boolean,
+    onOpen: () -> Unit,
+) {
+    val pages by repo.pages(notebook.id).collectAsState(initial = emptyList())
+    val page = pages.getOrNull(notebook.lastPageIndex)
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        if (pressed) Motion.pressScale else 1f,
+        tween(Motion.press, easing = Motion.emphasized),
+        label = "continue-press",
+    )
+    Surface(
+        modifier = Modifier.width(if (phoneLayout) 280.dp else 360.dp).height(150.dp).graphicsLayer { scaleX = scale; scaleY = scale }
+            .combinedClickable(interactionSource = interaction, indication = null, onClick = onOpen),
+        shape = RoundedCornerShape(Spec.coverRadius),
+        color = NotePadTheme.tokens.surface,
+        shadowElevation = Spec.pillShadow,
+        border = BorderStroke(Spec.hairline, NotePadTheme.tokens.border),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier.width(if (phoneLayout) 92.dp else 120.dp).fillMaxHeight()
+                    .clip(RoundedCornerShape(topStart = Spec.coverRadius, bottomStart = Spec.coverRadius)),
+            ) {
+                PagePreview(
+                    repo = repo,
+                    page = page,
+                    paperColor = notebook.coverColor?.let { runCatching { Color(android.graphics.Color.parseColor(it)) }.getOrNull() }
+                        ?: MaterialTheme.colorScheme.surface,
+                    modifier = Modifier.fillMaxSize(),
+                    renderEnabled = renderThumbnail,
+                    cropScale = 2.2f,
+                    cropToContent = true,
+                )
+                Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.035f)))
+            }
+            Column(Modifier.fillMaxHeight().weight(1f).padding(horizontal = 12.dp, vertical = 14.dp)) {
+                Text(notebook.title, style = MaterialTheme.typography.titleMedium.copy(fontFamily = titleFontFamily(notebook.title)), fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "Page ${notebook.lastPageIndex + 1} of ${notebook.pageCount.coerceAtLeast(1)} · ${recentlyOpenedLabel(notebook.lastOpenedAt)}",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Spacer(Modifier.weight(1f))
+                LibraryProgressTrack(
+                    ((notebook.lastPageIndex + 1f) / notebook.pageCount.coerceAtLeast(1)).coerceIn(0f, 1f),
+                    subjectColor,
+                    Modifier.fillMaxWidth(),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun LibraryProgressTrack(progress: Float, color: Color, modifier: Modifier = Modifier) {
+    // Quiet reading-progress line: ChatGPT-style neutral ink, never the accent.
+    val ink = NotePadTheme.tokens.ink
+    Box(modifier.height(2.dp).clip(CircleShape).background(ink.copy(alpha = 0.10f))) {
+        Box(Modifier.fillMaxHeight().fillMaxWidth(progress.coerceIn(0f, 1f)).clip(CircleShape).background(ink.copy(alpha = 0.55f)))
+    }
+}
+
+private fun recentlyOpenedLabel(openedAt: Long?): String {
+    val elapsed = (System.currentTimeMillis() - (openedAt ?: System.currentTimeMillis())).coerceAtLeast(0L)
+    val minutes = elapsed / 60_000
+    return when {
+        minutes < 1 -> "Just now"
+        minutes < 60 -> "$minutes min ago"
+        minutes < 24 * 60 -> "${minutes / 60} h ago"
+        else -> "${minutes / (24 * 60)} d ago"
+    }
+}
+
+@OptIn(ExperimentalSharedTransitionApi::class)
+@Composable
+private fun NotebookCard(
+    repo: NotePadRepository,
+    notebook: Notebook,
+    tags: List<Tag>,
+    compact: Boolean,
+    modifier: Modifier,
+    subjectColor: Color,
+    renderThumbnail: Boolean,
+    sharedTransitionScope: SharedTransitionScope?,
+    animatedVisibilityScope: AnimatedVisibilityScope?,
+    onOpen: () -> Unit,
+    onMore: () -> Unit,
+) {
     val pages by repo.pages(notebook.id).collectAsState(initial = emptyList())
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
-    val scale by animateFloatAsState(if (pressed) 0.96f else 1f, spring(stiffness = Spring.StiffnessMediumLow), label = "press")
+    val scale by animateFloatAsState(
+        if (pressed) Motion.pressScale else 1f,
+        tween(Motion.press, easing = Motion.emphasized),
+        label = "press",
+    )
     val cover = remember(notebook.id, notebook.coverColor) { bookCoverColor(notebook) }
-    val radius = RoundedCornerShape(topStart = 4.dp, bottomStart = 4.dp, topEnd = 10.dp, bottomEnd = 10.dp)
+    val tagNames = remember(tags, notebook.tagIds) { tags.filter { it.id in notebook.tagIds }.take(2).map { it.name } }
+    val coverAspect = pages.firstOrNull()?.let { (it.displayWidthPt / it.displayHeightPt).coerceIn(0.58f, 1.3f) } ?: 0.72f
+    val radius = RoundedCornerShape(Spec.coverRadius)
+    val t = NotePadTheme.tokens
+    val sharedModifier = if (sharedTransitionScope != null && animatedVisibilityScope != null) {
+        with(sharedTransitionScope) {
+            Modifier.sharedElement(
+                sharedContentState = rememberSharedContentState("notebook-cover-${notebook.id}"),
+                animatedVisibilityScope = animatedVisibilityScope,
+                boundsTransform = { _, _ -> tween(Motion.shared, easing = Motion.emphasized) },
+            )
+        }
+    } else Modifier
     Column(modifier.graphicsLayer { scaleX = scale; scaleY = scale }) {
         Box(
-            Modifier.fillMaxWidth().aspectRatio(0.72f)
-                .shadow(if (selected) 12.dp else 7.dp, radius, spotColor = Color.Black.copy(alpha = 0.36f))
+            Modifier.fillMaxWidth().aspectRatio(coverAspect)
+                .shadow(Spec.pillShadow, radius, ambientColor = t.shadow, spotColor = t.shadow)
                 .clip(radius)
-                .border(if (selected) 2.dp else 1.dp, if (selected) MaterialTheme.colorScheme.primary else cover.copy(alpha = 0.65f), radius)
+                .border(Spec.hairline, t.border, radius)
+                .then(sharedModifier)
                 .combinedClickable(interactionSource = interaction, indication = null, onClick = onOpen, onLongClick = onMore),
         ) {
-            BookCover(notebook.title, cover, pages.any { it.kind == PageKind.PDF }, Modifier.fillMaxSize())
+            when {
+                notebook.documentKind == "file" -> FileCover(notebook, Modifier.fillMaxSize())
+                pages.any { it.kind == PageKind.PDF } -> Box(Modifier.fillMaxSize().background(t.page)) {
+                    PagePreview(repo, pages.firstOrNull(), t.page, Modifier.fillMaxSize(), renderEnabled = renderThumbnail)
+                    Surface(Modifier.align(Alignment.TopStart).padding(8.dp), color = t.ink.copy(alpha = 0.85f), shape = RoundedCornerShape(6.dp)) {
+                        Text("PDF", Modifier.padding(horizontal = 6.dp, vertical = 3.dp), color = t.bg, style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, letterSpacing = 0.6.sp))
+                    }
+                }
+                pages.isNotEmpty() -> Box(Modifier.fillMaxSize().background(paperOf(notebook))) {
+                    PagePreview(repo, pages.firstOrNull(), paperOf(notebook), Modifier.fillMaxSize(), renderEnabled = renderThumbnail)
+                }
+                else -> BookCover(notebook.title, cover, false, Modifier.fillMaxSize(), tagNames)
+            }
         }
         Spacer(Modifier.height(10.dp))
         Row(verticalAlignment = Alignment.Top) {
             Column(Modifier.weight(1f)) {
                 Text(notebook.title, style = MaterialTheme.typography.titleSmall.copy(fontFamily = titleFontFamily(notebook.title)), fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Text(meta(notebook), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(7.dp).clip(CircleShape).background(subjectColor))
+                    Spacer(Modifier.width(6.dp))
+                    Text(meta(notebook), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                }
+                if (notebook.lastOpenedAt != null && notebook.pageCount > 0) {
+                    Text(progressLabel(notebook.lastPageIndex, notebook.pageCount), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    LibraryProgressTrack(
+                        ((notebook.lastPageIndex + 1f) / notebook.pageCount).coerceIn(0f, 1f),
+                        subjectColor,
+                        Modifier.fillMaxWidth().padding(top = 5.dp),
+                    )
+                }
             }
             if (!compact) IconButton(onClick = onMore, modifier = Modifier.size(28.dp)) { Icon(Icons.Default.MoreVert, "More", tint = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
@@ -330,99 +1409,71 @@ private fun NotebookCard(repo: NotePadRepository, notebook: Notebook, selected: 
 }
 
 @Composable
-private fun BookCover(title: String, color: Color, isPdf: Boolean, modifier: Modifier = Modifier) {
-    val spine = Color(color.red * 0.62f, color.green * 0.62f, color.blue * 0.62f)
-    val edge = Color(color.red * 0.91f, color.green * 0.91f, color.blue * 0.91f)
-    Box(modifier.background(Brush.horizontalGradient(listOf(spine, color, edge)))) {
-        Canvas(Modifier.fillMaxSize()) {
-            drawIntoCanvas { canvas ->
-                val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-                    shader = PaperTexture.shader()
-                    alpha = 110
-                    colorFilter = android.graphics.PorterDuffColorFilter(
-                        android.graphics.Color.rgb((color.red * 255).toInt(), (color.green * 255).toInt(), (color.blue * 255).toInt()),
-                        android.graphics.PorterDuff.Mode.MULTIPLY,
-                    )
-                }
-                canvas.nativeCanvas.drawRect(0f, 0f, size.width, size.height, paint)
-            }
-            val brightness = (color.red + color.green + color.blue) / 3f
-            val threadColor = if (brightness < 0.5f) Color.White.copy(alpha = 0.06f) else Color.Black.copy(alpha = 0.06f)
-            val threadSpacing = 6.dp.toPx()
-            var threadX = -size.height
-            while (threadX < size.width) {
-                drawLine(threadColor, Offset(threadX, 0f), Offset(threadX + size.height, size.height), 0.75f.dp.toPx())
-                drawLine(threadColor, Offset(threadX, 0f), Offset(threadX - size.height, size.height), 0.75f.dp.toPx())
-                threadX += threadSpacing
-            }
-            drawRect(
-                brush = Brush.linearGradient(
-                    colors = listOf(Color.White.copy(alpha = 0.08f), Color.Transparent, Color.Black.copy(alpha = 0.035f)),
-                    start = Offset(0f, 0f),
-                    end = Offset(size.width, size.height),
-                ),
+private fun subjectColor(notebook: Notebook, folders: List<Folder>): Color {
+    val hex = folders.firstOrNull { it.id == notebook.folderId }?.color ?: return MaterialTheme.colorScheme.primary
+    return runCatching { Color(android.graphics.Color.parseColor(hex)) }.getOrDefault(Color(0xFF75885C))
+}
+
+@Composable
+private fun FileCover(notebook: Notebook, modifier: Modifier = Modifier) {
+    val coverColor = MaterialTheme.colorScheme.surfaceContainerHigh
+    val titleColor = accessibleTextColor(coverColor, MaterialTheme.colorScheme.onSurface)
+    val badgeColor = MaterialTheme.colorScheme.primaryContainer
+    val badgeTextColor = accessibleTextColor(badgeColor, MaterialTheme.colorScheme.onPrimaryContainer)
+    Box(modifier.background(coverColor)) {
+        Text(notebook.originalFilename ?: notebook.title, Modifier.fillMaxWidth().padding(18.dp), style = MaterialTheme.typography.titleSmall, color = titleColor, maxLines = 4, overflow = TextOverflow.Ellipsis)
+        Surface(Modifier.align(Alignment.Center).padding(top = 12.dp), color = badgeColor, shape = RoundedCornerShape(18.dp)) {
+            Text(
+                fileTypeBadge(notebook.fileMimeType, notebook.originalFilename),
+                Modifier.padding(horizontal = 18.dp, vertical = 12.dp),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = badgeTextColor,
             )
+        }
+    }
+}
+
+@Composable
+private fun BookCover(title: String, color: Color, isPdf: Boolean, modifier: Modifier = Modifier, tagNames: List<String> = emptyList()) {
+    val spine = Color(color.red * 0.62f, color.green * 0.62f, color.blue * 0.62f)
+    val titleColor = if (android.graphics.Color.luminance(color.toArgb()) < 0.55f) {
+        Color.White.copy(alpha = 0.95f)
+    } else {
+        Color(0xFF2B2620)
+    }
+    Box(modifier.background(color)) {
+        androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) {
             val spineWidth = 10.dp.toPx()
             drawRect(spine, size = androidx.compose.ui.geometry.Size(spineWidth, size.height))
-            var y = 10.dp.toPx()
-            while (y < size.height - 10.dp.toPx()) {
-                drawLine(Color(0xFFF3E7D4).copy(alpha = 0.7f), Offset(spineWidth / 2f, y), Offset(spineWidth / 2f, y + 4.dp.toPx()), 1.dp.toPx())
-                y += 10.dp.toPx()
-            }
-            drawLine(Color.White.copy(alpha = 0.18f), Offset(spineWidth + 2.dp.toPx(), 0f), Offset(spineWidth + 2.dp.toPx(), size.height), 1.dp.toPx())
+            val highlightX = spineWidth + 0.5.dp.toPx()
+            drawLine(Color.White.copy(alpha = 0.12f), Offset(highlightX, 0f), Offset(highlightX, size.height), 1.dp.toPx())
         }
-        Box(
-            Modifier.align(Alignment.CenterEnd).padding(end = 18.dp).width(6.dp).fillMaxHeight(0.92f)
-                .background(spine.copy(alpha = 0.88f), RoundedCornerShape(3.dp)),
-        ) {
-            Canvas(Modifier.fillMaxSize()) {
-                drawLine(Color.White.copy(alpha = 0.48f), Offset(1f, 0f), Offset(1f, size.height), 1f)
-            }
-        }
-        Surface(
-            Modifier.fillMaxWidth(if (isPdf) 0.68f else 1f).padding(start = 18.dp, end = 18.dp, top = 18.dp),
-            shape = RoundedCornerShape(6.dp),
-            color = Color(0xFFF4EBDD).copy(alpha = 0.94f),
-        ) {
-            Box {
-                Text(
-                    title,
-                    Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-                    color = Color(0xFF382D22),
-                    style = MaterialTheme.typography.titleMedium.copy(fontFamily = titleFontFamily(title), fontWeight = FontWeight.SemiBold),
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Canvas(Modifier.matchParentSize()) {
-                    val edge = 5.dp.toPx()
-                    drawRect(
-                        brush = Brush.verticalGradient(
-                            colors = listOf(Color.Black.copy(alpha = 0.08f), Color.Transparent),
-                            startY = 0f,
-                            endY = edge,
-                        ),
-                        topLeft = Offset.Zero,
-                        size = androidx.compose.ui.geometry.Size(size.width, edge),
-                    )
-                    drawRect(
-                        brush = Brush.verticalGradient(
-                            colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.07f)),
-                            startY = size.height - edge,
-                            endY = size.height,
-                        ),
-                        topLeft = Offset(0f, size.height - edge),
-                        size = androidx.compose.ui.geometry.Size(size.width, edge),
-                    )
-                }
-            }
+        Text(
+            title,
+            Modifier.fillMaxWidth().padding(start = 22.dp, top = 20.dp, end = if (isPdf) 56.dp else 16.dp),
+            color = titleColor,
+            style = MaterialTheme.typography.titleMedium.copy(fontFamily = titleFontFamily(title), fontWeight = FontWeight.SemiBold),
+            maxLines = 3,
+            overflow = TextOverflow.Ellipsis,
+        )
+        if (tagNames.isNotEmpty()) {
+            Text(
+                tagNames.joinToString("  ") { "#$it" },
+                Modifier.align(Alignment.BottomStart).padding(start = 20.dp, end = 8.dp, bottom = 12.dp),
+                color = titleColor.copy(alpha = 0.82f),
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
         if (isPdf) {
             Surface(
                 Modifier.align(Alignment.TopEnd).padding(8.dp),
-                color = Color(0xFFB4532A),
+                color = Color(0xCC15161A),
                 shape = RoundedCornerShape(4.dp),
             ) {
-                Text("PDF", Modifier.padding(horizontal = 7.dp, vertical = 4.dp), color = Color.White, style = MaterialTheme.typography.labelSmall)
+                Text("PDF", Modifier.padding(horizontal = 6.dp, vertical = 3.dp), color = Color.White, style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 0.8.sp))
             }
         }
     }
@@ -458,17 +1509,17 @@ private fun EmptyLibrary(onNew: () -> Unit, onImport: () -> Unit) {
 
 @Composable
 internal fun SheetTitle(text: String) {
-    Text(text, style = MaterialTheme.typography.titleLarge.copy(fontFamily = titleFontFamily(text)), fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 8.dp))
+    Text(text, style = MaterialTheme.typography.headlineSmall.copy(fontFamily = titleFontFamily(text)), modifier = Modifier.padding(start = 24.dp, end = 24.dp, top = 4.dp, bottom = 12.dp))
 }
 
 @Composable
 internal fun SheetRow(icon: ImageVector, title: String, subtitle: String? = null, tint: Color = MaterialTheme.colorScheme.onSurface, onClick: () -> Unit) {
     ListItem(
-        leadingContent = { Icon(icon, null, tint = tint) },
-        headlineContent = { Text(title, color = tint) },
-        supportingContent = subtitle?.let { { Text(it) } },
+        leadingContent = { Icon(icon, null, tint = tint, modifier = Modifier.size(22.dp)) },
+        headlineContent = { Text(title, color = tint, style = MaterialTheme.typography.bodyLarge) },
+        supportingContent = subtitle?.let { { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) } },
         colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-        modifier = Modifier.clickable(onClick = onClick).padding(horizontal = 8.dp),
+        modifier = Modifier.heightIn(min = 52.dp).clickable(onClick = onClick).padding(horizontal = 8.dp),
     )
 }
 
@@ -504,10 +1555,10 @@ private fun LanguageRow(current: String, onPick: (String) -> Unit) {
 @Composable
 private fun ThemeSwatch(mode: ThemeMode) {
     val (bg, fg) = when (mode) {
-        ThemeMode.LIGHT -> Color(0xFFF3EFE7) to Color(0xFFB4532A)
-        ThemeMode.DARK -> Color(0xFF1B1916) to Color(0xFFF0A47C)
-        ThemeMode.SEPIA -> Color(0xFFF1E8D8) to Color(0xFFB4532A)
-        ThemeMode.SYSTEM -> MaterialTheme.colorScheme.surfaceContainerLowest to MaterialTheme.colorScheme.primary
+        ThemeMode.LIGHT -> LightTokens.bg to LightTokens.ink
+        ThemeMode.DARK -> DarkTokens.bg to DarkTokens.ink
+        ThemeMode.SEPIA -> PaperTokens.bg to PaperTokens.ink
+        ThemeMode.SYSTEM -> NotePadTheme.tokens.surface to NotePadTheme.tokens.accent
     }
     Box(Modifier.size(40.dp, 28.dp).clip(RoundedCornerShape(6.dp)).background(bg).border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(6.dp))) {
         Box(Modifier.padding(6.dp).size(14.dp, 3.dp).background(fg, CircleShape))
@@ -522,9 +1573,49 @@ internal fun NameDialog(title: String, initial: String, confirm: String, onDismi
         onDismissRequest = onDismiss,
         title = { Text(title) },
         text = { OutlinedTextField(value = text, onValueChange = { text = it }, singleLine = true, placeholder = { Text("Title") }, shape = MaterialTheme.shapes.medium, modifier = Modifier.fillMaxWidth()) },
-        confirmButton = { Button(enabled = text.isNotBlank(), onClick = { onConfirm(text.trim()) }, shape = CircleShape) { Text(confirm) } },
+        confirmButton = { Button(enabled = text.isNotBlank(), onClick = { onConfirm(text.trim()) }, shape = MaterialTheme.shapes.small) { Text(confirm) } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-        shape = MaterialTheme.shapes.extraLarge,
+        shape = MaterialTheme.shapes.large,
+    )
+}
+
+private val subjectColors = listOf("#B96C5C", "#C48C50", "#75885C", "#4F8278", "#62809A", "#7E7195", "#A66F82", "#84796B")
+
+@Composable
+private fun SubjectDialog(
+    title: String,
+    initial: String,
+    initialColor: String?,
+    onDismiss: () -> Unit,
+    onConfirm: (String, String) -> Unit,
+) {
+    var name by remember(initial) { mutableStateOf(initial) }
+    var color by remember(initialColor) { mutableStateOf(initialColor ?: subjectColors.first()) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Subject name") }, singleLine = true)
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    subjectColors.forEach { hex ->
+                        val selected = color.equals(hex, ignoreCase = true)
+                        val swatch = Color(android.graphics.Color.parseColor(hex))
+                        Box(
+                            Modifier.size(if (selected) 34.dp else 28.dp)
+                                .clip(CircleShape)
+                                .background(swatch)
+                                .then(if (selected) Modifier.border(2.dp, MaterialTheme.colorScheme.onSurface, CircleShape) else Modifier)
+                                .clickable { color = hex },
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(enabled = name.isNotBlank(), onClick = { onConfirm(name.trim(), color) }) { Text("Save") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
 

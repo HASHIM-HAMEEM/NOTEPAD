@@ -1,12 +1,16 @@
 package com.hashim.notepad.ink
 
 import android.animation.ValueAnimator
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.PorterDuff
+import android.util.Log
 import android.graphics.PorterDuffColorFilter
 import android.graphics.Typeface
 import android.os.SystemClock
@@ -27,11 +31,19 @@ import android.graphics.DashPathEffect
 import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.Region
+import java.util.concurrent.TimeUnit
 import androidx.input.motionprediction.MotionEventPredictor
 import com.hashim.notepad.data.PageKind
+import com.hashim.notepad.data.PdfMark
+import com.hashim.notepad.data.PdfMarkKind
+import com.hashim.notepad.pdf.PdfMarkGeometry
+import com.hashim.notepad.data.PageImage
 import com.hashim.notepad.data.TextBlock
+import com.hashim.notepad.data.InkTimestamp
 import androidx.ink.brush.Brush
+import androidx.ink.brush.ExperimentalInkCustomBrushApi
 import androidx.ink.brush.InputToolType
+import androidx.ink.brush.StockBrushes
 import androidx.ink.strokes.InProgressStroke
 import android.view.InputDevice
 import android.view.KeyEvent
@@ -43,13 +55,22 @@ import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.roundToInt
 import kotlin.math.sin
+import kotlin.math.ceil
 import android.view.HapticFeedbackConstants
+import com.hashim.notepad.pdf.PdfInvert
 
 private const val HIGHLIGHTER_STRAIGHTEN_DELAY_MS = 450L
+private const val SHAPE_STRAIGHTEN_DELAY_MS = 450L
+private const val SHAPE_HOLD_RADIUS_DP = 6f
+private const val SHAPE_SAMPLE_SPACING_PT = 2f
+private const val POLYGON_CORNER_REPEATS = 6
+private const val POLYGON_CORNER_INTERVAL_MS = 16L
+private const val LASER_FADE_DURATION_MS = 1000L
 private const val POINT_STROKE_UNIT_LENGTH_CM = 2.54f / 72f
 private const val STYLUS_BUTTON_PRIMARY_KEYCODE = 308
 private const val STYLUS_BUTTON_SECONDARY_KEYCODE = 309
-private const val STYLUS_CLICK_TIMEOUT_MS = 400L
+private const val STYLUS_BUTTON_TERTIARY_KEYCODE = 310
+private const val STYLUS_BUTTON_TAIL_KEYCODE = 311
 
 /**
  * Pen surface. World coordinates are PDF points on the page (origin top-left). A page bitmap
@@ -57,15 +78,27 @@ private const val STYLUS_CLICK_TIMEOUT_MS = 400L
  * and [InProgressStrokesView] draws the wet stroke on a front buffer on top.
  * Stylus draws; fingers pan/zoom unless [fingerDraws] is on.
  */
+private const val TAG = "InkSurfaceView"
+
 class InkSurfaceView(context: Context) : FrameLayout(context) {
 
     var brushSpec: BrushSpec = BrushSpec(InkTool.PEN, 0xFF1A1A1A.toInt(), 2.5f)
     var highlighterAlwaysStraight: Boolean = false
+    var shapeStraightening: Boolean = true
     var fingerDraws: Boolean = false
     var primaryButtonAction: StylusButtonAction = StylusButtonAction.SWITCH_TO_ERASER
     var secondaryButtonAction: StylusButtonAction = StylusButtonAction.PREVIOUS_PEN
     var onSample: ((PointerSample) -> Unit)? = null
+    var onDrawingActiveChanged: ((Boolean) -> Unit)? = null
     var onStrokesChanged: ((List<Stroke>) -> Unit)? = null
+    private var pdfMarks: List<PdfMark> = emptyList()
+    private var audioPlaybackPageId: String? = null
+    private var audioPlaybackPositionMs: Long? = null
+    private var audioItemTimes = emptyMap<String, Long>()
+    private var audioLatestItemKey: String? = null
+    var onAudioSeekRequested: ((Long) -> Unit)? = null
+    var onPageImagesChanged: ((List<PageImage>) -> Unit)? = null
+    var onTextBlocksChanged: ((List<TextBlock>) -> Unit)? = null
     var onUndoRedoChanged: ((Boolean, Boolean) -> Unit)? = null
     var onZoomChanged: ((Int) -> Unit)? = null
     var onStylusToolSwitch: ((StylusButtonAction) -> Unit)? = null
@@ -78,6 +111,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
 
     var pageWidthPt = 595f; private set
     var pageHeightPt = 842f; private set
+    private var pageRotation = 0
     private var pageKind = PageKind.BLANK
     private var hasPageGeometry = false
 
@@ -118,13 +152,26 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     private var rulerSnapEndY = 0f
 
     private val strokes = ArrayList<Stroke>()
-    private val history = ArrayList<List<Stroke>>()
-    private val future = ArrayList<List<Stroke>>()
+    private var revealPageId = ""
+    private val revealedTapeIndicesByPage = HashMap<String, MutableSet<Int>>()
+    private var tapeRevealGesture = false
+    private data class Snapshot(
+        val strokes: List<Stroke>,
+        val images: List<PageImage>,
+        val textBlocks: List<TextBlock>,
+        val externalUndo: (() -> Unit)? = null,
+        val externalRedo: (() -> Unit)? = null,
+    )
+    private val history = ArrayList<Snapshot>()
+    private val future = ArrayList<Snapshot>()
     private var eraseDirty = false
 
     /** Call before any mutation of [strokes]; keeps the last 100 states. */
-    private fun snapshot() {
-        history.add(ArrayList(strokes))
+    private fun snapshot(
+        externalUndo: (() -> Unit)? = null,
+        externalRedo: (() -> Unit)? = null,
+    ) {
+        history.add(Snapshot(ArrayList(strokes), ArrayList(pageImages), ArrayList(textBlocks), externalUndo, externalRedo))
         if (history.size > 100) history.removeAt(0)
         future.clear()
         notifyUndoRedoChanged()
@@ -217,15 +264,10 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
             val m = Matrix(zoomToView); m.preScale(pageWidthPt / bmp.width, pageHeightPt / bmp.height); canvas.drawBitmap(bmp, m, bitmapPaint)
         }
         canvas.save(); canvas.concat(zoomToView)
-        drawStrokes(
-            canvas,
-            strokes,
-            renderer,
-            zoomToView,
-            paperPaint.color,
-            highlighterWet.takeIf { highlighterStartedInStrip },
-        )
-        for (b in textBlocks) TextBlockPainter.draw(canvas, b, false)
+        drawPageImages(canvas)
+        val zoomRevealedTapes = revealedTapeIndicesByPage[revealPageId].orEmpty()
+        drawStrokesWithAudio(canvas, zoomToView, highlighterWet.takeIf { highlighterStartedInStrip }, zoomRevealedTapes)
+        for (b in textBlocks) drawTextBlockWithAudio(canvas, b, false)
         canvas.restore()
         canvas.restore()
         canvas.drawLine(0f, stripTop, width.toFloat(), stripTop, stripBorderPaint)
@@ -237,11 +279,18 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     private var panY = 0f
     private var lastReportedZoomPercent = Int.MIN_VALUE
     private var pageBitmap: Bitmap? = null
+    private var imagePageId: String? = null
+    private var pageImages = emptyList<PageImage>()
+    private val imageBitmaps = HashMap<String, Bitmap>()
+    private val imagePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
     private var currentStrokeId: InProgressStrokeId? = null
+    private data class ShapeStrokeContext(val enabled: Boolean, val pageToInput: Matrix)
+    private val shapeStrokeContexts = HashMap<InProgressStrokeId, ShapeStrokeContext>()
     private var highlighterWet: InProgressStroke? = null
-    private data class StylusButtonPress(val downTime: Long, var strokeIntervened: Boolean)
-    private val stylusButtonPresses = HashMap<Int, StylusButtonPress>()
+    private val stylusButtonPresses = HashSet<Int>()
     private val stylusButtonStates = HashMap<Int, Int>()
+    private val activeContactPointerIds = HashSet<Int>()
+    private val stylusButtonDebouncer = StylusButtonDebouncer()
     private var highlighterStoredBrush: Brush? = null
     private var highlighterRenderBrush: Brush? = null
     private var highlighterFirstInput: StrokeInput? = null
@@ -251,16 +300,21 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     private var highlighterStartEventTime = 0L
     private var highlighterLastElapsed = -1L
     private var highlighterStartedInStrip = false
+    private val highlighterLifecycle = HighlighterStrokeLifecycle()
     private var highlighterDownX = 0f
     private var highlighterDownY = 0f
     private var currentPointerId = -1
     private var erasing = false
+    private var pendingStylusErase = false
+    private var drawingInputActive = false
     private var lastPanX = 0f
     private var lastPanY = 0f
     private var panning = false
     private var zoomAnimator: ValueAnimator? = null
     private val highlighterStraightenRunnable = Runnable {
-        if (highlighterWet != null && !highlighterStraight && !highlighterHoldCancelled) {
+        if (highlighterLifecycle.acceptsInput() && highlighterWet != null &&
+            !highlighterStraight && !highlighterHoldCancelled
+        ) {
             straightenHighlighterForHold()
         }
     }
@@ -272,6 +326,8 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
             toggleDoubleTapZoom(event.x, event.y)
             return true
         }
+
+        override fun onSingleTapUp(event: MotionEvent): Boolean = seekAudioToItem(event.x, event.y)
     })
 
     // Lasso state (page coordinates)
@@ -279,13 +335,25 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     private val lassoPoints = ArrayList<Float>()
     private var lassoActive = false
     private val selected = LinkedHashSet<Stroke>()
+    private var selectedPageImageId: String? = null
     private var selectionBounds: RectF? = null
     private var movingSelection = false
+    private var resizingSelection = false
+    private var resizeHandle = -1
+    private var resizeAnchor = FloatArray(2)
+    private var resizeStartBounds: RectF? = null
+    private var resizeStartImage: PageImage? = null
+    private var imageGestureMoved = false
+    private var resizeStartStrokes: List<Stroke> = emptyList()
+    private var resizeStrokeIndices: List<Int> = emptyList()
     private var moveLastX = 0f
     private var moveLastY = 0f
     var onSelectionChanged: ((Boolean) -> Unit)? = null
+    var onSelectionBoundsChanged: ((RectF?) -> Unit)? = null
     private val lassoPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF1E5EFF.toInt(); style = Paint.Style.STROKE; strokeWidth = 2f; pathEffect = DashPathEffect(floatArrayOf(10f, 8f), 0f) }
     private val selectionFill = Paint().apply { color = 0x141E5EFF; style = Paint.Style.FILL }
+    private val selectionHandlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFFFFFFF.toInt(); style = Paint.Style.FILL }
+    private val selectionHandleOutlinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF1E5EFF.toInt(); style = Paint.Style.STROKE; strokeWidth = 2f }
 
     private val renderer = CanvasStrokeRenderer.create(InkTextures.textureStore)
     private val predictor = MotionEventPredictor.newInstance(this)
@@ -299,6 +367,36 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     private val pageClipPath = Path()
     private var deskColor = 0xFFF3EFE7.toInt()
     private val bitmapPaint = Paint(Paint.FILTER_BITMAP_FLAG)
+    private data class LaserTrail(val path: Path, var alpha: Float = 1f, var fadeAnimator: ValueAnimator? = null)
+    private val laserTrails = ArrayList<LaserTrail>()
+    private var activeLaserTrail: LaserTrail? = null
+    private var activeLaserPointerId = -1
+    private val laserHaloPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0xFFFF3B30.toInt()
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+        strokeJoin = Paint.Join.ROUND
+        strokeWidth = 18f * resources.displayMetrics.density
+    }
+    private val laserCorePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0xFFFF3B30.toInt()
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+        strokeJoin = Paint.Join.ROUND
+        strokeWidth = 4f * resources.displayMetrics.density
+    }
+    private val laserOverlay = object : View(context) {
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            laserTrails.forEach { trail ->
+                if (trail.alpha <= 0f) return@forEach
+                laserHaloPaint.alpha = (trail.alpha * 0.16f * 255f).toInt()
+                laserCorePaint.alpha = (trail.alpha * 255f).toInt()
+                canvas.drawPath(trail.path, laserHaloPaint)
+                canvas.drawPath(trail.path, laserCorePaint)
+            }
+        }
+    }
 
     private val scaleDetector = ScaleGestureDetector(context, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
         override fun onScale(d: ScaleGestureDetector): Boolean {
@@ -339,14 +437,10 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
                 canvas.drawBitmap(bmp, m, bitmapPaint)
             }
             canvas.save(); canvas.concat(pageToView)
-            drawStrokes(
-                canvas,
-                strokes,
-                renderer,
-                pageToView,
-                paperPaint.color,
-                highlighterWet.takeUnless { highlighterStartedInStrip },
-            )
+            drawPdfMarks(canvas)
+            drawPageImages(canvas)
+            val committedRevealedTapes = revealedTapeIndicesByPage[revealPageId].orEmpty()
+            drawStrokesWithAudio(canvas, pageToView, highlighterWet.takeUnless { highlighterStartedInStrip }, committedRevealedTapes)
             canvas.restore()
             selectionBounds?.let { b ->
                 canvas.save(); canvas.concat(pageToView)
@@ -354,6 +448,12 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
                 canvas.save(); canvas.scale(1f, 1f); canvas.restore()
                 canvas.restore()
                 val vb = RectF(b); pageToView.mapRect(vb); canvas.drawRect(vb, lassoPaint)
+                val radius = 5f * resources.displayMetrics.density
+                val points = selectionHandlePoints(vb)
+                points.forEach { point ->
+                    canvas.drawCircle(point[0], point[1], radius, selectionHandlePaint)
+                    canvas.drawCircle(point[0], point[1], radius, selectionHandleOutlinePaint)
+                }
             }
             if (lassoActive) {
                 canvas.save(); canvas.concat(pageToView)
@@ -366,7 +466,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
             }
             if (textBlocks.isNotEmpty()) {
                 canvas.save(); canvas.concat(pageToView)
-                for (b in textBlocks) TextBlockPainter.draw(canvas, b, b.id == selectedTextBlockId)
+                for (b in textBlocks) drawTextBlockWithAudio(canvas, b, b.id == selectedTextBlockId)
                 canvas.restore()
             }
             canvas.restore()
@@ -376,25 +476,67 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
 
     }
 
-    private val wetLayer = InProgressStrokesView(context).apply {
-        eagerInit()
-        addFinishedStrokesListener(object : InProgressStrokesFinishedListener {
-            override fun onStrokesFinished(strokes: Map<InProgressStrokeId, Stroke>) {
-                snapshot()
-                this@InkSurfaceView.strokes.addAll(strokes.values)
-                if (zoomEnabled && inStrip) strokes.values.lastOrNull()?.let { autoAdvance(it) }
-                strokeLayer.invalidate()
-                post { removeFinishedStrokes(strokes.keys) }
-                notifyChanged()
-            }
-        })
-    }
+    private var wetLayerGeneration = 0L
+    private var replaceWetLayerOnAttach = false
+    private var wetLayer: InProgressStrokesView = createWetLayer(wetLayerGeneration)
 
     init {
         setWillNotDraw(true)
         updateRulerPaints()
         addView(strokeLayer, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
         addView(wetLayer, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+        addView(laserOverlay, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+    }
+
+    private fun createWetLayer(generation: Long): InProgressStrokesView = InProgressStrokesView(context).apply {
+        eagerInit()
+        addFinishedStrokesListener(object : InProgressStrokesFinishedListener {
+            override fun onStrokesFinished(strokes: Map<InProgressStrokeId, Stroke>) {
+                val finishedStrokes = strokes.map { (id, stroke) ->
+                    val shapeContext = shapeStrokeContexts.remove(id)
+                    val shaped = if (shapeContext?.enabled == true) straightenHeldStroke(stroke, shapeContext) else stroke
+                    if (brushSpec.tool == InkTool.TAPE) straightenTapeStroke(shaped) else shaped
+                }
+                snapshot()
+                this@InkSurfaceView.strokes.addAll(finishedStrokes)
+                val rendererCurrent = generation == wetLayerGeneration && isAttachedToWindow
+                if (rendererCurrent) {
+                    if (zoomEnabled && inStrip) finishedStrokes.lastOrNull()?.let { autoAdvance(it) }
+                    strokeLayer.invalidate()
+                    post {
+                        if (generation == wetLayerGeneration && isAttachedToWindow) {
+                            wetLayer.removeFinishedStrokes(strokes.keys)
+                        }
+                    }
+                }
+                notifyChanged()
+            }
+        })
+    }
+
+    @OptIn(androidx.ink.authoring.ExperimentalInkHandoffApi::class)
+    @android.annotation.SuppressLint("RestrictedApi")
+    override fun onDetachedFromWindow() {
+        resetHighlighterStroke()
+        val detachedLayer = wetLayer
+        wetLayerGeneration++
+        runCatching { detachedLayer.cancelUnfinishedStrokes() }
+        runCatching { detachedLayer.flush(150, TimeUnit.MILLISECONDS, false) }
+        runCatching { detachedLayer.sync(150, TimeUnit.MILLISECONDS) }
+        detachedLayer.clearFinishedStrokesListeners()
+        replaceWetLayerOnAttach = true
+        super.onDetachedFromWindow()
+    }
+
+    override fun onAttachedToWindow() {
+        if (replaceWetLayerOnAttach) {
+            val index = indexOfChild(wetLayer).coerceAtLeast(0)
+            removeView(wetLayer)
+            wetLayer = createWetLayer(wetLayerGeneration)
+            addView(wetLayer, index, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+            replaceWetLayerOnAttach = false
+        }
+        super.onAttachedToWindow()
     }
 
     private fun drawRuler(canvas: Canvas) {
@@ -408,7 +550,8 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         rulerOutlinePaint.strokeWidth = 1f / scale
         rulerTickPaint.strokeWidth = 1f / scale
         rulerHandleOutlinePaint.strokeWidth = 1f / scale
-        rulerFillPaint.setShadowLayer(8f / scale, 0f, 3f / scale, 0x44000000)
+        rulerOutlinePaint.isAntiAlias = false
+        rulerTickPaint.isAntiAlias = false
 
         canvas.save()
         canvas.concat(pageToView)
@@ -435,14 +578,19 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         var mark = 0
         var x = rulerCx - halfLength
         while (x <= rulerCx + halfLength + 0.1f) {
-            val fullCentimeter = mark % 2 == 0
-            val tickHeight = if (fullCentimeter) RULER_FULL_TICK_PT else RULER_HALF_TICK_PT
+            val fullCentimeter = mark % 10 == 0
+            val halfCentimeter = mark % 5 == 0
+            val tickHeight = when {
+                fullCentimeter -> RULER_FULL_TICK_PT
+                halfCentimeter -> RULER_HALF_TICK_PT
+                else -> RULER_MILLIMETER_TICK_PT
+            }
             canvas.drawLine(x, top, x, top + tickHeight, rulerTickPaint)
             if (fullCentimeter) {
                 rulerTextPaint.textSize = RULER_LABEL_TEXT_PT
-                canvas.drawText(((mark / 2)).toString(), x, top + tickHeight + RULER_LABEL_BASELINE_PT, rulerTextPaint)
+                canvas.drawText((mark / 10).toString(), x, top + tickHeight + RULER_LABEL_BASELINE_PT, rulerTextPaint)
             }
-            x += RULER_HALF_CENTIMETER_PT
+            x += RULER_MILLIMETER_PT
             mark++
         }
 
@@ -460,6 +608,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         val angleCenter = rulerPagePoint(rulerCx, rulerCy + 16f)
         val pill = RectF(angleCenter[0] - 24f, angleCenter[1] - 12f, angleCenter[0] + 24f, angleCenter[1] + 12f)
         canvas.drawRoundRect(pill, 12f, 12f, rulerAnglePillPaint)
+        canvas.drawRoundRect(pill, 12f, 12f, rulerOutlinePaint)
         canvas.drawText("${degrees.roundToInt()}°", angleCenter[0], angleCenter[1] + 4f, rulerTextPaint)
         canvas.restore()
     }
@@ -493,14 +642,137 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     }
 
     private fun drawTemplate(canvas: Canvas) {
-        val gap = 24f
-        when (pageKind) {
-            PageKind.LINED -> { var y = gap * 3; while (y < pageHeightPt - gap) { canvas.drawLine(gap * 2, y, pageWidthPt - gap * 2, y, templatePaint); y += gap } }
-            PageKind.GRID -> {
-                var y = gap; while (y < pageHeightPt) { canvas.drawLine(0f, y, pageWidthPt, y, templatePaint); y += gap }
-                var x = gap; while (x < pageWidthPt) { canvas.drawLine(x, 0f, x, pageHeightPt, templatePaint); x += gap }
+        PageTemplateRenderer.draw(canvas, templatePaint, pageWidthPt, pageHeightPt, pageKind)
+    }
+
+    private fun straightenHeldStroke(stroke: Stroke, context: ShapeStrokeContext): Stroke {
+        val inputBatch = stroke.inputs
+        if (inputBatch.size < 2) return stroke
+        val inputs = List(inputBatch.size) { inputBatch[it] }
+        val lastInput = inputs[inputs.lastIndex]
+        val anchor = floatArrayOf(lastInput.x, lastInput.y)
+        context.pageToInput.mapPoints(anchor)
+        val holdRadius = SHAPE_HOLD_RADIUS_DP * resources.displayMetrics.density
+        var holdStart = inputs.lastIndex
+        while (holdStart > 0) {
+            val candidate = inputs[holdStart - 1]
+            val point = floatArrayOf(candidate.x, candidate.y)
+            context.pageToInput.mapPoints(point)
+            if (hypot(point[0] - anchor[0], point[1] - anchor[1]) > holdRadius) break
+            holdStart--
+        }
+        if (lastInput.elapsedTimeMillis - inputs[holdStart].elapsedTimeMillis < SHAPE_STRAIGHTEN_DELAY_MS) {
+            return stroke
+        }
+
+        val drawingInputs = (0..holdStart).map { inputs[it] }
+        val shape = ShapeRecognizer.recognize(
+            drawingInputs.map { it.x }.toFloatArray(),
+            drawingInputs.map { it.y }.toFloatArray(),
+        ) ?: return stroke
+        val generatedPoints = shapePoints(shape)
+        if (generatedPoints.size < 2) return stroke
+
+        val pressures = inputs.map { it.pressure }.sorted()
+        val pressure = if (pressures.size % 2 == 0) {
+            (pressures[pressures.size / 2 - 1] + pressures[pressures.size / 2]) / 2f
+        } else {
+            pressures[pressures.size / 2]
+        }
+        val firstInput = inputs[0]
+        val batch = MutableStrokeInputBatch()
+        var elapsedTimeMillis = firstInput.elapsedTimeMillis
+        var previousPoint: Shape.Point? = null
+        generatedPoints.forEach { point ->
+            elapsedTimeMillis += if (point == previousPoint) POLYGON_CORNER_INTERVAL_MS else 1L
+            batch.add(
+                StrokeInput.create(
+                    point.x,
+                    point.y,
+                    elapsedTimeMillis,
+                    firstInput.toolType,
+                    firstInput.strokeUnitLengthCm,
+                    pressure,
+                    firstInput.tiltRadians,
+                    firstInput.orientationRadians,
+                ),
+            )
+            previousPoint = point
+        }
+        return Stroke(stroke.brush, batch)
+    }
+
+    private fun straightenTapeStroke(stroke: Stroke): Stroke {
+        if (stroke.inputs.size < 2) return stroke
+        val first = stroke.inputs[0]
+        val last = stroke.inputs[stroke.inputs.size - 1]
+        val dx = last.x - first.x
+        val dy = last.y - first.y
+        val angle = abs(Math.toDegrees(atan2(dy.toDouble(), dx.toDouble())))
+        val endY = if (angle <= 8.0 || abs(angle - 180.0) <= 8.0) first.y else last.y
+        val batch = MutableStrokeInputBatch()
+        batch.add(first)
+        batch.add(
+            StrokeInput.create(
+                last.x,
+                endY,
+                max(first.elapsedTimeMillis + 1L, last.elapsedTimeMillis),
+                last.toolType,
+                last.strokeUnitLengthCm,
+                last.pressure,
+                last.tiltRadians,
+                last.orientationRadians,
+            ),
+        )
+        return Stroke(stroke.brush, batch)
+    }
+
+    private fun shapePoints(shape: Shape): List<Shape.Point> = when (shape) {
+        is Shape.Line -> sampleSegment(
+            Shape.Point(shape.x1, shape.y1),
+            Shape.Point(shape.x2, shape.y2),
+        )
+        is Shape.Polygon -> {
+            if (shape.points.size < 3) {
+                emptyList()
+            } else {
+                buildList {
+                    shape.points.indices.forEach { index ->
+                        val start = shape.points[index]
+                        val end = shape.points[(index + 1) % shape.points.size]
+                        add(start)
+                        repeat(POLYGON_CORNER_REPEATS) { add(start) }
+                        addAll(sampleSegment(start, end).drop(1).dropLast(1))
+                    }
+                    add(shape.points.first())
+                    repeat(POLYGON_CORNER_REPEATS) { add(shape.points.first()) }
+                }
             }
-            else -> Unit
+        }
+        is Shape.Ellipse -> {
+            val circumference = 2f * Math.PI.toFloat() * kotlin.math.sqrt(
+                (shape.rx * shape.rx + shape.ry * shape.ry) / 2f,
+            )
+            val steps = ceil(circumference / SHAPE_SAMPLE_SPACING_PT).toInt().coerceAtLeast(12)
+            (0..steps).map { index ->
+                val angle = 2f * Math.PI.toFloat() * index / steps
+                Shape.Point(
+                    shape.cx + shape.rx * kotlin.math.cos(angle),
+                    shape.cy + shape.ry * kotlin.math.sin(angle),
+                )
+            }
+        }
+    }
+
+    private fun sampleSegment(start: Shape.Point, end: Shape.Point): List<Shape.Point> {
+        val length = hypot(end.x - start.x, end.y - start.y)
+        val steps = ceil(length / SHAPE_SAMPLE_SPACING_PT).toInt().coerceAtLeast(1)
+        return (0..steps).map { index ->
+            val fraction = index.toFloat() / steps
+            Shape.Point(
+                start.x + (end.x - start.x) * fraction,
+                start.y + (end.y - start.y) * fraction,
+            )
         }
     }
 
@@ -512,7 +784,23 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         placeRulerIfNeeded()
     }
 
-    fun setPaperColor(argb: Int) { paperPaint.color = argb; templatePaint.color = if (argb == 0xFF1F1F22.toInt()) 0xFF3A3A40.toInt() else 0xFFC9CDD6.toInt(); strokeLayer.invalidate() }
+    fun setPageRotation(rotation: Int) {
+        pageRotation = ((rotation % 360) + 360) % 360
+        fitToWidth()
+        strokeLayer.invalidate()
+    }
+
+    fun setPaperColor(argb: Int) {
+        paperPaint.color = argb
+        // Dark: invert the PDF; Paper (cream): multiply so the PDF takes the paper colour; pure white: untouched.
+        bitmapPaint.colorFilter = when {
+            android.graphics.Color.luminance(argb) < 0.5f -> PdfInvert.darkPaperFilter
+            (argb and 0xFFFFFF) != 0xFFFFFF -> android.graphics.PorterDuffColorFilter(argb, android.graphics.PorterDuff.Mode.MULTIPLY)
+            else -> null
+        }
+        templatePaint.color = if (argb == 0xFF1F1F22.toInt()) 0xFF3A3A40.toInt() else 0xFFC9CDD6.toInt()
+        strokeLayer.invalidate()
+    }
     fun setDeskColor(argb: Int) { deskColor = argb; strokeLayer.invalidate() }
 
     fun setRulerVisible(visible: Boolean) {
@@ -529,49 +817,538 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     }
 
     fun setPage(bitmap: Bitmap?) { pageBitmap = bitmap; strokeLayer.invalidate() }
+    fun setPdfMarks(marks: List<PdfMark>) { pdfMarks = marks.filterNot(PdfMark::deleted); strokeLayer.invalidate() }
+    fun setAudioPlayback(pageId: String?, positionMs: Long?, timestamps: List<InkTimestamp>) {
+        audioPlaybackPageId = pageId
+        audioPlaybackPositionMs = positionMs
+        audioItemTimes = timestamps.filter { it.pageId == pageId }
+            .associate { "${it.itemKind}:${it.itemKey}" to it.timeMs }
+        audioLatestItemKey = audioItemTimes.asSequence()
+            .filter { it.value <= (positionMs ?: -1L) }
+            .maxByOrNull { it.value }?.key
+        strokeLayer.invalidate()
+    }
+    fun paperColorArgb(): Int = paperPaint.color
+
+    private fun drawPdfMarks(canvas: Canvas) {
+        pdfMarks.forEach { mark ->
+            drawWithAudioAlpha(canvas, "mark", mark.id) {
+                val isHighlight = mark.kind == PdfMarkKind.HIGHLIGHT
+                val darkPaper = android.graphics.Color.luminance(paperPaint.color) < 0.5f
+                val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = if (isHighlight) PdfMarkGeometry.displayHighlightColor(mark.colorArgb, darkPaper) else mark.colorArgb
+                    strokeWidth = 1.5f
+                    style = if (isHighlight) Paint.Style.FILL else Paint.Style.STROKE
+                }
+                PdfMarkGeometry.quads(mark.quads).forEach { quad ->
+                    val top = pageHeightPt - quad.bottom
+                    val bottom = pageHeightPt - quad.top
+                    if (audioLatestItemKey == "mark:${mark.id}") {
+                        glowPaint.color = 0x22FFD54F
+                        canvas.drawRoundRect(quad.left, top, quad.right, bottom, 2f, 2f, glowPaint)
+                    }
+                    when (mark.kind) {
+                        PdfMarkKind.HIGHLIGHT -> canvas.drawRect(quad.left, top, quad.right, bottom, paint)
+                        PdfMarkKind.UNDERLINE -> canvas.drawLine(quad.left, bottom, quad.right, bottom, paint)
+                        PdfMarkKind.STRIKE -> canvas.drawLine(quad.left, (top + bottom) / 2f, quad.right, (top + bottom) / 2f, paint)
+                        PdfMarkKind.SQUIGGLY -> {
+                            val path = Path()
+                            var x = quad.left
+                            var up = true
+                            path.moveTo(x, bottom)
+                            while (x < quad.right) {
+                                x = min(quad.right, x + 2f)
+                                path.lineTo(x, bottom + if (up) -1.5f else 1.5f)
+                                up = !up
+                            }
+                            canvas.drawPath(path, paint)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fun setPageImages(pageId: String, images: List<PageImage>) {
+        if (imagePageId != pageId) {
+            imageBitmaps.clear()
+            imagePageId = pageId
+        }
+        pageImages = images
+        clearSelection()
+        images.forEach { image ->
+            if (image.assetId !in imageBitmaps) {
+                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeFile(image.localPath, bounds)
+                val target = max(image.wPt * scale, image.hPt * scale).roundToInt().coerceAtLeast(1)
+                var sample = 1
+                while (max(bounds.outWidth, bounds.outHeight) / sample > target * 2) sample *= 2
+                BitmapFactory.decodeFile(image.localPath, BitmapFactory.Options().apply { inSampleSize = sample })
+                    ?.let { imageBitmaps[image.assetId] = it }
+            }
+        }
+        strokeLayer.invalidate()
+    }
+
+    fun imagePlacement(widthPx: Int, heightPx: Int): RectF {
+        val center = floatArrayOf(width / 2f, height / 2f)
+        viewToPage.mapPoints(center)
+        val w = min(pageWidthPt * 0.6f, width / scale * 0.6f).coerceAtLeast(1f)
+        val h = w * heightPx / widthPx.coerceAtLeast(1)
+        return RectF(center[0] - w / 2f, center[1] - h / 2f, center[0] + w / 2f, center[1] + h / 2f)
+    }
+
+    fun addPageImage(image: PageImage) {
+        snapshot()
+        pageImages = pageImages + image
+        setPageImages(image.pageId, pageImages)
+        selectPageImage(image)
+        strokeLayer.invalidate()
+        notifyPageImagesChanged()
+    }
+
+    private fun drawPageImages(canvas: Canvas) {
+        pageImages.forEach { image ->
+            drawWithAudioAlpha(canvas, "image", image.id) {
+                imageBitmaps[image.assetId]?.let {
+                    val bounds = RectF(image.xPt, image.yPt, image.xPt + image.wPt, image.yPt + image.hPt)
+                    if (audioLatestItemKey == "image:${image.id}") {
+                        glowPaint.color = 0x22FFD54F
+                        canvas.drawRoundRect(bounds, 3f, 3f, glowPaint)
+                    }
+                    canvas.drawBitmap(it, null, bounds, imagePaint)
+                }
+            }
+        }
+    }
+
+    private val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+
+    private fun drawWithAudioAlpha(canvas: Canvas, kind: String, key: String, draw: () -> Unit) {
+        val position = audioPlaybackPositionMs
+        val time = audioItemTimes["$kind:$key"]
+        if (position == null || audioPlaybackPageId != revealPageId || time == null || time <= position) {
+            draw()
+        } else {
+            val layer = canvas.saveLayer(null, Paint().apply { alpha = 77 })
+            draw()
+            canvas.restoreToCount(layer)
+        }
+    }
+
+    private fun drawStrokesWithAudio(
+        canvas: Canvas,
+        transform: Matrix,
+        wet: InProgressStroke?,
+        revealedTapes: Set<Int>,
+    ) {
+        if (audioPlaybackPositionMs == null || audioPlaybackPageId != revealPageId) {
+            drawStrokes(canvas, strokes, renderer, transform, paperPaint.color, wet, revealedTapes, canvasHasPageTransform = true)
+            return
+        }
+        strokes.forEachIndexed { index, stroke ->
+            val key = "stroke:$index"
+            val bounds = stroke.shape.computeBoundingBox()
+            if (audioLatestItemKey == "stroke:$key" && bounds != null) {
+                glowPaint.color = 0x22FFD54F
+                canvas.drawRoundRect(RectF(bounds.xMin, bounds.yMin, bounds.xMax, bounds.yMax), 3f, 3f, glowPaint)
+            }
+            drawWithAudioAlpha(canvas, "stroke", key) {
+                drawStrokes(
+                    canvas,
+                    listOf(stroke),
+                    renderer,
+                    transform,
+                    paperPaint.color,
+                    null,
+                    if (index in revealedTapes) setOf(0) else emptySet(),
+                    canvasHasPageTransform = true,
+                )
+            }
+        }
+        if (wet != null) drawStrokes(canvas, emptyList(), renderer, transform, paperPaint.color, wet, canvasHasPageTransform = true)
+    }
+
+    private fun drawTextBlockWithAudio(canvas: Canvas, block: TextBlock, selected: Boolean) {
+        drawWithAudioAlpha(canvas, "text", block.id) {
+            if (audioLatestItemKey == "text:${block.id}") {
+                glowPaint.color = 0x22FFD54F
+                canvas.drawRoundRect(
+                    block.xPt,
+                    block.yPt - block.fontSizePt * 1.8f,
+                    block.xPt + block.wPt,
+                    block.yPt + block.fontSizePt * 0.4f,
+                    3f,
+                    3f,
+                    glowPaint,
+                )
+            }
+            TextBlockPainter.draw(canvas, block, selected, paperPaint.color, context)
+        }
+    }
+
+    private fun seekAudioToItem(viewX: Float, viewY: Float): Boolean {
+        val playhead = audioPlaybackPositionMs ?: return false
+        if (audioPlaybackPageId != revealPageId) return false
+        val point = floatArrayOf(viewX, viewY)
+        viewToPage.mapPoints(point)
+        var nearestDistance = Float.MAX_VALUE
+        var nearestTime: Long? = null
+        fun consider(kind: String, key: String, rect: RectF) {
+            val time = audioItemTimes["$kind:$key"] ?: return
+            val dx = max(max(rect.left - point[0], 0f), point[0] - rect.right)
+            val dy = max(max(rect.top - point[1], 0f), point[1] - rect.bottom)
+            val distance = hypot(dx, dy)
+            if (distance < nearestDistance) {
+                nearestDistance = distance
+                nearestTime = time
+            }
+        }
+        strokes.forEachIndexed { index, stroke ->
+            stroke.shape.computeBoundingBox()?.let { bounds ->
+                consider("stroke", "stroke:$index", RectF(bounds.xMin, bounds.yMin, bounds.xMax, bounds.yMax))
+            }
+        }
+        textBlocks.forEach { block ->
+            consider(
+                "text",
+                block.id,
+                RectF(block.xPt, block.yPt - block.fontSizePt * 1.8f, block.xPt + block.wPt, block.yPt + block.fontSizePt * 0.4f),
+            )
+        }
+        pageImages.forEach { image ->
+            consider("image", image.id, RectF(image.xPt, image.yPt, image.xPt + image.wPt, image.yPt + image.hPt))
+        }
+        pdfMarks.forEach { mark ->
+            PdfMarkGeometry.quads(mark.quads).forEach { quad ->
+                consider("mark", mark.id, RectF(quad.left, pageHeightPt - quad.bottom, quad.right, pageHeightPt - quad.top))
+            }
+        }
+        val target = nearestTime?.takeIf { nearestDistance <= 28f } ?: return false
+        if (target != playhead) onAudioSeekRequested?.invoke(target)
+        return true
+    }
 
     fun setStrokes(list: List<Stroke>) {
         strokes.clear(); strokes.addAll(list); history.clear(); future.clear()
         strokeLayer.invalidate(); notifyUndoRedoChanged(); notifyChanged()
+    }
+    fun setRevealPage(pageId: String) {
+        revealPageId = pageId
+        strokeLayer.invalidate()
     }
     fun strokes(): List<Stroke> = strokes.toList()
     fun canUndo() = history.isNotEmpty()
     fun canRedo() = future.isNotEmpty()
     fun undo() {
         if (history.isEmpty()) return
-        future.add(ArrayList(strokes)); strokes.clear(); strokes.addAll(history.removeAt(history.size - 1))
-        clearSelection(); strokeLayer.invalidate(); notifyUndoRedoChanged(); notifyChanged()
+        val target = history.removeAt(history.size - 1)
+        future.add(
+            Snapshot(
+                ArrayList(strokes),
+                ArrayList(pageImages),
+                ArrayList(textBlocks),
+                target.externalUndo,
+                target.externalRedo,
+            ),
+        )
+        if (target.externalUndo != null) {
+            target.externalUndo.invoke()
+            notifyUndoRedoChanged()
+        } else {
+            restoreSnapshot(target)
+        }
+    }
+    fun recordExternalAction(undoAction: () -> Unit, redoAction: () -> Unit) {
+        snapshot(undoAction, redoAction)
+    }
+    fun convertLastStrokeToExternalUndo(
+        stroke: Stroke,
+        undoAction: () -> Unit,
+        redoAction: () -> Unit,
+    ): Boolean {
+        if (strokes.lastOrNull() != stroke) return false
+        if (history.isNotEmpty()) history.removeAt(history.lastIndex)
+        strokes.removeAt(strokes.lastIndex)
+        future.clear()
+        history.add(Snapshot(ArrayList(strokes), ArrayList(pageImages), ArrayList(textBlocks), undoAction, redoAction))
+        strokeLayer.invalidate()
+        notifyChanged()
+        notifyUndoRedoChanged()
+        return true
     }
     fun redo() {
         if (future.isEmpty()) return
-        history.add(ArrayList(strokes)); strokes.clear(); strokes.addAll(future.removeAt(future.size - 1))
-        clearSelection(); strokeLayer.invalidate(); notifyUndoRedoChanged(); notifyChanged()
+        val target = future.removeAt(future.size - 1)
+        history.add(
+            Snapshot(
+                ArrayList(strokes),
+                ArrayList(pageImages),
+                ArrayList(textBlocks),
+                target.externalUndo,
+                target.externalRedo,
+            ),
+        )
+        if (target.externalRedo != null) {
+            target.externalRedo.invoke()
+            notifyUndoRedoChanged()
+        } else {
+            restoreSnapshot(target)
+        }
+    }
+    private fun restoreSnapshot(snapshot: Snapshot) {
+        strokes.clear(); strokes.addAll(snapshot.strokes)
+        pageImages = snapshot.images
+        textBlocks = snapshot.textBlocks
+        imagePageId?.let { setPageImages(it, pageImages) }
+        clearSelection()
+        strokeLayer.invalidate()
+        notifyUndoRedoChanged()
+        notifyChanged()
+        notifyPageImagesChanged()
+        onTextBlocksChanged?.invoke(textBlocks)
     }
     fun clear() { if (strokes.isEmpty()) return; snapshot(); strokes.clear(); clearSelection(); strokeLayer.invalidate(); notifyChanged() }
 
-    fun hasSelection() = selected.isNotEmpty()
+    fun hasSelection() = selected.isNotEmpty() || selectedPageImageId != null
+    fun hasImageSelection() = selectedPageImageId != null
+    fun selectedStrokes(): List<Stroke> = selected.toList()
+    fun selectedTextColorForPaper(paperArgb: Int): Int {
+        val highlighter = StockBrushes.highlighter()
+        return TextColorPolicy.textColor(
+            selected.map { stroke ->
+                val countsAsInk = stroke.brush.family != highlighter && stroke.brush.family != InkBrushFamilies.tape
+                StrokeColorSample(stroke.brush.colorIntArgb, countsAsInk)
+            },
+            paperArgb,
+        )
+    }
 
-    fun clearSelection() { selected.clear(); selectionBounds = null; strokeLayer.invalidate(); onSelectionChanged?.invoke(false) }
+    fun convertSelectionToText(block: TextBlock) {
+        if (selected.isEmpty()) return
+        snapshot()
+        strokes.removeAll(selected)
+        selected.clear()
+        selectedPageImageId = null
+        selectionBounds = null
+        textBlocks = textBlocks + block
+        onSelectionChanged?.invoke(false)
+        onSelectionBoundsChanged?.invoke(null)
+        onTextBlocksChanged?.invoke(textBlocks)
+        strokeLayer.invalidate()
+        notifyChanged()
+        notifyUndoRedoChanged()
+    }
+
+    fun clearSelection() {
+        selected.clear()
+        selectedPageImageId = null
+        selectionBounds = null
+        strokeLayer.invalidate()
+        onSelectionChanged?.invoke(false)
+        onSelectionBoundsChanged?.invoke(null)
+    }
+
+    fun copySelection() {
+        if (selected.isNotEmpty()) SelectionClipboard.copy(selected)
+    }
+
+    fun duplicateSelection() {
+        selectedPageImageId?.let { id ->
+            val image = pageImages.firstOrNull { it.id == id } ?: return
+            snapshot()
+            val copy = image.copy(id = java.util.UUID.randomUUID().toString(), xPt = image.xPt + 24f, yPt = image.yPt + 24f)
+            pageImages = pageImages + copy
+            selectPageImage(copy)
+            strokeLayer.invalidate()
+            notifyPageImagesChanged()
+            return
+        }
+        if (selected.isEmpty()) return
+        snapshot()
+        val copies = selected.map { transformStroke(it, 1f, 24f, 24f) }
+        strokes.addAll(copies)
+        selected.clear()
+        selected.addAll(copies)
+        updateSelectionBounds()
+        strokeLayer.invalidate()
+        notifyChanged()
+    }
+
+    fun paste() {
+        val copied = SelectionClipboard.read()
+        if (copied.isEmpty()) return
+        val bounds = strokeBounds(copied) ?: return
+        val center = floatArrayOf(width / 2f, height / 2f)
+        viewToPage.mapPoints(center)
+        val dx = center[0] - bounds.centerX()
+        val dy = center[1] - bounds.centerY()
+        snapshot()
+        val pasted = copied.map { transformStroke(it, 1f, dx, dy) }
+        strokes.addAll(pasted)
+        selected.clear()
+        selected.addAll(pasted)
+        updateSelectionBounds()
+        strokeLayer.invalidate()
+        notifyChanged()
+    }
+
+    fun recolorSelection(argb: Int) {
+        if (selected.isEmpty()) return
+        snapshot()
+        val recolored = selected.map { stroke ->
+            val color = (argb and 0x00FFFFFF) or (stroke.brush.colorIntArgb and 0xFF000000.toInt())
+            val updated = Stroke(stroke.brush.copyWithColorIntArgb(color), stroke.inputs)
+            val index = strokes.indexOf(stroke)
+            if (index >= 0) strokes[index] = updated
+            updated
+        }
+        selected.clear()
+        selected.addAll(recolored)
+        updateSelectionBounds()
+        strokeLayer.invalidate()
+        notifyChanged()
+    }
 
     fun deleteSelection() {
+        if (selectedPageImageId != null) {
+            snapshot()
+            pageImages = pageImages.filterNot { it.id == selectedPageImageId }
+            clearSelection()
+            strokeLayer.invalidate()
+            notifyPageImagesChanged()
+            return
+        }
         if (selected.isEmpty()) return
         snapshot(); strokes.removeAll(selected); clearSelection(); notifyChanged()
+    }
+
+    private fun selectionHandlePoints(bounds: RectF): List<FloatArray> = listOf(
+        floatArrayOf(bounds.left, bounds.top),
+        floatArrayOf(bounds.right, bounds.top),
+        floatArrayOf(bounds.left, bounds.bottom),
+        floatArrayOf(bounds.right, bounds.bottom),
+    )
+
+    private fun hitSelectionHandle(x: Float, y: Float): Int {
+        val bounds = selectionBounds ?: return -1
+        val viewBounds = RectF(bounds).also(pageToView::mapRect)
+        val hitRadius = 16f * resources.displayMetrics.density
+        return selectionHandlePoints(viewBounds).indexOfFirst { hypot(it[0] - x, it[1] - y) <= hitRadius }
+    }
+
+    private fun updateSelectionBounds() {
+        val bounds = strokeBounds(selected)
+        selectionBounds = bounds?.apply { inset(-6f, -6f) }
+        onSelectionBoundsChanged?.invoke(selectionBounds?.let { RectF(it).also(pageToView::mapRect) })
+        onSelectionChanged?.invoke(selected.isNotEmpty())
+    }
+
+    private fun selectPageImage(image: PageImage) {
+        selected.clear()
+        selectedPageImageId = image.id
+        selectionBounds = RectF(image.xPt, image.yPt, image.xPt + image.wPt, image.yPt + image.hPt)
+        onSelectionBoundsChanged?.invoke(RectF(selectionBounds!!).also(pageToView::mapRect))
+        onSelectionChanged?.invoke(true)
+    }
+
+    private fun notifyPageImagesChanged() { onPageImagesChanged?.invoke(pageImages.toList()) }
+
+    private fun strokeBounds(strokeList: Collection<Stroke>): RectF? {
+        var bounds: RectF? = null
+        for (stroke in strokeList) {
+            val inputs = stroke.inputs
+            for (i in 0 until inputs.size) {
+                val p = inputs[i]
+                if (bounds == null) bounds = RectF(p.x, p.y, p.x, p.y) else bounds.union(p.x, p.y)
+            }
+        }
+        return bounds
+    }
+
+    @OptIn(ExperimentalInkCustomBrushApi::class)
+    private fun transformStroke(stroke: Stroke, factor: Float, dx: Float, dy: Float, anchorX: Float = 0f, anchorY: Float = 0f): Stroke {
+        val batch = MutableStrokeInputBatch()
+        val inputs = stroke.inputs
+        for (i in 0 until inputs.size) {
+            val p = inputs[i]
+            batch.add(StrokeInput.create(
+                anchorX + (p.x - anchorX) * factor + dx,
+                anchorY + (p.y - anchorY) * factor + dy,
+                p.elapsedTimeMillis, p.toolType, p.strokeUnitLengthCm, p.pressure, p.tiltRadians, p.orientationRadians,
+            ))
+        }
+        val brush = Brush.createWithColorIntArgb(stroke.brush.family, stroke.brush.colorIntArgb, stroke.brush.size * factor, stroke.brush.epsilon)
+        return Stroke(brush, batch)
     }
 
     private fun handleLasso(event: MotionEvent, idx: Int): Boolean {
         val pt = floatArrayOf(event.getX(idx), event.getY(idx)); viewToPage.mapPoints(pt)
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
+                val handle = hitSelectionHandle(event.getX(idx), event.getY(idx))
                 val b = selectionBounds
-                if (b != null && b.contains(pt[0], pt[1])) { snapshot(); movingSelection = true; moveLastX = pt[0]; moveLastY = pt[1] }
+                val imageHit = pageImages.firstOrNull { pt[0] in it.xPt..(it.xPt + it.wPt) && pt[1] in it.yPt..(it.yPt + it.hPt) }
+                if (handle >= 0 && b != null && selectedPageImageId != null) {
+                    resizeStartImage = pageImages.firstOrNull { it.id == selectedPageImageId }
+                    resizingSelection = true
+                    resizeHandle = handle
+                    resizeStartBounds = RectF(b)
+                    val anchors = arrayOf(floatArrayOf(b.right, b.bottom), floatArrayOf(b.left, b.bottom), floatArrayOf(b.right, b.top), floatArrayOf(b.left, b.top))
+                    resizeAnchor = anchors[handle]
+                    imageGestureMoved = false
+                    moveLastX = pt[0]; moveLastY = pt[1]
+                } else if (handle >= 0 && b != null) {
+                    snapshot()
+                    resizingSelection = true
+                    resizeHandle = handle
+                    resizeStartBounds = RectF(b)
+                    resizeStartStrokes = selected.toList()
+                    resizeStrokeIndices = resizeStartStrokes.map(strokes::indexOf)
+                    val anchors = arrayOf(
+                        floatArrayOf(b.right, b.bottom), floatArrayOf(b.left, b.bottom),
+                        floatArrayOf(b.right, b.top), floatArrayOf(b.left, b.top),
+                    )
+                    resizeAnchor = anchors[handle]
+                } else if (imageHit != null) {
+                    selectPageImage(imageHit)
+                    movingSelection = true
+                    imageGestureMoved = false
+                    moveLastX = pt[0]; moveLastY = pt[1]
+                } else if (b != null && b.contains(pt[0], pt[1])) { snapshot(); movingSelection = true; moveLastX = pt[0]; moveLastY = pt[1] }
                 else { clearSelection(); lassoActive = true; lassoPath.reset(); lassoPath.moveTo(pt[0], pt[1]); lassoPoints.clear(); lassoPoints.add(pt[0]); lassoPoints.add(pt[1]) }
             }
             MotionEvent.ACTION_MOVE -> {
-                if (movingSelection) { moveSelection(pt[0] - moveLastX, pt[1] - moveLastY); moveLastX = pt[0]; moveLastY = pt[1] }
+                if (resizingSelection) {
+                    if (resizeStartImage != null) {
+                        if (!imageGestureMoved && hypot(pt[0] - moveLastX, pt[1] - moveLastY) > 1f) { snapshot(); imageGestureMoved = true }
+                        if (imageGestureMoved) resizeSelection(pt[0], pt[1])
+                    } else resizeSelection(pt[0], pt[1])
+                }
+                else if (movingSelection) {
+                    if (selectedPageImageId != null) {
+                        if (!imageGestureMoved && hypot(pt[0] - moveLastX, pt[1] - moveLastY) > 1f) { snapshot(); imageGestureMoved = true }
+                        if (imageGestureMoved) moveSelection(pt[0] - moveLastX, pt[1] - moveLastY)
+                    } else moveSelection(pt[0] - moveLastX, pt[1] - moveLastY)
+                    moveLastX = pt[0]; moveLastY = pt[1]
+                }
                 else if (lassoActive) { lassoPath.lineTo(pt[0], pt[1]); lassoPoints.add(pt[0]); lassoPoints.add(pt[1]); strokeLayer.invalidate() }
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP, MotionEvent.ACTION_CANCEL -> {
-                if (movingSelection) { movingSelection = false; notifyChanged() }
+                if (resizingSelection) {
+                    resizingSelection = false
+                    resizeStartBounds = null
+                    if (resizeStartImage != null && imageGestureMoved) notifyPageImagesChanged()
+                    resizeStartImage = null
+                    imageGestureMoved = false
+                    resizeStartStrokes = emptyList()
+                    resizeStrokeIndices = emptyList()
+                    notifyChanged()
+                } else if (movingSelection) {
+                    movingSelection = false
+                    if (selectedPageImageId != null) { if (imageGestureMoved) notifyPageImagesChanged(); imageGestureMoved = false }
+                    else notifyChanged()
+                }
                 else if (lassoActive) { lassoActive = false; lassoPath.close(); selectInside(); strokeLayer.invalidate() }
             }
         }
@@ -597,9 +1374,55 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         }
         selectionBounds = if (selected.isEmpty()) null else RectF(sel).apply { inset(-6f, -6f) }
         onSelectionChanged?.invoke(selected.isNotEmpty())
+        onSelectionBoundsChanged?.invoke(selectionBounds?.let { RectF(it).also(pageToView::mapRect) })
+    }
+
+    private fun resizeSelection(pointerX: Float, pointerY: Float) {
+        val start = resizeStartBounds ?: return
+        resizeStartImage?.let { image ->
+            val factor = max(abs(pointerX - resizeAnchor[0]) / image.wPt.coerceAtLeast(1f), abs(pointerY - resizeAnchor[1]) / image.hPt.coerceAtLeast(1f)).coerceIn(0.1f, 20f)
+            val w = image.wPt * factor
+            val h = image.hPt * factor
+            val left = if (resizeHandle == 0 || resizeHandle == 2) resizeAnchor[0] - w else resizeAnchor[0]
+            val top = if (resizeHandle == 0 || resizeHandle == 1) resizeAnchor[1] - h else resizeAnchor[1]
+            val updated = image.copy(xPt = left, yPt = top, wPt = w, hPt = h)
+            pageImages = pageImages.map { if (it.id == image.id) updated else it }
+            selectionBounds = RectF(left, top, left + w, top + h)
+            onSelectionBoundsChanged?.invoke(RectF(selectionBounds!!).also(pageToView::mapRect))
+            strokeLayer.invalidate()
+            return
+        }
+        val handle = when (resizeHandle) {
+            0 -> floatArrayOf(start.left, start.top)
+            1 -> floatArrayOf(start.right, start.top)
+            2 -> floatArrayOf(start.left, start.bottom)
+            else -> floatArrayOf(start.right, start.bottom)
+        }
+        val initialX = abs(handle[0] - resizeAnchor[0]).coerceAtLeast(1f)
+        val initialY = abs(handle[1] - resizeAnchor[1]).coerceAtLeast(1f)
+        val factor = max(abs(pointerX - resizeAnchor[0]) / initialX, abs(pointerY - resizeAnchor[1]) / initialY)
+            .coerceIn(0.1f, 20f)
+        val resized = ArrayList<Stroke>(resizeStartStrokes.size)
+        resizeStartStrokes.forEachIndexed { index, stroke ->
+            val updated = transformStroke(stroke, factor, 0f, 0f, resizeAnchor[0], resizeAnchor[1])
+            val strokeIndex = resizeStrokeIndices.getOrNull(index) ?: -1
+            if (strokeIndex in strokes.indices) strokes[strokeIndex] = updated
+            resized.add(updated)
+        }
+        selected.clear()
+        selected.addAll(resized)
+        updateSelectionBounds()
+        strokeLayer.invalidate()
     }
 
     private fun moveSelection(dx: Float, dy: Float) {
+        selectedPageImageId?.let { id ->
+            pageImages = pageImages.map { if (it.id == id) it.copy(xPt = it.xPt + dx, yPt = it.yPt + dy) else it }
+            selectionBounds?.offset(dx, dy)
+            onSelectionBoundsChanged?.invoke(selectionBounds?.let { RectF(it).also(pageToView::mapRect) })
+            strokeLayer.invalidate()
+            return
+        }
         if (selected.isEmpty()) return
         val moved = LinkedHashSet<Stroke>()
         for (s in selected) {
@@ -615,6 +1438,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         }
         selected.clear(); selected.addAll(moved)
         selectionBounds?.offset(dx, dy)
+        onSelectionBoundsChanged?.invoke(selectionBounds?.let { RectF(it).also(pageToView::mapRect) })
         strokeLayer.invalidate()
     }
 
@@ -626,12 +1450,30 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         placeRulerIfNeeded()
     }
 
-    private fun minScale(): Float = if (width > 0) (width - 2 * MARGIN_PX) / pageWidthPt else 1f
+    private fun displayPageWidth(): Float = if (pageRotation % 180 == 90) pageHeightPt else pageWidthPt
+    private fun displayPageHeight(): Float = if (pageRotation % 180 == 90) pageWidthPt else pageHeightPt
+
+    private fun minScale(): Float = if (width > 0) (width - 2 * MARGIN_PX) / displayPageWidth() else 1f
 
     private fun fitToWidth() {
         if (width == 0) return
-        scale = minScale(); panX = MARGIN_PX; panY = MARGIN_PX
+        scale = minScale(); panX = MARGIN_PX; panY = MARGIN_PX + topInsetPx
         updateMatrices()
+    }
+
+    /** Space reserved at the top for the floating chrome so the page's first lines are not hidden under it. */
+    private var topInsetPx = 0f
+
+    fun setTopInset(px: Float) {
+        val value = px.coerceAtLeast(0f)
+        if (value == topInsetPx) return
+        val delta = value - topInsetPx
+        topInsetPx = value
+        if (width == 0) return
+        panY += delta
+        clampPan()
+        updateMatrices()
+        strokeLayer.invalidate()
     }
 
     private fun rulerLength() = max(pageWidthPt, pageHeightPt) * 1.3f
@@ -652,24 +1494,31 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     }
 
     private fun updateRulerPaints() {
-        rulerFillPaint.color = if (rulerDarkTheme) 0x1FFFFFFF else 0x8CFFFFFF.toInt()
-        rulerOutlinePaint.color = 0xBFFFFFFF.toInt()
-        rulerTickPaint.color = 0xFF5A5248.toInt()
-        rulerTextPaint.color = if (rulerDarkTheme) 0xFFEDE6DA.toInt() else 0xFF4A4036.toInt()
-        rulerHandlePaint.color = if (rulerDarkTheme) 0x335A5248 else 0x99FFFFFF.toInt()
-        rulerHandleOutlinePaint.color = 0xBFFFFFFF.toInt()
-        rulerAnglePillPaint.color = if (rulerDarkTheme) 0xCC2B2823.toInt() else 0xCCFFFFFF.toInt()
+        rulerFillPaint.color = if (rulerDarkTheme) 0xEB2A2A2D.toInt() else 0xEBF1F2F4.toInt()
+        rulerOutlinePaint.color = if (rulerDarkTheme) 0x99000000.toInt() else 0xFF9AA0A6.toInt()
+        rulerTickPaint.color = if (rulerDarkTheme) 0xFFE0E0E0.toInt() else 0xFF333333.toInt()
+        rulerTextPaint.color = if (rulerDarkTheme) 0xFFE0E0E0.toInt() else 0xFF333333.toInt()
+        rulerHandlePaint.color = rulerFillPaint.color
+        rulerHandleOutlinePaint.color = rulerOutlinePaint.color
+        rulerAnglePillPaint.color = rulerFillPaint.color
     }
 
     private fun clampPan() {
-        val pageW = pageWidthPt * scale; val pageH = pageHeightPt * scale
+        val pageW = displayPageWidth() * scale; val pageH = displayPageHeight() * scale
         panX = if (pageW <= width) (width - pageW) / 2f else panX.coerceIn(width - pageW - MARGIN_PX, MARGIN_PX)
-        panY = if (pageH <= height - 2 * MARGIN_PX) MARGIN_PX else panY.coerceIn(height - pageH - MARGIN_PX, MARGIN_PX)
+        val topLimit = MARGIN_PX + topInsetPx
+        panY = if (pageH <= height - topLimit - MARGIN_PX) topLimit else panY.coerceIn(height - pageH - MARGIN_PX, topLimit)
     }
 
     private fun updateMatrices() {
-        pageToView.reset(); pageToView.postScale(scale, scale); pageToView.postTranslate(panX, panY)
+        pageToView.setValues(when (pageRotation) {
+            90 -> floatArrayOf(0f, -scale, panX + pageHeightPt * scale, scale, 0f, panY, 0f, 0f, 1f)
+            180 -> floatArrayOf(-scale, 0f, panX + pageWidthPt * scale, 0f, -scale, panY + pageHeightPt * scale, 0f, 0f, 1f)
+            270 -> floatArrayOf(0f, scale, panX, -scale, 0f, panY + pageWidthPt * scale, 0f, 0f, 1f)
+            else -> floatArrayOf(scale, 0f, panX, 0f, scale, panY, 0f, 0f, 1f)
+        })
         pageToView.invert(viewToPage)
+        onSelectionBoundsChanged?.invoke(selectionBounds?.let { RectF(it).also(pageToView::mapRect) })
         updateZoom()
         val zoomPercent = (scale / minScale() * 100f).roundToInt()
         if (zoomPercent != lastReportedZoomPercent) {
@@ -904,70 +1753,97 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     }
 
     fun handleStylusKeyEvent(event: KeyEvent) {
-        val button = when (event.keyCode) {
-            STYLUS_BUTTON_PRIMARY_KEYCODE -> MotionEvent.BUTTON_STYLUS_PRIMARY
-            STYLUS_BUTTON_SECONDARY_KEYCODE -> MotionEvent.BUTTON_STYLUS_SECONDARY
-            else -> return
-        }
-        when (event.action) {
-            KeyEvent.ACTION_DOWN -> if (event.repeatCount == 0) beginStylusButton(button, event.eventTime)
-            KeyEvent.ACTION_UP -> endStylusButton(button, event.eventTime)
+        if (!StylusButtonKeyMapping.shouldDispatch(event.action, event.repeatCount)) return
+        val button = StylusButtonKeyMapping.buttonForKeyCode(event.keyCode) ?: return
+        if (!StylusButtonDispatchPolicy.shouldSwitchTool(hasActiveContact())) return
+        dispatchStylusButtonAction(button, event.eventTime)
+    }
+
+    private fun beginStylusButton(button: Int, eventTime: Long, contactActive: Boolean) {
+        stylusButtonPresses.add(button)
+        if (StylusButtonDispatchPolicy.shouldSwitchTool(contactActive)) {
+            dispatchStylusButtonAction(button, eventTime)
         }
     }
 
-    private fun beginStylusButton(button: Int, eventTime: Long) {
-        if (!stylusButtonPresses.containsKey(button)) {
-            stylusButtonPresses[button] = StylusButtonPress(
-                downTime = eventTime,
-                strokeIntervened = currentStrokeId != null || highlighterWet != null || erasing,
-            )
-        }
+    private fun endStylusButton(button: Int) {
+        stylusButtonPresses.remove(button)
     }
 
-    private fun endStylusButton(button: Int, eventTime: Long) {
-        val press = stylusButtonPresses.remove(button) ?: return
-        val duration = eventTime - press.downTime
-        if (press.strokeIntervened || duration !in 0 until STYLUS_CLICK_TIMEOUT_MS) return
+    private fun hasActiveContact(): Boolean =
+        activeContactPointerIds.isNotEmpty() || currentStrokeId != null || highlighterWet != null || erasing
+
+    private fun dispatchStylusButtonAction(button: Int, eventTime: Long) {
         val action = when (button) {
             MotionEvent.BUTTON_STYLUS_PRIMARY -> primaryButtonAction
             MotionEvent.BUTTON_STYLUS_SECONDARY -> secondaryButtonAction
             else -> return
         }
-        onStylusToolSwitch?.invoke(action)
+        val listener = onStylusToolSwitch ?: return
+        if (!stylusButtonDebouncer.accept(button, eventTime)) return
+        listener(action)
     }
 
-    private fun observeStylusButtons(event: MotionEvent) {
-        if (event.pointerCount == 0) return
+    private fun observeStylusButtons(event: MotionEvent, touchEvent: Boolean = false) {
+        if (event.pointerCount == 0) {
+            if (touchEvent && event.actionMasked == MotionEvent.ACTION_CANCEL) activeContactPointerIds.clear()
+            return
+        }
         val index = event.actionIndex.coerceIn(0, event.pointerCount - 1)
+        val pointerId = event.getPointerId(index)
+        if (
+            touchEvent &&
+            (event.actionMasked == MotionEvent.ACTION_DOWN || event.actionMasked == MotionEvent.ACTION_POINTER_DOWN)
+        ) {
+            activeContactPointerIds.add(pointerId)
+        }
         val toolType = event.getToolType(index)
         val stylusSource = event.source and InputDevice.SOURCE_STYLUS == InputDevice.SOURCE_STYLUS
-        if (!stylusSource && toolType != MotionEvent.TOOL_TYPE_STYLUS && toolType != MotionEvent.TOOL_TYPE_ERASER) return
+        if (!stylusSource && toolType != MotionEvent.TOOL_TYPE_STYLUS && toolType != MotionEvent.TOOL_TYPE_ERASER) {
+            finishContactTracking(event, pointerId, touchEvent)
+            return
+        }
 
         val mask = MotionEvent.BUTTON_STYLUS_PRIMARY or MotionEvent.BUTTON_STYLUS_SECONDARY
         val current = event.buttonState and mask
         val previous = stylusButtonStates[event.deviceId] ?: 0
         val actionButton = event.actionButton and mask
-        val pressed = (current and previous.inv()) or
-            if (event.actionMasked == MotionEvent.ACTION_BUTTON_PRESS) actionButton else 0
-        val released = (previous and current.inv()) or
-            if (event.actionMasked == MotionEvent.ACTION_BUTTON_RELEASE) actionButton else 0
+        val changes = StylusButtonMotionTransitions.changes(previous, current, event.actionMasked, actionButton)
+        val contactActive = hasActiveContact()
 
         for (button in intArrayOf(MotionEvent.BUTTON_STYLUS_PRIMARY, MotionEvent.BUTTON_STYLUS_SECONDARY)) {
-            if (pressed and button != 0) beginStylusButton(button, event.eventTime)
-            if (released and button != 0) endStylusButton(button, event.eventTime)
+            if (changes.pressed and button != 0) beginStylusButton(button, event.eventTime, contactActive)
+            if (changes.released and button != 0) endStylusButton(button)
+        }
+        if (changes.pressed != 0 && (currentStrokeId != null || highlighterWet != null)) {
+            val pointerIndex = event.findPointerIndex(currentPointerId)
+                .takeIf { it >= 0 } ?: index
+            cancelCurrent(event)
+            currentPointerId = event.getPointerId(pointerIndex)
+            erasing = true
+            setDrawingInputActive(true)
+            lastErase = null
+            snapshot()
+            eraseDirty = false
+            eraseAt(event.getX(pointerIndex), event.getY(pointerIndex))
         }
         stylusButtonStates[event.deviceId] = current
         if (
             event.actionMasked == MotionEvent.ACTION_BUTTON_PRESS ||
             event.actionMasked == MotionEvent.ACTION_BUTTON_RELEASE ||
-            pressed != 0 || released != 0
+            changes.pressed != 0 || changes.released != 0
         ) {
             StylusInputDiagnostics.recordMotionEvent(event)
         }
+        finishContactTracking(event, pointerId, touchEvent)
     }
 
-    private fun markStylusButtonStroke() {
-        stylusButtonPresses.values.forEach { it.strokeIntervened = true }
+    private fun finishContactTracking(event: MotionEvent, pointerId: Int, touchEvent: Boolean) {
+        if (!touchEvent) return
+        when (event.actionMasked) {
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> activeContactPointerIds.remove(pointerId)
+            MotionEvent.ACTION_CANCEL -> activeContactPointerIds.clear()
+        }
     }
 
     override fun onGenericMotionEvent(event: MotionEvent): Boolean {
@@ -975,17 +1851,29 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         return super.onGenericMotionEvent(event)
     }
 
-    override fun onTouchEvent(event: MotionEvent): Boolean {
+    override fun onHoverEvent(event: MotionEvent): Boolean {
         observeStylusButtons(event)
+        return super.onHoverEvent(event)
+    }
+
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        observeStylusButtons(event, touchEvent = true)
+        applyPendingStylusEraser(event)
         if (event.actionMasked == MotionEvent.ACTION_BUTTON_PRESS || event.actionMasked == MotionEvent.ACTION_BUTTON_RELEASE) return true
         predictor.record(event)
         val idx = event.actionIndex
         val toolType = event.getToolType(idx)
         val isStylus = toolType == MotionEvent.TOOL_TYPE_STYLUS || toolType == MotionEvent.TOOL_TYPE_ERASER
+        if (activeLaserTrail != null && brushSpec.tool != InkTool.LASER) finishActiveLaserTrail()
+        if (tapeRevealGesture) {
+            if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) tapeRevealGesture = false
+            return true
+        }
         if (zoomEnabled && event.actionMasked == MotionEvent.ACTION_DOWN) {
             inStrip = event.y >= stripTop
         }
-        if (handleRulerTouch(event, isStylus)) return true
+        val rulerHandled = handleRulerTouch(event, isStylus)
+        if (rulerHandled) return true
         if (zoomEnabled && event.actionMasked == MotionEvent.ACTION_DOWN && !inStrip && isStylus) {
             val pt = floatArrayOf(event.x, event.y); viewToPage.mapPoints(pt)
             if (zoomWindow.contains(pt[0], pt[1])) { draggingWindow = true; dragLastX = pt[0]; dragLastY = pt[1]; return true }
@@ -1001,27 +1889,69 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
             }
             return true
         }
+        if (event.actionMasked == MotionEvent.ACTION_DOWN && brushSpec.tool != InkTool.TAPE) {
+            val tapeIndex = tapeStrokeAt(event.x, event.y)
+            tapeIndex?.let {
+                val revealed = revealedTapeIndicesByPage.getOrPut(revealPageId) { mutableSetOf() }
+                if (!revealed.add(it)) revealed.remove(it)
+                tapeRevealGesture = true
+                strokeLayer.invalidate()
+                return true
+            }
+        }
         if (!isStylus && !fingerDraws) return handleFingerNavigation(event)
         if (!isStylus && event.pointerCount > 1) { cancelCurrent(event); return handleFingerNavigation(event) }
 
-        if (brushSpec.tool == InkTool.LASSO) return handleLasso(event, if (event.actionMasked == MotionEvent.ACTION_MOVE) event.findPointerIndex(currentPointerId).takeIf { it >= 0 } ?: 0 else idx).also {
+        if (brushSpec.tool == InkTool.LASSO) {
+            if (event.actionMasked == MotionEvent.ACTION_DOWN || event.actionMasked == MotionEvent.ACTION_POINTER_DOWN) {
+                setDrawingInputActive(true)
+            }
+            val handled = handleLasso(
+                event,
+                if (event.actionMasked == MotionEvent.ACTION_MOVE) {
+                    event.findPointerIndex(currentPointerId).takeIf { it >= 0 } ?: 0
+                } else {
+                    idx
+                },
+            )
             if (event.actionMasked == MotionEvent.ACTION_DOWN) currentPointerId = event.getPointerId(idx)
+            if (
+                event.actionMasked == MotionEvent.ACTION_UP ||
+                event.actionMasked == MotionEvent.ACTION_POINTER_UP ||
+                event.actionMasked == MotionEvent.ACTION_CANCEL
+            ) {
+                currentPointerId = -1
+                setDrawingInputActive(false)
+            }
+            return handled
         }
         if (brushSpec.tool == InkTool.TEXT) {
             if (event.actionMasked == MotionEvent.ACTION_UP) {
                 val pt = floatArrayOf(event.x, event.y); viewToPage.mapPoints(pt)
-                onTextTap?.invoke(pt[0], pt[1], textBlocks.lastOrNull { TextBlockPainter.hit(it, pt[0], pt[1]) })
+                onTextTap?.invoke(pt[0], pt[1], textBlocks.lastOrNull { TextBlockPainter.hit(it, pt[0], pt[1], context) })
             }
             return true
         }
+        if (brushSpec.tool == InkTool.LASER) {
+            val handled = handleLaserPointer(event, idx)
+            if (activeLaserTrail != null) setDrawingInputActive(true)
+            else if (
+                event.actionMasked == MotionEvent.ACTION_UP ||
+                event.actionMasked == MotionEvent.ACTION_POINTER_UP ||
+                event.actionMasked == MotionEvent.ACTION_CANCEL
+            ) {
+                setDrawingInputActive(false)
+            }
+            return handled
+        }
         val eraserNow = toolType == MotionEvent.TOOL_TYPE_ERASER || brushSpec.tool == InkTool.ERASER ||
             (event.buttonState and MotionEvent.BUTTON_STYLUS_PRIMARY) != 0 ||
-            stylusButtonPresses.containsKey(MotionEvent.BUTTON_STYLUS_PRIMARY)
+            stylusButtonPresses.contains(MotionEvent.BUTTON_STYLUS_PRIMARY)
 
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
                 if (currentStrokeId != null || highlighterWet != null || erasing) return true
-                if (isStylus) markStylusButtonStroke()
+                setDrawingInputActive(true)
                 currentPointerId = event.getPointerId(idx)
                 erasing = eraserNow
                 if (erasing) { lastErase = null; snapshot(); eraseDirty = false; eraseAt(event.getX(idx), event.getY(idx)) }
@@ -1030,8 +1960,14 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
                     if (brushSpec.tool == InkTool.HIGHLIGHTER) {
                         withRulerSnapEvent(event, idx) { startHighlighterStroke(it, idx) }
                     } else {
+                        val inputToPage = if (zoomEnabled && inStrip) Matrix(viewToZoom) else Matrix(viewToPage)
+                        val pageToInput = Matrix()
+                        inputToPage.invert(pageToInput)
                         currentStrokeId = withRulerSnapEvent(event, idx) {
-                            wetLayer.startStroke(it, currentPointerId, brushSpec.toBrush(), if (zoomEnabled && inStrip) viewToZoom else viewToPage, identity)
+                            wetLayer.startStroke(it, currentPointerId, brushSpec.toBrush(), inputToPage, identity)
+                        }
+                        currentStrokeId?.takeIf { brushSpec.tool == InkTool.PEN }?.let { strokeId ->
+                            shapeStrokeContexts[strokeId] = ShapeStrokeContext(shapeStraightening, pageToInput)
                         }
                     }
                 }
@@ -1068,20 +2004,71 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
                         wetLayer.finishStroke(adjusted, currentPointerId, strokeId)
                     }
                 }
-                currentStrokeId = null; currentPointerId = -1; erasing = false; rulerSnapActive = false; return true
+                currentStrokeId = null; currentPointerId = -1; erasing = false; rulerSnapActive = false
+                setDrawingInputActive(false)
+                return true
             }
             MotionEvent.ACTION_CANCEL -> { cancelCurrent(event); rulerSnapActive = false; return true }
         }
         return false
     }
 
+    private fun applyPendingStylusEraser(event: MotionEvent) {
+        if (!pendingStylusErase || event.actionMasked == MotionEvent.ACTION_CANCEL) {
+            pendingStylusErase = false
+            return
+        }
+        if (currentStrokeId == null && highlighterWet == null) {
+            pendingStylusErase = false
+            return
+        }
+        val pointerIndex = event.findPointerIndex(currentPointerId)
+            .takeIf { it >= 0 }
+            ?: event.actionIndex.takeIf { it in 0 until event.pointerCount }
+            ?: return
+        pendingStylusErase = false
+        cancelCurrent(event)
+        currentPointerId = event.getPointerId(pointerIndex)
+        erasing = true
+        setDrawingInputActive(true)
+        lastErase = null
+        snapshot()
+        eraseDirty = false
+        eraseAt(event.getX(pointerIndex), event.getY(pointerIndex))
+    }
+
+    private fun tapeStrokeAt(viewX: Float, viewY: Float): Int? {
+        val point = floatArrayOf(viewX, viewY)
+        viewToPage.mapPoints(point)
+        return strokes.indices.reversed().firstOrNull { index ->
+            val stroke = strokes[index]
+            if (stroke.brush.family != InkBrushFamilies.tape || stroke.inputs.size < 2) return@firstOrNull false
+            val first = stroke.inputs[0]
+            val last = stroke.inputs[stroke.inputs.size - 1]
+            val dx = last.x - first.x
+            val dy = last.y - first.y
+            val lengthSquared = dx * dx + dy * dy
+            val t = if (lengthSquared == 0f) 0f else (
+                ((point[0] - first.x) * dx + (point[1] - first.y) * dy) / lengthSquared
+            ).coerceIn(0f, 1f)
+            val distance = hypot(point[0] - first.x - t * dx, point[1] - first.y - t * dy)
+            val hitRadius = stroke.brush.size / 2f + 8f
+            val hit = distance <= hitRadius
+            hit
+        }
+    }
+
     private fun startHighlighterStroke(event: MotionEvent, index: Int) {
+        if (!highlighterLifecycle.begin()) return
         highlighterStoredBrush = brushSpec.toBrush()
         highlighterRenderBrush = highlighterStoredBrush?.let { brush ->
             val paperDark = android.graphics.Color.luminance(paperPaint.color) < 0.5f
             brush.copyWithColorIntArgb(opaqueHighlighterColor(brush.colorIntArgb, paperDark))
         }
-        val renderBrush = highlighterRenderBrush ?: return
+        val renderBrush = highlighterRenderBrush ?: run {
+            resetHighlighterStroke()
+            return
+        }
         highlighterWet = InProgressStroke().also { it.start(renderBrush) }
         highlighterStartedInStrip = zoomEnabled && inStrip
         highlighterStartEventTime = event.eventTime
@@ -1099,6 +2086,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     }
 
     private fun addToHighlighterStroke(event: MotionEvent, index: Int) {
+        if (!highlighterLifecycle.acceptsInput() || highlighterWet == null) return
         val inputs = highlighterInputs(event, index, includeHistory = true)
         if (inputs.isEmpty()) return
         highlighterLastInput = inputs.last()
@@ -1110,7 +2098,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
                 straightenHighlighterForHold()
             }
         }
-        if (highlighterStraight) rebuildStraightHighlighter(highlighterLastInput!!)
+        if (highlighterStraight) highlighterLastInput?.let(::rebuildStraightHighlighter)
         else enqueueHighlighterInputs(inputs)
         strokeLayer.invalidate()
     }
@@ -1130,19 +2118,30 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     }
 
     private fun finishHighlighterStroke(event: MotionEvent, index: Int) {
+        if (!highlighterLifecycle.finish()) return
         val inputs = highlighterInputs(event, index, includeHistory = true)
         if (inputs.isNotEmpty()) highlighterLastInput = inputs.last()
+        val first = highlighterFirstInput
+        val last = highlighterLastInput
+        if (first == null || last == null || !HighlighterInputPolicy.hasLength(first.x, first.y, last.x, last.y)) {
+            resetHighlighterStroke()
+            strokeLayer.invalidate()
+            return
+        }
         if (highlighterStraight) {
-            rebuildStraightHighlighter(highlighterLastInput ?: highlighterFirstInput ?: return)
+            rebuildStraightHighlighter(last)
         } else {
             enqueueHighlighterInputs(inputs)
         }
         removeCallbacks(highlighterStraightenRunnable)
-        val wet = highlighterWet
+        val wet = highlighterWet ?: run {
+            resetHighlighterStroke()
+            return
+        }
         val finished = runCatching {
-            wet?.finishInput()
-            wet?.updateShape(SystemClock.uptimeMillis())
-            wet?.toImmutable()?.copy(highlighterStoredBrush ?: brushSpec.toBrush())
+            wet.finishInput()
+            wet.updateShape(SystemClock.uptimeMillis())
+            wet.toImmutable().copy(highlighterStoredBrush ?: brushSpec.toBrush())
         }.getOrNull()
         highlighterWet = null
         if (finished != null) {
@@ -1156,9 +2155,12 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     }
 
     private fun straightenHighlighterForHold() {
-        if (highlighterStraight || highlighterWet == null || highlighterHoldCancelled) return
+        if (!highlighterLifecycle.acceptsInput() || highlighterStraight || highlighterWet == null ||
+            highlighterHoldCancelled
+        ) return
+        val endpoint = highlighterLastInput ?: highlighterFirstInput ?: return
         highlighterStraight = true
-        rebuildStraightHighlighter(highlighterLastInput ?: highlighterFirstInput ?: return)
+        rebuildStraightHighlighter(endpoint)
         performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
         strokeLayer.invalidate()
     }
@@ -1166,6 +2168,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     private fun rebuildStraightHighlighter(endpoint: StrokeInput) {
         val first = highlighterFirstInput ?: return
         val brush = highlighterRenderBrush ?: return
+        if (!HighlighterInputPolicy.hasLength(first.x, first.y, endpoint.x, endpoint.y)) return
         val end = StrokeInput.create(
             endpoint.x,
             endpoint.y,
@@ -1176,23 +2179,37 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
             first.tiltRadians,
             first.orientationRadians,
         )
-        val batch = MutableStrokeInputBatch()
-        batch.add(copyInput(first))
-        batch.add(end)
-        val wet = InProgressStroke()
-        highlighterWet = wet
-        wet.start(brush)
-        wet.enqueueInputs(batch.toImmutable(), MutableStrokeInputBatch().toImmutable())
-        wet.updateShape(SystemClock.uptimeMillis())
+        runCatching {
+            val batch = MutableStrokeInputBatch()
+            batch.add(copyInput(first))
+            batch.add(end)
+            val wet = InProgressStroke()
+            wet.start(brush)
+            wet.enqueueInputs(batch.toImmutable(), MutableStrokeInputBatch().toImmutable())
+            wet.updateShape(SystemClock.uptimeMillis())
+            highlighterWet = wet
+        }.onFailure {
+            Log.w(TAG, "Dropping straight highlighter rebuild: ${it.message}")
+            resetHighlighterStroke()
+        }
     }
 
     private fun enqueueHighlighterInputs(inputs: List<StrokeInput>) {
         if (inputs.isEmpty()) return
         val wet = highlighterWet ?: return
-        val batch = MutableStrokeInputBatch()
-        inputs.forEach(batch::add)
-        wet.enqueueInputs(batch.toImmutable(), MutableStrokeInputBatch().toImmutable())
-        wet.updateShape(SystemClock.uptimeMillis())
+        // Ink validates every input against the batch (ranges, monotonic time, consistent axes)
+        // and throws IllegalArgumentException; a bad sample from one stylus must never kill the app.
+        val ok = runCatching {
+            val batch = MutableStrokeInputBatch()
+            inputs.forEach(batch::add)
+            wet.enqueueInputs(batch.toImmutable(), MutableStrokeInputBatch().toImmutable())
+            wet.updateShape(SystemClock.uptimeMillis())
+        }.onFailure { Log.w(TAG, "Dropping highlighter input: ${it.message}") }.isSuccess
+        if (!ok) {
+            removeCallbacks(highlighterStraightenRunnable)
+            resetHighlighterStroke()
+            strokeLayer.invalidate()
+        }
     }
 
     private fun highlighterInputs(event: MotionEvent, index: Int, includeHistory: Boolean): List<StrokeInput> {
@@ -1206,6 +2223,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         fun addInput(x: Float, y: Float, eventTime: Long, pressure: Float, tilt: Float, orientation: Float) {
             val point = floatArrayOf(x, y)
             transform.mapPoints(point)
+            if (!point[0].isFinite() || !point[1].isFinite()) return
             val elapsed = maxOf(eventTime - highlighterStartEventTime, highlighterLastElapsed + 1L).coerceAtLeast(0L)
             highlighterLastElapsed = elapsed
             inputs += StrokeInput.create(
@@ -1214,9 +2232,9 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
                 elapsed,
                 toolType,
                 POINT_STROKE_UNIT_LENGTH_CM,
-                pressure.takeIf { it > 0f } ?: 1f,
-                tilt,
-                orientation,
+                HighlighterInputPolicy.pressure(pressure),
+                HighlighterInputPolicy.tilt(tilt),
+                HighlighterInputPolicy.orientation(orientation),
             )
         }
         if (includeHistory) {
@@ -1243,6 +2261,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     }
 
     private fun resetHighlighterStroke() {
+        highlighterLifecycle.cancel()
         highlighterWet = null
         highlighterStoredBrush = null
         highlighterRenderBrush = null
@@ -1256,10 +2275,76 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     }
 
     private fun cancelCurrent(event: MotionEvent) {
-        currentStrokeId?.let { wetLayer.cancelStroke(it, event) }
+        finishActiveLaserTrail()
+        currentStrokeId?.let {
+            shapeStrokeContexts.remove(it)
+            wetLayer.cancelStroke(it, event)
+        }
         currentStrokeId = null; currentPointerId = -1; erasing = false
         resetHighlighterStroke()
+        setDrawingInputActive(false)
         strokeLayer.invalidate()
+    }
+
+    private fun setDrawingInputActive(active: Boolean) {
+        if (drawingInputActive == active) return
+        drawingInputActive = active
+        onDrawingActiveChanged?.invoke(active)
+    }
+
+    private fun handleLaserPointer(event: MotionEvent, actionIndex: Int): Boolean {
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
+                if (activeLaserTrail == null) {
+                    activeLaserPointerId = event.getPointerId(actionIndex)
+                    activeLaserTrail = LaserTrail(Path().apply { moveTo(event.getX(actionIndex), event.getY(actionIndex)) })
+                        .also(laserTrails::add)
+                    laserOverlay.invalidate()
+                }
+            }
+            MotionEvent.ACTION_MOVE -> {
+                val trail = activeLaserTrail ?: return true
+                val pointerIndex = event.findPointerIndex(activeLaserPointerId)
+                if (pointerIndex < 0) return true
+                for (historyIndex in 0 until event.historySize) {
+                    trail.path.lineTo(
+                        event.getHistoricalX(pointerIndex, historyIndex),
+                        event.getHistoricalY(pointerIndex, historyIndex),
+                    )
+                }
+                trail.path.lineTo(event.getX(pointerIndex), event.getY(pointerIndex))
+                laserOverlay.invalidate()
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
+                if (event.getPointerId(actionIndex) == activeLaserPointerId) {
+                    activeLaserTrail?.path?.lineTo(event.getX(actionIndex), event.getY(actionIndex))
+                    finishActiveLaserTrail()
+                }
+            }
+            MotionEvent.ACTION_CANCEL -> finishActiveLaserTrail()
+        }
+        return true
+    }
+
+    private fun finishActiveLaserTrail() {
+        val trail = activeLaserTrail ?: return
+        activeLaserTrail = null
+        activeLaserPointerId = -1
+        setDrawingInputActive(false)
+        trail.fadeAnimator = ValueAnimator.ofFloat(1f, 0f).apply {
+            duration = LASER_FADE_DURATION_MS
+            addUpdateListener {
+                trail.alpha = it.animatedValue as Float
+                laserOverlay.invalidate()
+            }
+            addListener(object : AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: Animator) {
+                    laserTrails.remove(trail)
+                    laserOverlay.invalidate()
+                }
+            })
+            start()
+        }
     }
 
     private fun handleFingerNavigation(event: MotionEvent): Boolean {
@@ -1422,10 +2507,11 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
         const val RULER_THICKNESS_PT = 56f
         const val RULER_CORNER_RADIUS_PT = 6f
         const val RULER_HANDLE_RADIUS_PT = 14f
-        const val RULER_HALF_CENTIMETER_PT = 14.175f
+        const val RULER_MILLIMETER_PT = 2.835f
         const val RULER_FULL_TICK_PT = 12f
         const val RULER_HALF_TICK_PT = 7f
-        const val RULER_LABEL_TEXT_PT = 9f
+        const val RULER_MILLIMETER_TICK_PT = 3f
+        const val RULER_LABEL_TEXT_PT = 12f
         const val RULER_LABEL_BASELINE_PT = 17f
         const val RULER_ANGLE_TEXT_PT = 12f
         const val RULER_ANGLE_BASELINE_PT = 4f

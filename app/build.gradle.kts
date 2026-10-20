@@ -8,17 +8,20 @@ plugins {
 android {
     namespace = "com.hashim.notepad"
     compileSdk = 37
+    testBuildType = "releaseTest"
 
     defaultConfig {
         val props = Properties().apply { rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use { load(it) } }
         fun cfg(key: String, env: String) = (props.getProperty(key) ?: System.getenv(env) ?: "").replace("\"", "")
         buildConfigField("String", "SUPABASE_URL", "\"${cfg("supabase.url", "SUPABASE_URL")}\"")
-        buildConfigField("String", "SUPABASE_ANON_KEY", "\"${cfg("supabase.anonKey", "anonPublic")}\"")
+        val anonKey = cfg("supabase.anonKey", "SUPABASE_ANON_KEY").ifEmpty { cfg("supabase.anonKey", "anonPublic") }
+        buildConfigField("String", "SUPABASE_ANON_KEY", "\"$anonKey\"")
         applicationId = "com.hashim.notepad"
         minSdk = 29
         targetSdk = 36
-        versionCode = 2
-        versionName = "0.2.0"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        versionCode = 34
+        versionName = "0.18.2"
         ndk { abiFilters += listOf("arm64-v8a") }
     }
 
@@ -30,13 +33,22 @@ android {
             // Test builds only: signed with the debug key until an upload keystore exists.
             signingConfig = signingConfigs.getByName("debug")
         }
+        create("releaseTest") {
+            initWith(getByName("release"))
+            isMinifyEnabled = false
+            isShrinkResources = false
+            matchingFallbacks += listOf("release")
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
     buildFeatures { compose = true; buildConfig = true }
-    packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
+    packaging {
+        resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        resources.excludes += "org/bouncycastle/pqc/**"
+    }
 }
 
 dependencies {
@@ -61,8 +73,18 @@ dependencies {
     implementation(libs.ink.nativeloader)
     implementation(libs.input.motionprediction)
     implementation(libs.pdfium.android)
+    implementation(libs.play.services.mlkit.document.scanner)
     implementation(libs.mlkit.digital.ink)
     implementation(libs.kotlinx.coroutines.play.services)
     implementation(libs.androidx.documentfile)
     implementation(libs.androidx.work.runtime)
+    implementation(libs.reorderable)
+    implementation(libs.pdfbox.android)
+    implementation(libs.androidx.media3.exoplayer)
+    implementation(libs.tesseract4android)
+
+    testImplementation(libs.junit)
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test:core:1.6.1")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
 }

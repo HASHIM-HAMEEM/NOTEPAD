@@ -5,7 +5,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -13,9 +13,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.SearchOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.layout.height
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
@@ -31,7 +34,12 @@ import kotlinx.coroutines.delay
 /** Search across handwriting, typed text, PDF text layers and PDF annotations. */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
-fun SearchScreen(repo: NotePadRepository, onBack: () -> Unit, onOpenPage: (notebookId: String, pageId: String) -> Unit) {
+fun SearchScreen(
+    repo: NotePadRepository,
+    onBack: () -> Unit,
+    onOpenPage: (notebookId: String, pageId: String, query: String) -> Unit,
+    showBack: Boolean = true,
+) {
     var query by remember { mutableStateOf("") }
     var hits by remember { mutableStateOf<List<SearchHit>>(emptyList()) }
     val focus = remember { FocusRequester() }
@@ -40,9 +48,23 @@ fun SearchScreen(repo: NotePadRepository, onBack: () -> Unit, onOpenPage: (noteb
 
     Scaffold(containerColor = MaterialTheme.colorScheme.background) { padding ->
         Column(Modifier.padding(padding).fillMaxSize()) {
-            Row(Modifier.statusBarsPadding().padding(start = 8.dp, end = 20.dp, top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
-                Surface(shape = RoundedCornerShape(26.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh, modifier = Modifier.weight(1f).height(50.dp)) {
+            // ChatGPT shape: with the sidebar present the field is a centred composer under a short prompt; on phones it sits beside Back.
+            val t = NotePadTheme.tokens
+            val wide = !showBack
+            Column(
+                Modifier.statusBarsPadding().fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = if (wide) 72.dp else 8.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                if (wide) {
+                    Text("Search your library", style = MaterialTheme.typography.headlineMedium, color = t.ink)
+                    Spacer(Modifier.height(18.dp))
+                }
+                Row(Modifier.widthIn(max = 720.dp).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                if (showBack) {
+                    PillIconButton(Icons.AutoMirrored.Filled.ArrowBack, "Back", onClick = onBack)
+                    Spacer(Modifier.width(8.dp))
+                }
+                Surface(shape = CircleShape, color = NotePadTheme.tokens.surface, border = BorderStroke(Spec.hairline, NotePadTheme.tokens.border), shadowElevation = if (wide) 3.dp else Spec.pillShadow, modifier = Modifier.weight(1f).height(if (wide) 56.dp else Spec.pillHeight)) {
                     Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Outlined.Search, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
                         Spacer(Modifier.width(12.dp))
@@ -58,15 +80,31 @@ fun SearchScreen(repo: NotePadRepository, onBack: () -> Unit, onOpenPage: (noteb
                         if (query.isNotEmpty()) IconButton(onClick = { query = "" }, modifier = Modifier.size(28.dp)) { Icon(Icons.Default.Close, "Clear", Modifier.size(18.dp)) }
                     }
                 }
+                }
             }
             when {
                 query.isBlank() -> Hint("Type a word in Arabic, Urdu or English.\nHandwriting is searched once a notebook has been recognised.")
-                hits.isEmpty() -> Hint("No matches for “$query”.")
-                else -> LazyColumn(contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    items(hits, key = { it.pageId + it.source }) { h ->
+                hits.isEmpty() -> Column(
+                    Modifier.weight(1f).fillMaxWidth().padding(top = 96.dp, start = 24.dp, end = 24.dp),
+                    verticalArrangement = Arrangement.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Icon(Icons.Outlined.SearchOff, null, Modifier.size(48.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.height(16.dp))
+                    Text("No matches for “$query”", style = MaterialTheme.typography.titleMedium, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "Handwriting is searchable after Recognise handwriting in a notebook’s menu",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    )
+                }
+                else -> LazyColumn(modifier = Modifier.widthIn(max = 760.dp).fillMaxWidth().align(Alignment.CenterHorizontally), contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    itemsIndexed(hits, key = { index, hit -> "search-result:${hit.source}:${hit.pageId}:$index" }) { _, h ->
                         Surface(
-                            onClick = { onOpenPage(h.notebookId, h.pageId) }, shape = RoundedCornerShape(22.dp),
-                            color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.fillMaxWidth().animateItem(),
+                            onClick = { onOpenPage(h.notebookId, h.pageId, query) }, shape = RoundedCornerShape(12.dp),
+                            color = NotePadTheme.tokens.surface, border = BorderStroke(Spec.hairline, NotePadTheme.tokens.border), modifier = Modifier.fillMaxWidth().animateItem(),
                         ) {
                             Column(Modifier.padding(18.dp)) {
                                 Text(h.snippet, style = MaterialTheme.typography.bodyLarge, maxLines = 3, overflow = TextOverflow.Ellipsis)
@@ -95,4 +133,12 @@ private fun Hint(text: String) {
     }
 }
 
-private fun sourceLabel(source: String) = when (source) { "ink" -> "Handwriting"; "text" -> "Typed"; "pdf" -> "PDF text"; "pdf_annot" -> "PDF note"; else -> source }
+private fun sourceLabel(source: String) = when (source) {
+    "ink" -> "Handwriting"
+    "text" -> "Typed"
+    "pdf" -> "PDF text"
+    "pdf_annot" -> "PDF note"
+    "title" -> "Title"
+    "filename" -> "Filename"
+    else -> source
+}

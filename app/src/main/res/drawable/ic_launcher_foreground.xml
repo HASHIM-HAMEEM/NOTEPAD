@@ -1,10 +1,15 @@
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
-    <!-- paper sheet -->
-    <path android:fillColor="#FFFFFFFF" android:pathData="M34,28 h32 a4,4 0 0 1 4,4 v44 a4,4 0 0 1 -4,4 h-32 a4,4 0 0 1 -4,-4 v-44 a4,4 0 0 1 4,-4 z"/>
-    <path android:strokeColor="#FFD7DCE5" android:strokeWidth="1.5" android:pathData="M38,42 h24 M38,50 h24 M38,58 h16"/>
-    <!-- pen -->
-    <path android:fillColor="#FF2458C5" android:pathData="M60,26 l10,-10 a3,3 0 0 1 4.2,0 l5.8,5.8 a3,3 0 0 1 0,4.2 l-10,10 z"/>
-    <path android:fillColor="#FF173C88" android:pathData="M60,26 l10,10 -22,22 -14,4 4,-14 z"/>
-    <path android:fillColor="#FF0E2A62" android:pathData="M38,48 l-4,14 14,-4 z"/>
+    <!-- page with soft shadow -->
+    <path android:fillColor="#22000000" android:pathData="M31,26 h38 a5,5 0 0 1 5,5 v52 a5,5 0 0 1 -5,5 h-38 a5,5 0 0 1 -5,-5 v-52 a5,5 0 0 1 5,-5 z"/>
+    <path android:fillColor="#FFFFFFFF" android:pathData="M30,24 h38 a5,5 0 0 1 5,5 v52 a5,5 0 0 1 -5,5 h-38 a5,5 0 0 1 -5,-5 v-52 a5,5 0 0 1 5,-5 z"/>
+    <!-- ruled lines -->
+    <path android:strokeColor="#FFD9DDE3" android:strokeWidth="2.2" android:strokeLineCap="round" android:pathData="M33,40 h32 M33,49 h32 M33,58 h32 M33,67 h18"/>
+    <!-- highlighter sweep -->
+    <path android:fillColor="#99FFD54F" android:pathData="M33,45 h26 a2.5,2.5 0 0 1 0,5 h-26 a2.5,2.5 0 0 1 0,-5 z"/>
+    <!-- pen: barrel, grip, tip -->
+    <path android:fillColor="#FFB4532A" android:pathData="M58.5,70.5 l24,-24 a4.5,4.5 0 0 1 6.4,0 l3.6,3.6 a4.5,4.5 0 0 1 0,6.4 l-24,24 z"/>
+    <path android:fillColor="#FF7E3618" android:pathData="M58.5,70.5 l10,10 -4.5,4.5 -10,-10 z"/>
+    <path android:fillColor="#FF2B2320" android:pathData="M54,75 l10,10 -13.5,3.5 z"/>
+    <path android:fillColor="#FFF4F1EA" android:pathData="M82.5,46.5 l10,10 -2.6,2.6 -10,-10 z"/>
 </vector>

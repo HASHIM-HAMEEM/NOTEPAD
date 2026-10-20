@@ -6,3 +6,8 @@
 -keep class com.google.mlkit.** { *; }
 -keep class com.google.android.gms.internal.mlkit_** { *; }
 -dontwarn com.google.mlkit.**
+-dontwarn com.gemalto.jp2.JP2Decoder
+-dontwarn com.gemalto.jp2.JP2Encoder
+
+-keep class com.tom_roush.** { *; }
+-dontwarn com.tom_roush.**

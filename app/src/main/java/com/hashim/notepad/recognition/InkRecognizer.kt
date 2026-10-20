@@ -34,9 +34,15 @@ class InkRecognizer {
     }
 
     /** Recognises all strokes of a page as one block. Coordinates are page points; [pageWidth]/[pageHeight] help line segmentation. */
-    suspend fun recognize(strokes: List<Stroke>, language: String, pageWidth: Float, pageHeight: Float, preContext: String = ""): String {
-        if (strokes.isEmpty()) return ""
-        val model = modelFor(language) ?: return ""
+    suspend fun recognizeCandidates(
+        strokes: List<Stroke>,
+        language: String,
+        pageWidth: Float,
+        pageHeight: Float,
+        preContext: String = "",
+    ): List<InkRecognitionCandidate> {
+        if (strokes.isEmpty()) return emptyList()
+        val model = modelFor(language) ?: return emptyList()
         val recognizer = recognizers.getOrPut(language) {
             DigitalInkRecognition.getClient(DigitalInkRecognizerOptions.builder(model).build())
         }
@@ -53,8 +59,11 @@ class InkRecognizer {
         }.build()
         val ctx = RecognitionContext.builder().setPreContext(preContext.takeLast(20)).setWritingArea(WritingArea(pageWidth, pageHeight)).build()
         val result = recognizer.recognize(ink, ctx).await()
-        return result.candidates.firstOrNull()?.text ?: ""
+        return result.candidates.map { InkRecognitionCandidate(it.text, it.score, language) }
     }
+
+    suspend fun recognize(strokes: List<Stroke>, language: String, pageWidth: Float, pageHeight: Float, preContext: String = ""): String =
+        recognizeCandidates(strokes, language, pageWidth, pageHeight, preContext).firstOrNull()?.text.orEmpty()
 
     private fun modelFor(language: String): DigitalInkRecognitionModel? {
         val id = DigitalInkRecognitionModelIdentifier.fromLanguageTag(language) ?: return null
