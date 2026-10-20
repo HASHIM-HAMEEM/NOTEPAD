@@ -142,7 +142,7 @@ fun AccountScreen(onBack: () -> Unit) {
                                 false -> "Signed in as ${session?.email}. Choose an encryption passphrase to start syncing."
                                 null -> "Signed in as ${session?.email}. Checking account…"
                             }
-                            SyncState.IDLE -> "Connected as ${session?.email}"
+                            SyncState.IDLE -> "Connected as\n${session?.email}"
                             SyncState.SYNCING -> "Syncing…"
                             SyncState.ERROR -> "Sync error"
                             SyncState.OFFLINE -> "Offline — changes queued"
@@ -156,10 +156,10 @@ fun AccountScreen(onBack: () -> Unit) {
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                                 Spacer(Modifier.width(16.dp))
-                                Text(title, Modifier.weight(1f), style = MaterialTheme.typography.headlineSmall)
+                                Text(title, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
                             }
                         } else {
-                            Text(title, style = MaterialTheme.typography.headlineSmall)
+                            Text(title, style = MaterialTheme.typography.titleMedium)
                         }
                         if (status.lastSyncAt > 0) Text("Last sync: ${DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(status.lastSyncAt))}", style = MaterialTheme.typography.bodySmall)
                         Text("Pending changes: ${status.pending}", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
