@@ -64,6 +64,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.draw.drawBehind
 import com.hashim.notepad.data.Folder
 import com.hashim.notepad.data.Notebook
 import com.hashim.notepad.data.NotePadRepository
@@ -356,7 +358,7 @@ fun NotebooksScreen(
             if (recent.isNotEmpty()) {
                 item(span = { GridItemSpan(maxLineSpan) }, contentType = "continue-reading") {
                     Column {
-                        Text("Continue reading", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                        Text("Continue reading", style = MaterialTheme.typography.headlineSmall)
                         Spacer(Modifier.height(12.dp))
                         Row(
                             Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
@@ -393,7 +395,7 @@ fun NotebooksScreen(
                 }
             }
             item(span = { GridItemSpan(maxLineSpan) }, contentType = "library-title") {
-                Text("Your library", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                Text("Your library", style = MaterialTheme.typography.headlineSmall)
             }
             if (notebooks.isEmpty() && !importing) item(span = { GridItemSpan(maxLineSpan) }, contentType = "empty-state") {
                 EmptyLibrary(onNew = { showNew = true }, onImport = { pickPdf.launch(arrayOf("application/pdf")) })
@@ -876,7 +878,7 @@ private fun LibraryHeader(
         if (phoneLayout) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f).padding(end = 8.dp)) {
-                    Text("Library", style = MaterialTheme.typography.headlineSmall.copy(fontFamily = FontFamily.Serif))
+                    Text("Library", style = MaterialTheme.typography.headlineMedium)
                     Text(if (importing) "Importing…" else "$count items", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 Box {
@@ -895,11 +897,7 @@ private fun LibraryHeader(
             LibrarySearchButton(onSearch, Modifier.fillMaxWidth())
         } else Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.padding(end = 16.dp)) {
-                Text(
-                    "Library",
-                    style = (if (phoneLayout) MaterialTheme.typography.headlineSmall else MaterialTheme.typography.headlineLarge)
-                        .copy(fontFamily = FontFamily.Serif),
-                )
+                Text("Library", style = MaterialTheme.typography.displaySmall)
                 Text(if (importing) "Importing…" else "$count items", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             LibrarySearchButton(onSearch, Modifier.weight(1f).widthIn(max = 360.dp))
@@ -1020,15 +1018,19 @@ internal fun LibrarySidebar(
     var showCreateFolder by remember { mutableStateOf(false) }
     var showAppearance by remember { mutableStateOf(false) }
     val selectedLibrary = screen == Screen.Notebooks || screen is Screen.Pages || screen is Screen.Read
+    val hairline = MaterialTheme.colorScheme.outlineVariant
 
     Column(
-        Modifier.width(264.dp).fillMaxHeight().background(MaterialTheme.colorScheme.surfaceContainer)
+        Modifier.width(248.dp).fillMaxHeight().background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .drawBehind {
+                drawLine(hairline, Offset(size.width - 0.5f, 0f), Offset(size.width - 0.5f, size.height), 1f)
+            }
             .statusBarsPadding().padding(start = 12.dp, end = 12.dp, bottom = 16.dp),
     ) {
         Text(
             "NotePad",
             Modifier.padding(horizontal = 12.dp).padding(top = 16.dp, bottom = 12.dp),
-            style = MaterialTheme.typography.titleLarge.copy(fontFamily = FontFamily.Serif, fontWeight = FontWeight.SemiBold),
+            style = MaterialTheme.typography.headlineSmall,
             color = MaterialTheme.colorScheme.onSurface,
         )
         Spacer(Modifier.height(8.dp))
@@ -1037,9 +1039,9 @@ internal fun LibrarySidebar(
         SidebarDestination("Sync", Icons.Outlined.Cloud, screen == Screen.Account) { onNavigate(Screen.Account) }
         Spacer(Modifier.height(20.dp))
         Text(
-            "Subjects",
+            "SUBJECTS",
             Modifier.padding(start = 12.dp, bottom = 8.dp),
-            style = MaterialTheme.typography.labelMedium,
+            style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.2.sp),
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Column(
@@ -1137,11 +1139,11 @@ internal fun LibrarySidebar(
 
 @Composable
 private fun SidebarDestination(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, selected: Boolean, onClick: () -> Unit) {
-    val shape = RoundedCornerShape(24.dp)
-    val contentColor = if (selected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurface
+    val shape = RoundedCornerShape(12.dp)
+    val contentColor = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
     Row(
-        Modifier.fillMaxWidth().height(48.dp).clip(shape)
-            .background(if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent)
+        Modifier.fillMaxWidth().height(44.dp).clip(shape)
+            .background(if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent)
             .clickable(onClick = onClick)
             .padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -1162,10 +1164,10 @@ private fun SidebarFolderRow(
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null,
 ) {
-    val shape = RoundedCornerShape(24.dp)
+    val shape = RoundedCornerShape(12.dp)
     Row(
-        Modifier.fillMaxWidth().height(48.dp).clip(shape)
-            .background(if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent)
+        Modifier.fillMaxWidth().height(40.dp).clip(shape)
+            .background(if (selected) MaterialTheme.colorScheme.surfaceContainerHighest else Color.Transparent)
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -1182,7 +1184,7 @@ private fun SidebarFolderRow(
             name,
             Modifier.weight(1f),
             style = MaterialTheme.typography.bodyMedium,
-            color = if (selected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurface,
+            color = MaterialTheme.colorScheme.onSurface,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
@@ -1223,9 +1225,10 @@ private fun ContinueReadingCard(
     Surface(
         modifier = Modifier.width(if (phoneLayout) 280.dp else 360.dp).height(150.dp).graphicsLayer { scaleX = scale; scaleY = scale }
             .combinedClickable(interactionSource = interaction, indication = null, onClick = onOpen),
-        shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.surface,
+        shadowElevation = 1.dp,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(
@@ -1322,7 +1325,7 @@ private fun NotebookCard(
     Column(modifier.graphicsLayer { scaleX = scale; scaleY = scale }) {
         Box(
             Modifier.fillMaxWidth().aspectRatio(coverAspect)
-                .shadow(4.dp, radius, spotColor = Color.Black.copy(alpha = 0.2f))
+                .shadow(10.dp, radius, ambientColor = Color.Black.copy(alpha = 0.10f), spotColor = Color.Black.copy(alpha = 0.18f))
                 .clip(radius)
                 .then(sharedModifier)
                 .combinedClickable(interactionSource = interaction, indication = null, onClick = onOpen, onLongClick = onMore),
@@ -1334,8 +1337,8 @@ private fun NotebookCard(
                     Box(Modifier.fillMaxSize().padding(start = 1.dp, top = 2.dp).background(Color(0xFFF3F0E9), radius))
                     PagePreview(repo, pages.firstOrNull(), Color(0xFFFFFEFA), Modifier.fillMaxSize().padding(end = 2.dp, bottom = 4.dp), renderEnabled = renderThumbnail, cropScale = 2.2f)
                     Box(Modifier.fillMaxHeight().width(9.dp).background(Color.Black.copy(alpha = 0.12f)))
-                    Surface(Modifier.align(Alignment.BottomEnd).padding(8.dp), color = Color(0xFFB4532A), shape = RoundedCornerShape(4.dp)) {
-                        Text("PDF", Modifier.padding(horizontal = 7.dp, vertical = 4.dp), color = Color.White, style = MaterialTheme.typography.labelSmall)
+                    Surface(Modifier.align(Alignment.BottomEnd).padding(8.dp), color = Color(0xCC15161A), shape = RoundedCornerShape(4.dp)) {
+                        Text("PDF", Modifier.padding(horizontal = 6.dp, vertical = 3.dp), color = Color.White, style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 0.8.sp))
                     }
                 }
                 else -> BookCover(notebook.title, cover, false, Modifier.fillMaxSize(), tagNames)
@@ -1426,10 +1429,10 @@ private fun BookCover(title: String, color: Color, isPdf: Boolean, modifier: Mod
         if (isPdf) {
             Surface(
                 Modifier.align(Alignment.TopEnd).padding(8.dp),
-                color = Color(0xFFB4532A),
+                color = Color(0xCC15161A),
                 shape = RoundedCornerShape(4.dp),
             ) {
-                Text("PDF", Modifier.padding(horizontal = 7.dp, vertical = 4.dp), color = Color.White, style = MaterialTheme.typography.labelSmall)
+                Text("PDF", Modifier.padding(horizontal = 6.dp, vertical = 3.dp), color = Color.White, style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 0.8.sp))
             }
         }
     }
