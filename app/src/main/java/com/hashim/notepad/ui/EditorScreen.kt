@@ -752,11 +752,10 @@ fun EditorScreen(
     LaunchedEffect(drawingActive, toolbarPinned, toolbarOverlayOpen) {
         if (toolbarPinned || toolbarOverlayOpen) {
             toolbarAutoHidden = false
-        } else if (drawingActive) {
-            toolbarAutoHidden = true
         } else {
-            delay(500)
-            toolbarAutoHidden = false
+            // Hide only while the pen is actually down; reappear the moment it lifts so the next
+            // tap on a tool is never spent just revealing the toolbar.
+            toolbarAutoHidden = drawingActive
         }
     }
     val haptics = LocalHapticFeedback.current

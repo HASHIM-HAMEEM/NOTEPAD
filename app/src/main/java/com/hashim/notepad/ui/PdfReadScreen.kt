@@ -40,6 +40,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.systemGesturesPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -264,6 +265,9 @@ fun PdfReadScreen(
     var noteDialog by remember { mutableStateOf(false) }
     var noteDraft by remember { mutableStateOf("") }
     val snackbarHost = remember { androidx.compose.material3.SnackbarHostState() }
+    var ocrResultSummary by remember { mutableStateOf<String?>(null) }
+    var ocrResultText by remember { mutableStateOf("") }
+    var showOcrResult by remember { mutableStateOf(false) }
     LaunchedEffect(ocrWorkInfos) {
         if (!hasObservedOcrWork) {
             handledOcrWorkIds = ocrWorkInfos.map { it.id.toString() }.toSet()
@@ -276,8 +280,19 @@ fun PdfReadScreen(
         handledOcrWorkIds = handledOcrWorkIds + finishedWork.id.toString()
         val message = if (finishedWork.state == androidx.work.WorkInfo.State.SUCCEEDED) {
             val count = finishedWork.outputData.getInt(PdfOcrWorker.KEY_RECOGNIZED_WORDS, 0)
-            val pages = finishedWork.outputData.getInt(PdfOcrWorker.KEY_RECOGNIZED_PAGES, 0)
-            if (count > 0) "Recognized $count words on $pages pages" else "No text found"
+            val pageCount = finishedWork.outputData.getInt(PdfOcrWorker.KEY_RECOGNIZED_PAGES, 0)
+            if (count > 0) {
+                val summary = "Recognized $count words on $pageCount pages"
+                val info = listState.layoutInfo
+                val visibleIndex = info.visibleItemsInfo.maxByOrNull {
+                    minOf(it.offset + it.size, info.viewportEndOffset) - maxOf(it.offset, info.viewportStartOffset)
+                }?.index ?: initialIndex
+                val current = pages.getOrNull(visibleIndex)
+                ocrResultText = current?.let { ocrWordsAsText(repo.ocrWords(it.id)) }.orEmpty()
+                ocrResultSummary = summary
+                showOcrResult = true
+                summary
+            } else "No text found on these pages. Scanned pages must be sharp and upright; try zooming the scan or re-importing at higher quality."
         } else {
             finishedWork.outputData.getString(PdfOcrWorker.KEY_ERROR)
                 ?.takeIf(String::isNotBlank)
@@ -286,6 +301,35 @@ fun PdfReadScreen(
         snackbarHost.showSnackbar(message)
     }
     val clipboard = LocalClipboardManager.current
+    if (showOcrResult) {
+        ModalBottomSheet(onDismissRequest = { showOcrResult = false }) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(bottom = 32.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("Text recognized", style = MaterialTheme.typography.titleLarge)
+                Text(
+                    (ocrResultSummary ?: "") + ". The text is now searchable (search icon) and selectable on the page — long-press a word to select it.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                HorizontalDivider()
+                Text("This page", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                androidx.compose.foundation.text.selection.SelectionContainer {
+                    Text(
+                        ocrResultText.ifBlank { "No text was recognized on the page you are viewing." },
+                        style = MaterialTheme.typography.bodyLarge,
+                        modifier = Modifier.fillMaxWidth().heightIn(max = 320.dp).verticalScroll(rememberScrollState()),
+                    )
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(
+                        onClick = { clipboard.setText(AnnotatedString(ocrResultText)); scope.launch { snackbarHost.showSnackbar("Copied") } },
+                        enabled = ocrResultText.isNotBlank(),
+                    ) { Text("Copy text") }
+                    TextButton(onClick = { showOcrResult = false; sidebarOpen = true; chromeVisible = true }) { Text("Search document") }
+                    TextButton(onClick = { showOcrResult = false }) { Text("Done") }
+                }
+            }
+        }
+    }
     fun recordSavedMark(mark: com.hashim.notepad.data.PdfMark) {
         scope.launch {
             val recording = repo.activeAudioRecording(notebookId) ?: return@launch
@@ -316,8 +360,6 @@ fun PdfReadScreen(
     }
     LaunchedEffect(currentIndex) {
         if (!scrubbing) scrubValue = currentIndex.toFloat()
-        delay(2200)
-        if (!scrubbing) chromeVisible = false
     }
     LaunchedEffect(backPage) {
         if (backPage != null) {
@@ -419,6 +461,9 @@ fun PdfReadScreen(
                 .collectLatest { scrolling ->
                     if (scrolling) {
                         settledPages = emptySet()
+                        // The bar hides only when the reader scrolls, never on a timer, so the
+                        // first tap on an icon always lands on a visible, enabled control.
+                        if (!scrubbing && selection == null) chromeVisible = false
                     } else {
                         delay(150)
                         val visible = listState.layoutInfo.visibleItemsInfo.map { it.index }.filter { it in pages.indices }.toSet()
@@ -1384,4 +1429,23 @@ private fun saveSelection(
         repo.savePdfMark(mark)
         onSaved?.invoke(mark)
     }
+}
+
+/** Joins OCR words in recognition order, breaking lines where the baseline jumps. */
+internal fun ocrWordsAsText(words: List<com.hashim.notepad.data.OcrWord>): String {
+    if (words.isEmpty()) return ""
+    val ordered = words.sortedBy { it.index }
+    val sb = StringBuilder()
+    var previous: com.hashim.notepad.data.OcrWord? = null
+    for (word in ordered) {
+        if (word.text.isBlank()) continue
+        if (previous != null) {
+            val height = (previous.bottom - previous.top).coerceAtLeast(1f)
+            val lineBreak = kotlin.math.abs(word.top - previous.top) > height * 0.6f
+            sb.append(if (lineBreak) '\n' else ' ')
+        }
+        sb.append(word.text.trim())
+        previous = word
+    }
+    return sb.toString()
 }

@@ -48,6 +48,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import com.hashim.notepad.sync.HttpException
 import com.hashim.notepad.sync.SyncManager
 import com.hashim.notepad.sync.SyncState
 import kotlinx.coroutines.CancellationException
@@ -95,7 +96,7 @@ fun AccountScreen(onBack: () -> Unit) {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                error = e.message ?: "Could not complete this action. Please try again."
+                error = friendlyAuthError(e)
             } finally {
                 busy = false
             }
@@ -230,5 +231,27 @@ fun AccountScreen(onBack: () -> Unit) {
                 TextButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) { Text("Back to notes") }
             }
         }
+    }
+}
+
+/** Turns Supabase auth/HTTP failures into a sentence that says what to do next. */
+internal fun friendlyAuthError(e: Exception): String {
+    val raw = e.message.orEmpty()
+    val lower = raw.lowercase()
+    return when {
+        e is HttpException && ("invalid login credentials" in lower || "invalid_credentials" in lower || "invalid_grant" in lower) ->
+            "Wrong email or password. If you have no account yet, use Create account."
+        "email not confirmed" in lower || "email_not_confirmed" in lower ->
+            "Confirm your email first — open the link we sent you, then connect again."
+        "already registered" in lower || "already been registered" in lower || "user_already_exists" in lower ->
+            "This email already has an account. Use Connect existing account instead."
+        "password should be" in lower || "weak_password" in lower ->
+            "Password is too short — use at least 6 characters."
+        e is HttpException && e.code == 429 || "rate limit" in lower || "over_email_send_rate_limit" in lower ->
+            "Too many attempts. Wait a minute and try again."
+        e is HttpException && e.code >= 500 -> "The sync server is having trouble (HTTP ${e.code}). Try again in a few minutes."
+        e is java.io.IOException && e !is HttpException -> "No connection. Check the network and try again."
+        raw.isNotBlank() -> raw.removePrefix("HTTP ").let { if (it.firstOrNull()?.isDigit() == true) "Server replied: $it" else it }
+        else -> "Could not complete this action. Please try again."
     }
 }
