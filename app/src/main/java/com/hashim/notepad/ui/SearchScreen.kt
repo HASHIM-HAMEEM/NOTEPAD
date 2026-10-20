@@ -38,6 +38,7 @@ fun SearchScreen(
     repo: NotePadRepository,
     onBack: () -> Unit,
     onOpenPage: (notebookId: String, pageId: String, query: String) -> Unit,
+    showBack: Boolean = true,
 ) {
     var query by remember { mutableStateOf("") }
     var hits by remember { mutableStateOf<List<SearchHit>>(emptyList()) }
@@ -47,10 +48,23 @@ fun SearchScreen(
 
     Scaffold(containerColor = MaterialTheme.colorScheme.background) { padding ->
         Column(Modifier.padding(padding).fillMaxSize()) {
-            Row(Modifier.statusBarsPadding().padding(start = 12.dp, end = 12.dp, top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                PillIconButton(Icons.AutoMirrored.Filled.ArrowBack, "Back", onClick = onBack)
-                Spacer(Modifier.width(8.dp))
-                Surface(shape = CircleShape, color = NotePadTheme.tokens.surface, border = BorderStroke(Spec.hairline, NotePadTheme.tokens.border), shadowElevation = Spec.pillShadow, modifier = Modifier.weight(1f).height(Spec.pillHeight)) {
+            // ChatGPT shape: with the sidebar present the field is a centred composer under a short prompt; on phones it sits beside Back.
+            val t = NotePadTheme.tokens
+            val wide = !showBack
+            Column(
+                Modifier.statusBarsPadding().fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = if (wide) 72.dp else 8.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                if (wide) {
+                    Text("Search your library", style = MaterialTheme.typography.headlineMedium, color = t.ink)
+                    Spacer(Modifier.height(18.dp))
+                }
+                Row(Modifier.fillMaxWidth().widthIn(max = 720.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (showBack) {
+                    PillIconButton(Icons.AutoMirrored.Filled.ArrowBack, "Back", onClick = onBack)
+                    Spacer(Modifier.width(8.dp))
+                }
+                Surface(shape = CircleShape, color = NotePadTheme.tokens.surface, border = BorderStroke(Spec.hairline, NotePadTheme.tokens.border), shadowElevation = if (wide) 3.dp else Spec.pillShadow, modifier = Modifier.weight(1f).height(if (wide) 56.dp else Spec.pillHeight)) {
                     Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Outlined.Search, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
                         Spacer(Modifier.width(12.dp))
@@ -65,6 +79,7 @@ fun SearchScreen(
                         }
                         if (query.isNotEmpty()) IconButton(onClick = { query = "" }, modifier = Modifier.size(28.dp)) { Icon(Icons.Default.Close, "Clear", Modifier.size(18.dp)) }
                     }
+                }
                 }
             }
             when {
@@ -85,7 +100,7 @@ fun SearchScreen(
                         textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                     )
                 }
-                else -> LazyColumn(contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                else -> LazyColumn(modifier = Modifier.fillMaxWidth().widthIn(max = 760.dp).align(Alignment.CenterHorizontally), contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     itemsIndexed(hits, key = { index, hit -> "search-result:${hit.source}:${hit.pageId}:$index" }) { _, h ->
                         Surface(
                             onClick = { onOpenPage(h.notebookId, h.pageId, query) }, shape = RoundedCornerShape(12.dp),

@@ -3,6 +3,7 @@ package com.hashim.notepad.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Arrangement
@@ -61,7 +62,7 @@ import java.util.Date
 /** Sign-in, end-to-end encryption passphrase and sync status. Everything else in the app works without it. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AccountScreen(onBack: () -> Unit) {
+fun AccountScreen(onBack: () -> Unit, showBack: Boolean = true) {
     val context = LocalContext.current
     val sync = remember { SyncManager.get(context) }
     val status by sync.status.collectAsState()
@@ -108,9 +109,9 @@ fun AccountScreen(onBack: () -> Unit) {
     Scaffold(
         containerColor = NotePadTheme.tokens.bg,
         topBar = {
-            Row(Modifier.statusBarsPadding().padding(start = 12.dp, top = 8.dp)) {
+            if (showBack) Row(Modifier.statusBarsPadding().padding(start = 12.dp, top = 8.dp)) {
                 PillIconButton(Icons.AutoMirrored.Filled.ArrowBack, "Back", onClick = onBack)
-            }
+            } else Spacer(Modifier.statusBarsPadding().height(40.dp))
         },
     ) { padding ->
         Column(

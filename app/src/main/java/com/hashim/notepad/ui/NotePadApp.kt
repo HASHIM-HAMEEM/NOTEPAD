@@ -311,8 +311,8 @@ fun NotePadApp(
                         externalImportRequest = importRequest,
                         externalFolderRequest = folderRequest,
                     )
-                    Screen.Account -> AccountScreen(onBack = { screen = Screen.Notebooks })
-                    Screen.Search -> SearchScreen(repo = repo, onBack = { screen = Screen.Notebooks }, onOpenPage = ::openPage)
+                    Screen.Account -> AccountScreen(onBack = { screen = Screen.Notebooks }, showBack = !showSidebar)
+                    Screen.Search -> SearchScreen(repo = repo, onBack = { screen = Screen.Notebooks }, onOpenPage = ::openPage, showBack = !showSidebar)
                     is Screen.Pages -> {
                         val sharedModifier = with(sharedScope) {
                             Modifier.sharedElement(
