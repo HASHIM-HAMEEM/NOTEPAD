@@ -1053,6 +1053,7 @@ fun EditorScreen(
             },
         )
 
+        var moreToolsPopover by remember { mutableStateOf(false) }
         val shelfTools: @Composable () -> Unit = {
             val penTypes = listOf(PenType.BALLPOINT, PenType.PENCIL, PenType.FOUNTAIN, PenType.MARKER, PenType.CALLIGRAPHY)
             val currentPenSettings = penSettings[pen] ?: ToolBrushSettings(0xFF000000.toInt(), 2.5f, pen.defaultOpacity())
@@ -1169,15 +1170,31 @@ fun EditorScreen(
             }
             ToolCell(Icons.Outlined.CleaningServices, "Eraser", selected = tool == InkTool.ERASER, enabled = !toolbarHidden, onClick = { selectTool(InkTool.ERASER) })
             ToolCell(Icons.Outlined.HighlightAlt, "Lasso", selected = tool == InkTool.LASSO, enabled = !toolbarHidden, onClick = { selectTool(InkTool.LASSO) })
-            ToolCell(Icons.Outlined.TextFields, "Text", selected = tool == InkTool.TEXT, enabled = !toolbarHidden, onClick = { selectTool(InkTool.TEXT) })
-            ToolCell(
-                Icons.Outlined.Straighten, "Ruler", selected = rulerVisible, enabled = !toolbarHidden,
-                onClick = {
-                    rulerVisible = !rulerVisible
-                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                },
-            )
-            ToolCell(Icons.Outlined.Flare, "Laser", selected = tool == InkTool.LASER, enabled = !toolbarHidden, onClick = { selectTool(InkTool.LASER) })
+            val secondaryTools: @Composable () -> Unit = {
+                ToolCell(Icons.Outlined.TextFields, "Text", selected = tool == InkTool.TEXT, enabled = !toolbarHidden, onClick = { moreToolsPopover = false; selectTool(InkTool.TEXT) })
+                ToolCell(
+                    Icons.Outlined.Straighten, "Ruler", selected = rulerVisible, enabled = !toolbarHidden,
+                    onClick = {
+                        moreToolsPopover = false
+                        rulerVisible = !rulerVisible
+                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    },
+                )
+                ToolCell(Icons.Outlined.Flare, "Laser", selected = tool == InkTool.LASER, enabled = !toolbarHidden, onClick = { moreToolsPopover = false; selectTool(InkTool.LASER) })
+            }
+            if (narrowToolbar) {
+                // Phones: secondary tools fold into one "More" cell so the pill never scrolls or clips.
+                Box {
+                    ToolCell(
+                        Icons.Default.MoreHoriz, "More tools",
+                        selected = tool == InkTool.TEXT || tool == InkTool.LASER || rulerVisible, enabled = !toolbarHidden,
+                        onClick = { moreToolsPopover = true },
+                    )
+                    ToolbarPopover(expanded = moreToolsPopover, edge = toolbarEdge, onDismissRequest = { moreToolsPopover = false }) {
+                        PopoverCard { Row(verticalAlignment = Alignment.CenterVertically) { secondaryTools() } }
+                    }
+                }
+            } else secondaryTools()
         }
         val colorControls: @Composable () -> Unit = {
             if (verticalToolbar) {

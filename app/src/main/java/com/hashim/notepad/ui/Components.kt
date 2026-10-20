@@ -86,6 +86,7 @@ fun FloatingPill(
     modifier: Modifier = Modifier,
     height: Dp = Spec.pillHeight,
     contentPadding: PaddingValues = PaddingValues(horizontal = 4.dp),
+    flat: Boolean = false,
     content: @Composable RowScope.() -> Unit,
 ) {
     val t = NotePadTheme.tokens
@@ -93,10 +94,10 @@ fun FloatingPill(
     Surface(
         modifier = modifier.height(height),
         shape = shape,
-        color = t.surface,
+        color = if (flat) Color.Transparent else t.surface,
         contentColor = t.ink,
-        border = BorderStroke(Spec.hairline, t.border),
-        shadowElevation = Spec.pillShadow,
+        border = if (flat) null else BorderStroke(Spec.hairline, t.border),
+        shadowElevation = if (flat) 0.dp else Spec.pillShadow,
     ) {
         Row(
             Modifier.padding(contentPadding),
@@ -159,16 +160,16 @@ fun PillDivider() {
 
 /** A stand-alone round 44 dp pill button (back, search). */
 @Composable
-fun PillIconButton(icon: ImageVector, contentDescription: String, modifier: Modifier = Modifier, tint: Color? = null, onClick: () -> Unit) {
+fun PillIconButton(icon: ImageVector, contentDescription: String, modifier: Modifier = Modifier, tint: Color? = null, flat: Boolean = false, onClick: () -> Unit) {
     val t = NotePadTheme.tokens
     val interaction = remember { MutableInteractionSource() }
     Surface(
         modifier = modifier.size(Spec.pillHeight).pressable(interaction),
         shape = CircleShape,
-        color = t.surface,
+        color = if (flat) Color.Transparent else t.surface,
         contentColor = tint ?: t.ink,
-        border = BorderStroke(Spec.hairline, t.border),
-        shadowElevation = Spec.pillShadow,
+        border = if (flat) null else BorderStroke(Spec.hairline, t.border),
+        shadowElevation = if (flat) 0.dp else Spec.pillShadow,
         onClick = onClick,
         interactionSource = interaction,
     ) {

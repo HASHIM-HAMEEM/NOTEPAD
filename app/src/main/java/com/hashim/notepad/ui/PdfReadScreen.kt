@@ -824,13 +824,15 @@ fun PdfReadScreen(
             exit = fadeOut(tween(Motion.chrome)) + slideOutVertically(tween(Motion.chrome)) { -it },
             modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth().padding(start = sidebarWidth),
         ) {
+            // ChatGPT-style flat header: no floating pills, one quiet bar with a hairline.
+            Column(Modifier.fillMaxWidth().background(NotePadTheme.tokens.bg.copy(alpha = 0.96f))) {
             Row(
-                Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 12.dp, vertical = 8.dp),
+                Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 8.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                PillIconButton(Icons.AutoMirrored.Outlined.ArrowBack, "Back", onClick = onBack)
-                FloatingPill(Modifier.weight(1f, fill = false).widthIn(max = 420.dp), contentPadding = PaddingValues(horizontal = 14.dp)) {
+                PillIconButton(Icons.AutoMirrored.Outlined.ArrowBack, "Back", flat = true, onClick = onBack)
+                FloatingPill(Modifier.weight(1f, fill = false).widthIn(max = 420.dp), contentPadding = PaddingValues(horizontal = 8.dp), flat = true) {
                     Column {
                         Text(
                             notebook?.title.orEmpty(),
@@ -850,7 +852,7 @@ fun PdfReadScreen(
                     }
                 }
                 Spacer(Modifier.weight(1f))
-                FloatingPill {
+                FloatingPill(flat = true) {
                     val statusLabel = when {
                         ocrWorkInfo != null -> "Recognizing $ocrProgress/$ocrTotal"
                         modelWorkInfo != null -> "Downloading model"
@@ -1017,6 +1019,8 @@ fun PdfReadScreen(
                         }
                     }
                 }
+            }
+            Hairline()
             }
         }
 

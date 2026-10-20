@@ -145,10 +145,9 @@ fun SplitViewScreen(
             val selectedPage = if (compactPane) rightPageId else leftPageId
             Column(Modifier.fillMaxSize().statusBarsPadding()) {
                 Surface(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
-                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                    shape = MaterialTheme.shapes.extraLarge,
-                    tonalElevation = 4.dp,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+                    color = NotePadTheme.tokens.surface2,
+                    shape = androidx.compose.foundation.shape.CircleShape,
                 ) {
                     Row(
                         Modifier.fillMaxWidth(),
@@ -160,7 +159,7 @@ fun SplitViewScreen(
                                 .padding(horizontal = 12.dp, vertical = 12.dp),
                             maxLines = 1,
                             style = MaterialTheme.typography.labelLarge,
-                            color = if (!compactPane) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                            color = if (!compactPane) NotePadTheme.tokens.ink else NotePadTheme.tokens.ink3,
                         )
                         Text("·", style = MaterialTheme.typography.labelLarge)
                         Text(
@@ -169,7 +168,7 @@ fun SplitViewScreen(
                                 .padding(horizontal = 12.dp, vertical = 12.dp),
                             maxLines = 1,
                             style = MaterialTheme.typography.labelLarge,
-                            color = if (compactPane) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                            color = if (compactPane) NotePadTheme.tokens.ink else NotePadTheme.tokens.ink3,
                         )
                     }
                 }
