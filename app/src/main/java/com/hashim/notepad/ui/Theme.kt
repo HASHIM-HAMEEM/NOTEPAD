@@ -82,13 +82,13 @@ val LightTokens = Tokens(
     shadow = Color(0x1A000000), isDark = false, pageTint = null,
 )
 
-/** Paper — Perplexity (Taste Engine extraction, perplexity.ai): #FCFCF9 base, #FFFFFF raised, #F5F5F5 subtle, #E8E8E8 soft, #252525 body ink, #0B2833 headings, teal accent; PDF pages warmed to the base paper. */
+/** Paper — true sepia reading theme (cream paper, warm brown ink, PDF pages tinted to the paper). Was Perplexity's near-white #FCFCF9, which fin found indistinguishable from Light. Perplexity ref:: #FCFCF9 base, #FFFFFF raised, #F5F5F5 subtle, #E8E8E8 soft, #252525 body ink, #0B2833 headings, teal accent; PDF pages warmed to the base paper. */
 val PaperTokens = Tokens(
-    bg = Color(0xFFFCFCF9), surface = Color(0xFFFFFFFF), surface2 = Color(0xFFF5F5F5), border = Color(0xFFE8E8E8),
-    page = Color(0xFFFCFCF9), pageInk = Color(0xFF0B2833),
-    ink = Color(0xFF252525), ink2 = Color(0xFF5E5E5A), ink3 = Color(0xFF8F8F8A),
-    accent = Color(0xFF20808D), onAccent = Color.White, accentSoft = Color(0x1A20808D),
-    shadow = Color(0x14000000), isDark = false, pageTint = Color(0xFFFCFCF9),
+    bg = Color(0xFFF4EEE1), surface = Color(0xFFFAF6EC), surface2 = Color(0xFFEADFCB), border = Color(0xFFD9CDB5),
+    page = Color(0xFFF6F0E2), pageInk = Color(0xFF2E2418),
+    ink = Color(0xFF3A2E22), ink2 = Color(0xFF6B5B48), ink3 = Color(0xFF998770),
+    accent = Color(0xFF1F7A86), onAccent = Color.White, accentSoft = Color(0x1A1F7A86),
+    shadow = Color(0x1F3A2E22), isDark = false, pageTint = Color(0xFFF6F0E2),
 )
 
 /** Dark — ChatGPT dark surfaces: #212121 main, #2F2F2F raised, #424242 tertiary, 15 % white hairlines, #ECECEC / #B4B4B4 / #8F8F8F ink, soft blue for links/selection. */

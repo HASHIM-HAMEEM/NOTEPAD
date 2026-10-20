@@ -792,7 +792,12 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
 
     fun setPaperColor(argb: Int) {
         paperPaint.color = argb
-        bitmapPaint.colorFilter = if (android.graphics.Color.luminance(argb) < 0.5f) PdfInvert.darkPaperFilter else null
+        // Dark: invert the PDF; Paper (cream): multiply so the PDF takes the paper colour; pure white: untouched.
+        bitmapPaint.colorFilter = when {
+            android.graphics.Color.luminance(argb) < 0.5f -> PdfInvert.darkPaperFilter
+            (argb and 0xFFFFFF) != 0xFFFFFF -> android.graphics.PorterDuffColorFilter(argb, android.graphics.PorterDuff.Mode.MULTIPLY)
+            else -> null
+        }
         templatePaint.color = if (argb == 0xFF1F1F22.toInt()) 0xFF3A3A40.toInt() else 0xFFC9CDD6.toInt()
         strokeLayer.invalidate()
     }
