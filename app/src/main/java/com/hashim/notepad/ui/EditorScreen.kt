@@ -1,5 +1,7 @@
 package com.hashim.notepad.ui
 
+import com.hashim.notepad.pdf.PdfSourceCache
+
 import android.graphics.Bitmap
 import android.util.Log
 import android.view.KeyEvent
@@ -168,6 +170,9 @@ private data class TextConversionDraft(
 )
 private enum class EditorToolbarEdge { TOP, BOTTOM, START, END }
 private val TAPE_COLORS = listOf(0xFFF2D37B.toInt(), 0xFFB7D7C5.toInt(), 0xFFA9CBE0.toInt(), 0xFFDDB4C0.toInt(), 0xFFB9BBC0.toInt(), 0xFFC7A884.toInt())
+
+/** Width reserved on each side of a top-docked toolbar for the back/pages and action buttons. */
+private val TOP_CHROME_CLEARANCE = 150.dp
 
 private fun PenType.defaultOpacity() = if (this == PenType.MARKER) 230f / 255f else 1f
 
@@ -637,7 +642,7 @@ fun EditorScreen(
         val assetId = currentPage.assetId ?: return@LaunchedEffect
         val asset = repo.asset(assetId) ?: return@LaunchedEffect
         val created = withContext(PdfiumDispatcher.dispatcher) {
-            PdfPageSource(context, File(asset.localPath), com.hashim.notepad.pdf.PdfPasswordVault(context).read(asset.id)).use { source ->
+            PdfSourceCache.withSource(context, File(asset.localPath), com.hashim.notepad.pdf.PdfPasswordVault(context).read(asset.id)) { source ->
                 val pdfIndex = currentPage.pdfPageIndex ?: pages.indexOf(currentPage)
                 val text = PdfTextCache.getOrLoad(context, asset.id, pdfIndex) { source.textGeometry(pdfIndex) }
                 val toleranceX = maxOf(4f, stroke.brush.size * 2f)
@@ -651,9 +656,9 @@ fun EditorScreen(
                     Locale.forLanguageTag(language),
                     toleranceX,
                     toleranceY,
-                ) ?: return@use null
+                ) ?: return@withSource null
                 val rects = text.rectsForRange(range.start, range.end)
-                if (rects.isEmpty()) return@use null
+                if (rects.isEmpty()) return@withSource null
                 PdfMark(
                     id = UUID.randomUUID().toString(),
                     notebookId = notebookId,
@@ -688,7 +693,7 @@ fun EditorScreen(
         if (p.kind != PageKind.PDF || p.assetId == null || surfaceWidth == 0) { pageBitmap = null; surface?.setPage(null); return@LaunchedEffect }
         val asset = repo.asset(p.assetId) ?: return@LaunchedEffect
         val bmp = withContext(PdfiumDispatcher.dispatcher) {
-            runCatching { PdfPageSource(context, File(asset.localPath), com.hashim.notepad.pdf.PdfPasswordVault(context).read(asset.id)).use { it.render(p.pdfPageIndex ?: 0, (surfaceWidth * 1.5f).toInt()) } }
+            runCatching { PdfSourceCache.withSource(context, File(asset.localPath), com.hashim.notepad.pdf.PdfPasswordVault(context).read(asset.id)) { it.render(p.pdfPageIndex ?: 0, (surfaceWidth * 1.5f).toInt()) } }
                 .onFailure { Log.e("NotePad", "render failed", it) }.getOrNull()
         }
         pageBitmap = bmp
@@ -918,11 +923,13 @@ fun EditorScreen(
         val tabletWidth = maxWidth >= 840.dp
         val density = androidx.compose.ui.platform.LocalDensity.current
         val verticalToolbar = toolbarEdge == EditorToolbarEdge.START || toolbarEdge == EditorToolbarEdge.END
+        val compactToolbar = maxWidth < 600.dp
         val narrowToolbar = maxWidth < 1024.dp
         val toolbarWidth = when {
             verticalToolbar -> 76.dp
-            narrowToolbar -> (maxWidth - 24.dp).coerceAtLeast(0.dp)
-            else -> minOf(740.dp, (maxWidth - 186.dp).coerceAtLeast(0.dp))
+            compactToolbar -> (maxWidth - 24.dp).coerceAtLeast(0.dp)
+            narrowToolbar -> (maxWidth - TOP_CHROME_CLEARANCE * 2).coerceAtLeast(320.dp)
+            else -> minOf(740.dp, (maxWidth - TOP_CHROME_CLEARANCE * 2).coerceAtLeast(0.dp))
         }
         val sideToolbarClearance = if (verticalToolbar) 48.dp else 0.dp
         val pageIndicatorClearance = if (toolbarEdge == EditorToolbarEdge.START) 64.dp else 0.dp
@@ -935,7 +942,7 @@ fun EditorScreen(
         val navigationBarPx = with(density) { navigationBarHeight.roundToPx() }
         val toolbarGapPx = with(density) { 12.dp.roundToPx() }
         val safeTopPx = statusBarPx + toolbarGapPx
-        val topToolbarClearance = if (narrowToolbar && !verticalToolbar) 88.dp else sideToolbarClearance
+        val topToolbarClearance = if (compactToolbar && !verticalToolbar) 88.dp else sideToolbarClearance
         val dockSafeTopPx = safeTopPx + with(density) { topToolbarClearance.roundToPx() }
 
         fun dockedToolbarPosition(edge: EditorToolbarEdge, size: IntSize): IntOffset {

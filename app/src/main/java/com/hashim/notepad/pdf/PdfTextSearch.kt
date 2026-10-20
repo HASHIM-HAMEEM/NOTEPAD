@@ -226,7 +226,7 @@ suspend fun searchPdfText(
     loadOcrWords: suspend (String) -> List<OcrWord> = { emptyList() },
     onHit: suspend (PdfTextSearchHit) -> Unit,
 ) = withContext(PdfiumDispatcher.dispatcher) {
-    PdfPageSource(context, file, password).use { source ->
+    PdfSourceCache.withSource(context, file, password) { source ->
         pages.forEachIndexed { pageNumber, page ->
             coroutineContext.ensureActive()
             val pdfIndex = page.pdfPageIndex ?: pageNumber

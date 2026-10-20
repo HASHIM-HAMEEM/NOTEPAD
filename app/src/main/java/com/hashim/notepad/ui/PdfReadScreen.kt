@@ -1,5 +1,7 @@
 package com.hashim.notepad.ui
 
+import com.hashim.notepad.pdf.PdfSourceCache
+
 import android.content.Context
 import android.graphics.Rect as AndroidRect
 import android.os.Build
@@ -522,7 +524,7 @@ fun PdfReadScreen(
                                         val textPoint = pagePointForText(point, coordinates, page)
                                         val pdfIndex = page.pdfPageIndex ?: index
                                         val found = withContext(PdfiumDispatcher.dispatcher) {
-                                            PdfPageSource(context, File(asset.localPath), PdfPasswordVault(context).read(asset.id)).use { source ->
+                                            PdfSourceCache.withSource(context, File(asset.localPath), PdfPasswordVault(context).read(asset.id)) { source ->
                                                 val text = loadPdfTextLayer(
                                                     context, asset.id, pdfIndex, { repo.ocrWords(page.id) },
                                                 ) { source.textGeometry(pdfIndex) }
@@ -532,10 +534,10 @@ fun PdfReadScreen(
                                                     textPoint.y,
                                                     page.displayWidthPt * 4f / coordinates.size.width,
                                                     page.displayHeightPt * 12f / coordinates.size.height,
-                                                ) ?: return@use null
+                                                ) ?: return@withSource null
                                                 val range = PdfWordSnap.wordRange(
                                                     text.text, charIndex, Locale.forLanguageTag(notebook?.language ?: "und"),
-                                                ) ?: return@use null
+                                                ) ?: return@withSource null
                                                 PdfReadSelection(
                                                     page.id,
                                                     range.start,
@@ -683,11 +685,11 @@ fun PdfReadScreen(
                                                 val asset = repo.asset(assetId) ?: return@launch
                                                 val pdfIndex = page.pdfPageIndex ?: index
                                                 val text = withContext(PdfiumDispatcher.dispatcher) {
-                                                    PdfPageSource(
+                                                    PdfSourceCache.withSource(
                                                         context,
                                                         File(asset.localPath),
                                                         PdfPasswordVault(context).read(asset.id),
-                                                    ).use { source ->
+                                                    ) { source ->
                                                         loadPdfTextLayer(
                                                             context, asset.id, pdfIndex, { repo.ocrWords(page.id) },
                                                         ) { source.textGeometry(pdfIndex) }

@@ -6,8 +6,13 @@ internal object PdfOcrPolicy {
     fun renderDpi(language: String): Int =
         if (language.lowercase().substringBefore('-') == "ar") 200 else 300
 
+    /**
+     * Automatic passes only touch scanned pages that have no OCR rows yet. An explicit
+     * "Recognize" request always runs, even when the PDF carries an embedded text layer:
+     * Arabic PDFs frequently embed broken or presentation-form text that is useless for search.
+     */
     fun shouldSkipPage(isScannedPage: Boolean, hasOcrWords: Boolean, forceRecognition: Boolean): Boolean =
-        !isScannedPage || (hasOcrWords && !forceRecognition)
+        !forceRecognition && (!isScannedPage || hasOcrWords)
 
     fun shouldFailWhenNoWords(requestedPage: Boolean, wordCount: Int): Boolean =
         requestedPage && wordCount == 0

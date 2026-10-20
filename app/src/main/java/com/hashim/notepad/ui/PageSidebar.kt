@@ -1,5 +1,7 @@
 package com.hashim.notepad.ui
 
+import com.hashim.notepad.pdf.PdfSourceCache
+
 import android.content.Context
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -191,8 +193,7 @@ internal fun PageSidebar(
             if (asset != null) {
                 outline = withContext(PdfiumDispatcher.dispatcher) {
                     runCatching {
-                        PdfPageSource(context, File(asset.localPath), PdfPasswordVault(context).read(asset.id))
-                            .use { it.tableOfContents() }
+                        PdfSourceCache.withSource(context, File(asset.localPath), PdfPasswordVault(context).read(asset.id)) { it.tableOfContents() }
                     }.getOrDefault(emptyList())
                 }
             }

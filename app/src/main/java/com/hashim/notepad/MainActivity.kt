@@ -81,6 +81,7 @@ class MainActivity : ComponentActivity() {
             var mode by remember { mutableStateOf(Settings.themeMode(this)) }
             var dynamic by remember { mutableStateOf(Settings.useDynamicColor(this)) }
             NotePadTheme(mode, dynamic) {
+                CrashReportPrompt()
                 val uri by launchUri
                 val share by launchShare
                 val authCallback = uri?.takeIf { it.scheme == "notepad" && it.host == "auth-callback" }
@@ -152,6 +153,35 @@ class MainActivity : ComponentActivity() {
             }
         }.distinct()
         return uris.takeIf { it.isNotEmpty() }?.let { InboundShare(it, intent.type) }
+    }
+
+    @Composable
+    private fun CrashReportPrompt() {
+        var report by remember { mutableStateOf(CrashReporter.pendingReport(this)) }
+        val pending = report ?: return
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = {},
+            title = { androidx.compose.material3.Text("NotePad closed unexpectedly") },
+            text = {
+                androidx.compose.material3.Text(
+                    "A crash report was saved on this device. Sharing it helps fix the problem; " +
+                        "it contains the error and device model only, never your notes.",
+                )
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = {
+                    startActivity(CrashReporter.shareIntent(pending))
+                    CrashReporter.clear(this)
+                    report = null
+                }) { androidx.compose.material3.Text("Share report") }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = {
+                    CrashReporter.clear(this)
+                    report = null
+                }) { androidx.compose.material3.Text("Not now") }
+            },
+        )
     }
 
     private companion object {

@@ -1,5 +1,7 @@
 package com.hashim.notepad.ui
 
+import com.hashim.notepad.pdf.PdfSourceCache
+
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
@@ -116,25 +118,25 @@ internal suspend fun precomposeReadPage(
         val bitmapKey = "${page.assetId}:$pageIndex:$renderWidth"
         PreviewCache.bitmaps.get(bitmapKey) ?: run {
             val asset = repo.asset(page.assetId)
-            if (asset == null) null else withContext(PdfiumDispatcher.dispatcher) {
-                runCatching {
-                    val cacheFile = previewFile(context, page.assetId, pageIndex, renderWidth)
-                    val cached = if (cacheFile.isFile) BitmapFactory.decodeFile(cacheFile.absolutePath) else null
-                    cached ?: PdfPageSource(
+            if (asset == null) null else runCatching {
+                val cacheFile = previewFile(context, page.assetId, pageIndex, renderWidth)
+                val cached = if (cacheFile.isFile) BitmapFactory.decodeFile(cacheFile.absolutePath) else null
+                cached ?: withContext(PdfiumDispatcher.dispatcher) {
+                    PdfSourceCache.withSource(
                         context,
                         File(asset.localPath),
                         com.hashim.notepad.pdf.PdfPasswordVault(context).read(asset.id),
-                    ).use { it.render(pageIndex, renderWidth) }.also { rendered ->
-                        cacheFile.parentFile?.mkdirs()
-                        val temporary = File(cacheFile.parentFile, "${cacheFile.name}.part")
-                        FileOutputStream(temporary).use { output ->
-                            val format = if (Build.VERSION.SDK_INT >= 30) Bitmap.CompressFormat.WEBP_LOSSY else Bitmap.CompressFormat.WEBP
-                            rendered.compress(format, 86, output)
-                        }
-                        if (!temporary.renameTo(cacheFile)) temporary.delete()
+                    ) { it.render(pageIndex, renderWidth) }
+                }.also { rendered ->
+                    cacheFile.parentFile?.mkdirs()
+                    val temporary = File(cacheFile.parentFile, "${cacheFile.name}.part")
+                    FileOutputStream(temporary).use { output ->
+                        val format = if (Build.VERSION.SDK_INT >= 30) Bitmap.CompressFormat.WEBP_LOSSY else Bitmap.CompressFormat.WEBP
+                        rendered.compress(format, 86, output)
                     }
-                }.getOrNull()
-            }?.also { PreviewCache.bitmaps.put(bitmapKey, it) }
+                    if (!temporary.renameTo(cacheFile)) temporary.delete()
+                }
+            }.getOrNull()?.also { PreviewCache.bitmaps.put(bitmapKey, it) }
         }
     } else null
     PreviewCache.composites.put(
@@ -247,8 +249,7 @@ fun PagePreview(
                     val cached = if (file.exists()) BitmapFactory.decodeFile(file.absolutePath) else null
                     cached ?: run {
                         val rendered = withContext(PdfiumDispatcher.dispatcher) {
-                            PdfPageSource(context, File(asset.localPath), com.hashim.notepad.pdf.PdfPasswordVault(context).read(asset.id))
-                                .use { it.render(p.pdfPageIndex ?: 0, renderWidth) }
+                            PdfSourceCache.withSource(context, File(asset.localPath), com.hashim.notepad.pdf.PdfPasswordVault(context).read(asset.id)) { it.render(p.pdfPageIndex ?: 0, renderWidth) }
                         }
                         file.parentFile?.mkdirs()
                         val temporary = File(file.parentFile, "${file.name}.part")

@@ -40,11 +40,11 @@ class PdfOcrWorker(
                 val asset = repo.asset(assetId) ?: return failure("PDF asset not found id=$assetId page=${page.id}")
                 val pageIndex = page.pdfPageIndex ?: pages.indexOf(page)
                 val embedded = withContext(PdfiumDispatcher.dispatcher) {
-                    PdfPageSource(
+                    PdfSourceCache.withSource(
                         applicationContext,
                         File(asset.localPath),
                         PdfPasswordVault(applicationContext).read(asset.id),
-                    ).use { it.text(pageIndex) }
+                    ) { it.text(pageIndex) }
                 }
                 val scannedPage = OcrGeometry.isScannedPage(embedded)
                 val hasOcrWords = scannedPage && repo.ocrWords(page.id).isNotEmpty()
@@ -59,11 +59,11 @@ class PdfOcrWorker(
                 val targetWidth = (page.widthPt * targetDpi / 72f).roundToInt().coerceIn(256, 4096)
                 Log.i(TAG, "Rendering OCR page=${page.id} width=$targetWidth dpi=$targetDpi")
                 val bitmap = withContext(PdfiumDispatcher.dispatcher) {
-                    PdfPageSource(
+                    PdfSourceCache.withSource(
                         applicationContext,
                         File(asset.localPath),
                         PdfPasswordVault(applicationContext).read(asset.id),
-                    ).use { it.render(pageIndex, targetWidth) }
+                    ) { it.render(pageIndex, targetWidth) }
                 }
                 val bitmapWidth = bitmap.width
                 val bitmapHeight = bitmap.height

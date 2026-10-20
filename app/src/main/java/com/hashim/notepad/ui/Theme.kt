@@ -55,19 +55,19 @@ private object Ink {
     val amber = Color(0xFFB7791F)
 }
 
-/** Light: warm paper-white surfaces and terracotta ink. */
+/** Light: neutral paper-white surfaces with terracotta ink; kept cool so Sepia reads as a distinct mode. */
 private val LightScheme: ColorScheme = lightColorScheme(
-    primary = Color(0xFFB4532A), onPrimary = Color.White, primaryContainer = Color(0xFFF6DCCD), onPrimaryContainer = Color(0xFF4A1C08),
-    secondary = Color(0xFF6E655A), onSecondary = Color.White, secondaryContainer = Color(0xFFE8E1D7), onSecondaryContainer = Color(0xFF2B2620),
-    tertiary = Color(0xFF8B6B40), onTertiary = Color.White, tertiaryContainer = Color(0xFFF1E2CB), onTertiaryContainer = Color(0xFF34230C),
-    background = Color(0xFFF3EFE7), onBackground = Color(0xFF2B2620),
-    surface = Color(0xFFFBF8F2), onSurface = Color(0xFF2B2620),
-    surfaceVariant = Color(0xFFE8E1D4), onSurfaceVariant = Color(0xFF6B6258),
-    surfaceContainerLowest = Color(0xFFFFFCF8), surfaceContainerLow = Color(0xFFF7F2E9), surfaceContainer = Color(0xFFEFE9DE),
-    surfaceContainerHigh = Color(0xFFE8E1D4), surfaceContainerHighest = Color(0xFFDED6C9),
-    outline = Color(0xFFB7AA99), outlineVariant = Color(0xFFE0D8CA),
+    primary = Color(0xFFB4532A), onPrimary = Color.White, primaryContainer = Color(0xFFFBE0D3), onPrimaryContainer = Color(0xFF4A1C08),
+    secondary = Color(0xFF5F6368), onSecondary = Color.White, secondaryContainer = Color(0xFFE6E8EC), onSecondaryContainer = Color(0xFF1F2328),
+    tertiary = Color(0xFF4F6C8A), onTertiary = Color.White, tertiaryContainer = Color(0xFFDCE8F5), onTertiaryContainer = Color(0xFF13293D),
+    background = Color(0xFFF5F5F7), onBackground = Color(0xFF1C1C1E),
+    surface = Color(0xFFFFFFFF), onSurface = Color(0xFF1C1C1E),
+    surfaceVariant = Color(0xFFECEDF0), onSurfaceVariant = Color(0xFF5F6368),
+    surfaceContainerLowest = Color(0xFFFFFFFF), surfaceContainerLow = Color(0xFFF8F8FA), surfaceContainer = Color(0xFFF1F1F4),
+    surfaceContainerHigh = Color(0xFFEAEAEE), surfaceContainerHighest = Color(0xFFE2E2E7),
+    outline = Color(0xFFB0B3BA), outlineVariant = Color(0xFFDFE1E6),
     error = Color(0xFFB3261E), onError = Color.White, errorContainer = Color(0xFFF9DEDC), onErrorContainer = Color(0xFF410E0B),
-    inverseSurface = Color(0xFF342F29), inverseOnSurface = Color(0xFFF7F2E9), inversePrimary = Color(0xFFE8AE90),
+    inverseSurface = Color(0xFF2E3033), inverseOnSurface = Color(0xFFF1F1F4), inversePrimary = Color(0xFFE8AE90),
     scrim = Color.Black,
 )
 

@@ -148,7 +148,7 @@ fun NotebooksScreen(
 ) {
     val context = LocalContext.current
     val screenWidthDp = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp
-    val tabletLayout = screenWidthDp >= 840 && !compact
+    val tabletLayout = screenWidthDp >= 600 && !compact
     val phoneLayout = screenWidthDp < 600 && !compact
     val scope = rememberCoroutineScope()
     val haptics = LocalHapticFeedback.current
@@ -1511,7 +1511,7 @@ private fun LanguageRow(current: String, onPick: (String) -> Unit) {
 @Composable
 private fun ThemeSwatch(mode: ThemeMode) {
     val (bg, fg) = when (mode) {
-        ThemeMode.LIGHT -> Color(0xFFF3EFE7) to Color(0xFFB4532A)
+        ThemeMode.LIGHT -> Color(0xFFF5F5F7) to Color(0xFFB4532A)
         ThemeMode.DARK -> Color(0xFF1B1916) to Color(0xFFF0A47C)
         ThemeMode.SEPIA -> Color(0xFFF1E8D8) to Color(0xFFB4532A)
         ThemeMode.SYSTEM -> MaterialTheme.colorScheme.surfaceContainerLowest to MaterialTheme.colorScheme.primary

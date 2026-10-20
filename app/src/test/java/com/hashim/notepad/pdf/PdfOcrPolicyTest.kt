@@ -23,7 +23,14 @@ class PdfOcrPolicyTest {
     fun explicitRecognitionDoesNotReuseExistingOcrWords() {
         assertFalse(PdfOcrPolicy.shouldSkipPage(isScannedPage = true, hasOcrWords = true, forceRecognition = true))
         assertTrue(PdfOcrPolicy.shouldSkipPage(isScannedPage = true, hasOcrWords = true, forceRecognition = false))
-        assertTrue(PdfOcrPolicy.shouldSkipPage(isScannedPage = false, hasOcrWords = false, forceRecognition = true))
+        assertFalse(PdfOcrPolicy.shouldSkipPage(isScannedPage = false, hasOcrWords = false, forceRecognition = true))
+    }
+
+    @Test
+    fun automaticPassSkipsPagesWithEmbeddedTextOrExistingWords() {
+        assertTrue(PdfOcrPolicy.shouldSkipPage(isScannedPage = false, hasOcrWords = false, forceRecognition = false))
+        assertTrue(PdfOcrPolicy.shouldSkipPage(isScannedPage = true, hasOcrWords = true, forceRecognition = false))
+        assertFalse(PdfOcrPolicy.shouldSkipPage(isScannedPage = true, hasOcrWords = false, forceRecognition = false))
     }
 
     @Test
