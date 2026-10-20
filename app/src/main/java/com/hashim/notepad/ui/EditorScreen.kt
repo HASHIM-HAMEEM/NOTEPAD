@@ -339,7 +339,6 @@ fun EditorScreen(
     var zoomBox by remember { mutableStateOf(false) }
     var showLab by remember { mutableStateOf(false) }
     var sample by remember { mutableStateOf(PointerSample()) }
-    val lastStylusEvent by StylusInputDiagnostics.lastEvent.collectAsState()
     var hasSelection by remember { mutableStateOf(false) }
     var selectionBounds by remember { mutableStateOf<android.graphics.RectF?>(null) }
     var clipboardHasContent by remember { mutableStateOf(!SelectionClipboard.isEmpty) }
@@ -348,6 +347,11 @@ fun EditorScreen(
     var canRedo by remember { mutableStateOf(false) }
     var pixelEraser by rememberSaveable { mutableStateOf(false) }
     var surface by remember { mutableStateOf<InkSurfaceView?>(null) }
+    DisposableEffect(surface, showLab) {
+        val view = surface
+        view?.onSample = if (showLab) ({ sample = it }) else null
+        onDispose { view?.onSample = null }
+    }
     var primaryButtonAction by remember(preferences) {
         mutableStateOf(readStylusButtonAction(preferences, "stylus.primaryAction", StylusButtonAction.SWITCH_TO_ERASER))
     }
@@ -1011,7 +1015,6 @@ fun EditorScreen(
             modifier = Modifier.fillMaxSize(),
             factory = { ctx ->
                 InkSurfaceView(ctx).also { v ->
-                    v.onSample = { sample = it }
                     v.onDrawingActiveChanged = { drawingActive = it }
                     v.onStylusToolSwitch = ::handleStylusToolSwitch
                     v.onSelectionChanged = { hasSelection = it }
@@ -1734,13 +1737,16 @@ fun EditorScreen(
             IconButton(onClick = { surface?.zoomNewLine() }) { Icon(Icons.Default.KeyboardReturn, "New line") }
         }
 
-        if (showLab) Text(
+        if (showLab) {
+            val lastStylusEvent by StylusInputDiagnostics.lastEvent.collectAsState()
+            Text(
             text = "tool=${sample.toolType}  pressure=%.3f  tilt=%.0f°  orient=%.0f°  input→handler=%d ms  batched=%d  strokes=%d\n$lastStylusEvent".format(
                 sample.pressure, sample.tilt, sample.orientation, sample.handlerLatencyMs, sample.historySize, sample.strokeCount
             ),
             fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.labelSmall,
             modifier = Modifier.align(Alignment.BottomStart).navigationBarsPadding().padding(8.dp).background(MaterialTheme.colorScheme.surface.copy(alpha = 0.9f), MaterialTheme.shapes.small).padding(8.dp),
         )
+        }
 
         AudioPlaybackBar(
             repo = repo,

@@ -15,6 +15,18 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class StylusInputRoutingTest {
     @Test
+    fun buttonIsNotConsumedWithoutAnOpenEditor() {
+        val previous = StylusInputDiagnostics.onStylusKeyEvent
+        try {
+            StylusInputDiagnostics.onStylusKeyEvent = null
+            assertFalse(StylusInputDiagnostics.recordKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, 308)))
+            assertFalse(StylusInputDiagnostics.recordKeyEvent(KeyEvent(KeyEvent.ACTION_UP, 308)))
+        } finally {
+            StylusInputDiagnostics.onStylusKeyEvent = previous
+        }
+    }
+
+    @Test
     fun stylusPrimaryKeyClickRunsConfiguredAction() {
         withView { view ->
             val actions = mutableListOf<StylusButtonAction>()

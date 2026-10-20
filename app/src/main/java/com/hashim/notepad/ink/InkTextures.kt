@@ -4,7 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.Color
 import androidx.ink.brush.ExperimentalInkCustomBrushApi
 import androidx.ink.brush.TextureBitmapStore
-import java.util.Random
+import kotlin.random.Random
 
 object InkTextures {
     @OptIn(ExperimentalInkCustomBrushApi::class)

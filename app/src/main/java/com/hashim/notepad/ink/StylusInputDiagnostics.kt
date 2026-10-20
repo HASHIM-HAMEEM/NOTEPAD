@@ -80,8 +80,9 @@ object StylusInputDiagnostics {
             "keycode=${KeyEvent.keyCodeToString(event.keyCode)} device=${event.device?.name ?: "unknown"} " +
                 "source=0x${event.source.toString(16)} buttonState=n/a"
         if (!isMappedButtonKey(event)) return false
+        val listener = onStylusKeyEvent ?: return false
         if (StylusButtonKeyMapping.shouldDispatch(event.action, event.repeatCount)) {
-            onStylusKeyEvent?.invoke(event)
+            listener(event)
         }
         return true
     }

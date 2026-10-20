@@ -512,6 +512,7 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     }
 
     @OptIn(androidx.ink.authoring.ExperimentalInkHandoffApi::class)
+    @android.annotation.SuppressLint("RestrictedApi")
     override fun onDetachedFromWindow() {
         resetHighlighterStroke()
         val detachedLayer = wetLayer

@@ -121,7 +121,10 @@ class AuthManager(context: Context) {
             val cur = _session.value ?: throw IllegalStateException("Not signed in")
             if (cur.expiresAt - System.currentTimeMillis() > 60_000) return cur.accessToken
             val r = SupabaseHttp.json("POST", "/auth/v1/token?grant_type=refresh_token", null, JSONObject().put("refresh_token", cur.refreshToken).toString())
-            if (r.code in 400..499) { store(null); throw IllegalStateException("Session expired, sign in again") }
+            if (SyncFailurePolicy.shouldClearSession(r.code)) {
+                store(null)
+                throw IllegalStateException("Session expired. Add your sync account again; your local notes are safe.")
+            }
             r.orThrow()
             val next = parse(r.text, cur.email).let { if (it.userId.isEmpty()) it.copy(userId = cur.userId) else it }
             store(next)

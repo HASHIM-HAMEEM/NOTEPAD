@@ -4,7 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapShader
 import android.graphics.Color
 import android.graphics.Shader
-import java.util.Random
+import kotlin.random.Random
 
 object PaperTexture {
     private const val SIZE = 256

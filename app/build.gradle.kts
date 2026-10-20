@@ -14,13 +14,14 @@ android {
         val props = Properties().apply { rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use { load(it) } }
         fun cfg(key: String, env: String) = (props.getProperty(key) ?: System.getenv(env) ?: "").replace("\"", "")
         buildConfigField("String", "SUPABASE_URL", "\"${cfg("supabase.url", "SUPABASE_URL")}\"")
-        buildConfigField("String", "SUPABASE_ANON_KEY", "\"${cfg("supabase.anonKey", "anonPublic")}\"")
+        val anonKey = cfg("supabase.anonKey", "SUPABASE_ANON_KEY").ifEmpty { cfg("supabase.anonKey", "anonPublic") }
+        buildConfigField("String", "SUPABASE_ANON_KEY", "\"$anonKey\"")
         applicationId = "com.hashim.notepad"
         minSdk = 29
         targetSdk = 36
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        versionCode = 19
-        versionName = "0.13.5"
+        versionCode = 20
+        versionName = "0.13.6"
         ndk { abiFilters += listOf("arm64-v8a") }
     }
 

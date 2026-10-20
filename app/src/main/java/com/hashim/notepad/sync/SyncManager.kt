@@ -59,17 +59,21 @@ class SyncManager private constructor(private val context: Context) {
     }
 
     suspend fun signIn(email: String, password: String) = withContext(Dispatchers.IO) {
-        val previous = prefs.getString("uid", null)
-        auth.signIn(email.trim(), password)
-        onSignedIn(previous)
+        mutex.withLock {
+            val previous = prefs.getString("uid", null)
+            auth.signIn(email.trim(), password)
+            onSignedIn(previous)
+        }
     }
 
     /** Returns a message when the account still needs e-mail confirmation. */
     suspend fun signUp(email: String, password: String): String? = withContext(Dispatchers.IO) {
-        val previous = prefs.getString("uid", null)
-        val msg = auth.signUp(email.trim(), password)
-        if (msg == null) onSignedIn(previous)
-        msg
+        mutex.withLock {
+            val previous = prefs.getString("uid", null)
+            val msg = auth.signUp(email.trim(), password)
+            if (msg == null) onSignedIn(previous)
+            msg
+        }
     }
 
     suspend fun resendSignUpConfirmation(email: String) = withContext(Dispatchers.IO) {
@@ -77,9 +81,11 @@ class SyncManager private constructor(private val context: Context) {
     }
 
     suspend fun completeEmailConfirmation(accessToken: String, refreshToken: String, expiresIn: Long) = withContext(Dispatchers.IO) {
-        val previous = prefs.getString("uid", null)
-        auth.completeEmailConfirmation(accessToken, refreshToken, expiresIn)
-        onSignedIn(previous)
+        mutex.withLock {
+            val previous = prefs.getString("uid", null)
+            auth.completeEmailConfirmation(accessToken, refreshToken, expiresIn)
+            onSignedIn(previous)
+        }
     }
 
     private fun onSignedIn(previousUid: String?) {
@@ -96,13 +102,17 @@ class SyncManager private constructor(private val context: Context) {
         }
         schedulePeriodic()
         refreshStatus()
+        if (key() != null) requestSync(0)
     }
 
     suspend fun signOut() = withContext(Dispatchers.IO) {
-        auth.signOut()
-        prefs.edit().remove("key").apply()
-        WorkManager.getInstance(context).cancelUniqueWork(PERIODIC)
-        refreshStatus()
+        mutex.withLock {
+            auth.signOut()
+            prefs.edit().remove("key").apply()
+            WorkManager.getInstance(context).cancelUniqueWork(ONCE)
+            WorkManager.getInstance(context).cancelUniqueWork(PERIODIC)
+            refreshStatus()
+        }
     }
 
     /**
@@ -151,20 +161,30 @@ class SyncManager private constructor(private val context: Context) {
 
     /** Runs one sync pass; returns false when it should be retried later. */
     suspend fun syncNow(): Boolean = withContext(Dispatchers.IO) {
-        if (auth.session.value == null || key() == null) { refreshStatus(); return@withContext true }
         mutex.withLock {
+            if (auth.session.value == null || key() == null) { refreshStatus(); return@withLock true }
             _status.value = _status.value.copy(state = SyncState.SYNCING, message = null)
             try {
                 val r = engine.sync()
                 prefs.edit().putLong("last_sync", System.currentTimeMillis()).apply()
                 refreshStatus("Pushed ${r.pushed}, pulled ${r.pulled}")
                 true
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                refreshStatus()
+                throw e
+            } catch (e: HttpException) {
+                _status.value = _status.value.copy(state = SyncState.ERROR, message = "Sync failed (HTTP ${e.code}). Check your account and server configuration.")
+                !SyncFailurePolicy.shouldRetryHttp(e.code)
             } catch (e: java.io.IOException) {
                 Log.w(TAG, "sync offline/failed", e)
                 _status.value = SyncStatus(SyncState.OFFLINE, e.message, prefs.getLong("last_sync", 0), engine.pendingCount())
                 false
             } catch (e: Exception) {
                 Log.e(TAG, "sync error", e)
+                if (auth.session.value == null) {
+                    refreshStatus(e.message)
+                    return@withLock true
+                }
                 _status.value = SyncStatus(SyncState.ERROR, e.message ?: e.toString(), prefs.getLong("last_sync", 0), engine.pendingCount())
                 e !is IllegalStateException
             }
@@ -182,7 +202,12 @@ class SyncManager private constructor(private val context: Context) {
 
 class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
-        val ok = SyncManager.get(applicationContext).syncNow()
-        return if (ok) Result.success() else if (runAttemptCount < 5) Result.retry() else Result.failure()
+        val manager = SyncManager.get(applicationContext)
+        val finished = manager.syncNow()
+        return when {
+            !finished && runAttemptCount < 5 -> Result.retry()
+            !finished || manager.status.value.state == SyncState.ERROR -> Result.failure()
+            else -> Result.success()
+        }
     }
 }

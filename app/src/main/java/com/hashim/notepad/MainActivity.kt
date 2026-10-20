@@ -119,6 +119,7 @@ class MainActivity : ComponentActivity() {
         super.onSaveInstanceState(outState)
     }
 
+    @android.annotation.SuppressLint("RestrictedApi")
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (StylusInputDiagnostics.isStylusKey(event) && StylusInputDiagnostics.recordKeyEvent(event)) {
             return true
