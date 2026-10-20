@@ -24,6 +24,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.outlined.CloudOff
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -106,6 +107,7 @@ fun AccountScreen(onBack: () -> Unit, showBack: Boolean = true) {
         }
     }
 
+    val primaryColors = ButtonDefaults.buttonColors(containerColor = NotePadTheme.tokens.ink, contentColor = NotePadTheme.tokens.bg)
     Scaffold(
         containerColor = NotePadTheme.tokens.bg,
         topBar = {
@@ -119,18 +121,18 @@ fun AccountScreen(onBack: () -> Unit, showBack: Boolean = true) {
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Column(Modifier.widthIn(max = 560.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("Sync", style = MaterialTheme.typography.headlineMedium)
+                Text("Sync", style = MaterialTheme.typography.headlineMedium, color = NotePadTheme.tokens.ink)
                 Text("No account is needed to use NotePad. Add an account only to sync your notes across devices.",
-                    style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    style = MaterialTheme.typography.bodyMedium, color = NotePadTheme.tokens.ink3)
                 Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), color = NotePadTheme.tokens.surface, border = BorderStroke(Spec.hairline, NotePadTheme.tokens.border)) {
                     Column(Modifier.padding(22.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             val dot = when (accountState) {
                                 SyncState.IDLE -> androidx.compose.ui.graphics.Color(0xFF2E9E5B)
-                                SyncState.SYNCING -> MaterialTheme.colorScheme.primary
+                                SyncState.SYNCING -> NotePadTheme.tokens.accent
                                 SyncState.ERROR -> MaterialTheme.colorScheme.error
-                                SyncState.OFFLINE, SyncState.NEEDS_KEY -> MaterialTheme.colorScheme.tertiary
-                                else -> MaterialTheme.colorScheme.outline
+                                SyncState.OFFLINE, SyncState.NEEDS_KEY -> androidx.compose.ui.graphics.Color(0xFFD08A1F)
+                                else -> NotePadTheme.tokens.ink3
                             }
                             Box(Modifier.size(10.dp).background(dot, CircleShape))
                             Spacer(Modifier.width(10.dp))
@@ -139,7 +141,7 @@ fun AccountScreen(onBack: () -> Unit, showBack: Boolean = true) {
                                     SyncState.DISABLED -> "Sync off"; SyncState.SIGNED_OUT -> "On this device only"; SyncState.NEEDS_KEY -> "Passphrase needed"
                                     SyncState.IDLE -> if (status.lastSyncAt > 0 && status.pending == 0) "Up to date" else "Ready to sync"
                                     SyncState.SYNCING -> "Syncing"; SyncState.ERROR -> "Sync error"; SyncState.OFFLINE -> "Offline"
-                                }, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                }, style = MaterialTheme.typography.labelLarge, color = NotePadTheme.tokens.ink3,
                             )
                         }
                         val title = when (accountState) {
@@ -161,7 +163,7 @@ fun AccountScreen(onBack: () -> Unit, showBack: Boolean = true) {
                                     Icons.Outlined.CloudOff,
                                     null,
                                     Modifier.size(40.dp),
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    tint = NotePadTheme.tokens.ink3,
                                 )
                                 Spacer(Modifier.width(16.dp))
                                 Text(title, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
@@ -170,8 +172,8 @@ fun AccountScreen(onBack: () -> Unit, showBack: Boolean = true) {
                             Text(title, style = MaterialTheme.typography.titleMedium)
                         }
                         if (status.lastSyncAt > 0) Text("Last sync: ${DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(status.lastSyncAt))}", style = MaterialTheme.typography.bodySmall)
-                        Text("Pending changes: ${status.pending}", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        status.message?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = if (status.state == SyncState.ERROR) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant) }
+                        Text("Pending changes: ${status.pending}", style = MaterialTheme.typography.bodyMedium, color = NotePadTheme.tokens.ink3)
+                        status.message?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = if (status.state == SyncState.ERROR) MaterialTheme.colorScheme.error else NotePadTheme.tokens.ink3) }
                     }
                 }
 
@@ -179,14 +181,14 @@ fun AccountScreen(onBack: () -> Unit, showBack: Boolean = true) {
                     SyncState.DISABLED -> Text("This build has no sync server configured. You can keep creating, editing and exporting notes without an account.")
                     SyncState.SIGNED_OUT -> {
                         if (!addingAccount && confirmationEmail.isBlank()) {
-                            Button(onClick = { addingAccount = true }, modifier = Modifier.fillMaxWidth()) { Text("Add sync account") }
+                            Button(colors = primaryColors, onClick = { addingAccount = true }, modifier = Modifier.fillMaxWidth()) { Text("Add sync account") }
                         } else {
                             OutlinedTextField(email, { email = it }, label = { Text("Email") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
                                 enabled = !busy, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email))
                             OutlinedTextField(password, { password = it }, label = { Text("Password") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
                                 enabled = !busy, visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password))
                             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Button(onClick = { run { sync.signIn(email, password); null } }, modifier = Modifier.fillMaxWidth(), enabled = !busy && email.isNotBlank() && password.isNotBlank()) { Text("Connect existing account") }
+                                Button(colors = primaryColors, onClick = { run { sync.signIn(email, password); null } }, modifier = Modifier.fillMaxWidth(), enabled = !busy && email.isNotBlank() && password.isNotBlank()) { Text("Connect existing account") }
                                 OutlinedButton(
                                     onClick = {
                                         run {
@@ -223,20 +225,20 @@ fun AccountScreen(onBack: () -> Unit, showBack: Boolean = true) {
                         OutlinedTextField(passphrase, { passphrase = it }, label = { Text(if (passphraseOnServer == true) "Your existing passphrase" else "New encryption passphrase (8+ characters)") }, singleLine = true,
                             modifier = Modifier.fillMaxWidth(), visualTransformation = PasswordVisualTransformation())
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(onClick = { run { sync.setPassphrase(passphrase); passphrase = ""; "Encryption enabled" } }, enabled = !busy && passphrase.length >= 8) { Text("Unlock sync") }
+                            Button(colors = primaryColors, onClick = { run { sync.setPassphrase(passphrase); passphrase = ""; "Encryption enabled" } }, enabled = !busy && passphrase.length >= 8) { Text("Unlock sync") }
                             TextButton(onClick = { run { sync.signOut(); null } }, enabled = !busy) { Text("Disconnect account") }
                         }
                     }
                     else -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(onClick = { run { if (!sync.syncNow()) sync.requestSync(30_000); null } }, enabled = !busy && status.state != SyncState.SYNCING) { Text("Sync now") }
+                        Button(colors = primaryColors, onClick = { run { if (!sync.syncNow()) sync.requestSync(30_000); null } }, enabled = !busy && status.state != SyncState.SYNCING) { Text("Sync now") }
                         TextButton(onClick = { run { sync.signOut(); null } }, enabled = !busy) { Text("Disconnect account") }
                     }
                 }
 
                 if (busy) Row(verticalAlignment = Alignment.CenterVertically) { CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp); Spacer(Modifier.width(8.dp)); Text("Working…") }
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-                info?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
-                TextButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) { Text("Back to notes") }
+                info?.let { Text(it, color = NotePadTheme.tokens.ink2) }
+                if (showBack) TextButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) { Text("Back to notes") }
             }
         }
     }

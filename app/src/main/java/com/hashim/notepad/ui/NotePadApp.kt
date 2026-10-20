@@ -45,6 +45,7 @@ import com.hashim.notepad.pdf.FileImporter
 import com.hashim.notepad.export.BundleFileClassifier
 import com.hashim.notepad.export.ImportFileKind
 import com.hashim.notepad.sync.SyncManager
+import com.hashim.notepad.sync.SyncState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.first
@@ -130,6 +131,14 @@ fun NotePadApp(
     }
     LaunchedEffect(selectedFolderId) { libraryPrefs.edit().putString("library_folder", selectedFolderId).apply() }
     val appScope = rememberCoroutineScope()
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_START) SyncManager.get(context).requestSync(0, coalesce = false)
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     var newRequest by remember { mutableIntStateOf(0) }
     var importRequest by remember { mutableIntStateOf(0) }
     var folderRequest by remember { mutableIntStateOf(0) }
@@ -392,6 +401,15 @@ fun NotePadApp(
             }
         }
 
+        val syncStatus by remember { SyncManager.get(context).status }.collectAsState()
+        val syncLabel = when (syncStatus.state) {
+            SyncState.SYNCING -> "Syncing…"
+            SyncState.OFFLINE -> "Offline"
+            SyncState.ERROR -> "Error"
+            SyncState.NEEDS_KEY -> "Passphrase"
+            SyncState.IDLE -> if (syncStatus.pending > 0) "${syncStatus.pending} pending" else "Synced"
+            else -> null
+        }
         val sidebarFolders by repo.folders().collectAsState(initial = emptyList())
         val sidebarNotebooks by repo.notebooks().collectAsState(initial = emptyList())
         val folderCounts = remember(sidebarNotebooks) { sidebarNotebooks.groupingBy { it.folderId }.eachCount() }
@@ -412,6 +430,7 @@ fun NotePadApp(
                     onAppearance = { showAppearance = true; afterNavigate() },
                     collapsed = collapsed, onToggleCollapsed = onToggle,
                     expandedWidth = width,
+                    syncLabel = syncLabel,
                 )
             }
         if (showSidebar) {

@@ -156,12 +156,18 @@ class SyncManager private constructor(private val context: Context) {
         requestSync(0)
     }
 
-    fun requestSync(delayMs: Long = 0) {
+    /**
+     * Debounced change requests keep an already queued/running pass (REPLACE used to cancel the in-flight pass on
+     * every stroke, so sync never finished while the user kept writing); [syncNow] re-checks the outbox afterwards.
+     * Explicit requests (sign-in, "Sync now", app start) still replace a stale queued one.
+     */
+    fun requestSync(delayMs: Long = 0, coalesce: Boolean = delayMs > 0) {
         val req = OneTimeWorkRequestBuilder<SyncWorker>()
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .setInitialDelay(delayMs, TimeUnit.MILLISECONDS)
             .build()
-        WorkManager.getInstance(context).enqueueUniqueWork(ONCE, ExistingWorkPolicy.REPLACE, req)
+        val policy = if (coalesce) ExistingWorkPolicy.KEEP else ExistingWorkPolicy.REPLACE
+        WorkManager.getInstance(context).enqueueUniqueWork(ONCE, policy, req)
     }
 
     private fun schedulePeriodic() {
@@ -177,9 +183,20 @@ class SyncManager private constructor(private val context: Context) {
             if (auth.session.value == null || key() == null) { refreshStatus(); return@withLock true }
             _status.value = _status.value.copy(state = SyncState.SYNCING, message = null)
             try {
-                val r = engine.sync()
+                var r = engine.sync()
+                var pushed = r.pushed
+                var pulled = r.pulled
+                // Writes that landed while this pass ran are picked up now instead of waiting for the next trigger.
+                var extraPasses = 0
+                while (engine.pendingCount() > 0 && extraPasses < 3) {
+                    kotlinx.coroutines.delay(1_500)
+                    r = engine.sync()
+                    pushed += r.pushed
+                    pulled += r.pulled
+                    extraPasses++
+                }
                 prefs.edit().putLong("last_sync", System.currentTimeMillis()).apply()
-                refreshStatus("Pushed ${r.pushed}, pulled ${r.pulled}")
+                refreshStatus("Pushed $pushed, pulled $pulled")
                 true
             } catch (e: kotlinx.coroutines.CancellationException) {
                 refreshStatus()
@@ -189,7 +206,7 @@ class SyncManager private constructor(private val context: Context) {
                 !SyncFailurePolicy.shouldRetryHttp(e.code)
             } catch (e: java.io.IOException) {
                 Log.w(TAG, "sync offline/failed", e)
-                _status.value = SyncStatus(SyncState.OFFLINE, e.message, prefs.getLong("last_sync", 0), engine.pendingCount())
+                _status.value = SyncStatus(SyncState.OFFLINE, "Offline — changes are kept on this device and sent when you're back online.", prefs.getLong("last_sync", 0), engine.pendingCount())
                 false
             } catch (e: Exception) {
                 Log.e(TAG, "sync error", e)

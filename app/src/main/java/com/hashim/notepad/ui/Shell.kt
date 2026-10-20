@@ -64,6 +64,7 @@ fun AppSidebar(
     onToggleCollapsed: () -> Unit,
     modifier: Modifier = Modifier,
     expandedWidth: Dp = 264.dp,
+    syncLabel: String? = null,
 ) {
     val t = NotePadTheme.tokens
     val side = t.surface2.copy(alpha = 0.5f).compositeOver(t.bg)
@@ -99,7 +100,7 @@ fun AppSidebar(
             SidebarRow(Icons.Outlined.Search, "Search", selected = screen == Screen.Search, onClick = { onNavigate(Screen.Search) })
             Spacer(Modifier.height(16.dp))
             SidebarRow(Icons.Outlined.Book, "Library", selected = selectedLibrary && selectedFolderId == ALL_FOLDERS, onClick = { onSelectFolder(ALL_FOLDERS); onNavigate(Screen.Notebooks) })
-            SidebarRow(Icons.Outlined.Cloud, "Sync", selected = screen == Screen.Account, onClick = { onNavigate(Screen.Account) })
+            SidebarRow(Icons.Outlined.Cloud, "Sync", selected = screen == Screen.Account, trailing = syncLabel, onClick = { onNavigate(Screen.Account) })
             Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
                 Spacer(Modifier.height(16.dp))
                 SidebarSection("Subjects")
