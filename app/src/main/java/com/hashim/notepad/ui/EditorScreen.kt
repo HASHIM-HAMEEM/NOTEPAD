@@ -939,7 +939,7 @@ fun EditorScreen(
             verticalToolbar -> TOOL_PILL_HEIGHT
             compactToolbar -> (maxWidth - 24.dp).coerceAtLeast(0.dp)
             narrowToolbar -> (maxWidth - TOP_CHROME_CLEARANCE * 2).coerceAtLeast(320.dp)
-            else -> minOf(760.dp, (maxWidth - TOP_CHROME_CLEARANCE * 2).coerceAtLeast(0.dp))
+            else -> minOf(664.dp, (maxWidth - TOP_CHROME_CLEARANCE * 2).coerceAtLeast(0.dp))
         }
         val sideToolbarClearance = if (verticalToolbar) 48.dp else 0.dp
         val pageIndicatorClearance = if (toolbarEdge == EditorToolbarEdge.START) 64.dp else 0.dp

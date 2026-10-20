@@ -828,8 +828,8 @@ fun PdfReadScreen(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 PillIconButton(Icons.AutoMirrored.Outlined.ArrowBack, "Back", onClick = onBack)
-                FloatingPill(Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 14.dp)) {
-                    Column(Modifier.weight(1f)) {
+                FloatingPill(Modifier.widthIn(max = 420.dp), contentPadding = PaddingValues(horizontal = 14.dp)) {
+                    Column(Modifier.widthIn(min = 160.dp)) {
                         Text(
                             notebook?.title.orEmpty(),
                             Modifier.fillMaxWidth(),
@@ -847,6 +847,7 @@ fun PdfReadScreen(
                         )
                     }
                 }
+                Spacer(Modifier.weight(1f))
                 FloatingPill {
                     val statusLabel = when {
                         ocrWorkInfo != null -> "Recognizing $ocrProgress/$ocrTotal"

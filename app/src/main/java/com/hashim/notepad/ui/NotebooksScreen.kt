@@ -394,7 +394,7 @@ fun NotebooksScreen(
                 }
             }
             item(span = { GridItemSpan(maxLineSpan) }, contentType = "library-title") {
-                Text("Your library", style = MaterialTheme.typography.headlineSmall)
+                SectionLabel("All notebooks")
             }
             if (notebooks.isEmpty() && !importing) item(span = { GridItemSpan(maxLineSpan) }, contentType = "empty-state") {
                 EmptyLibrary(onNew = { showNew = true }, onImport = { pickPdf.launch(arrayOf("application/pdf")) })
