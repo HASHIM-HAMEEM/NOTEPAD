@@ -39,6 +39,18 @@ class SyncManager private constructor(private val context: Context) {
     private val _status = MutableStateFlow(SyncStatus(SyncState.DISABLED))
     val status: StateFlow<SyncStatus> = _status
 
+    /** Whether the account already has a passphrase (set on another device). null until checked. */
+    private val _passphraseOnServer = MutableStateFlow<Boolean?>(null)
+    val passphraseOnServer: StateFlow<Boolean?> = _passphraseOnServer
+
+    suspend fun checkPassphraseOnServer(): Boolean? = withContext(Dispatchers.IO) {
+        val session = auth.session.value ?: return@withContext null
+        runCatching {
+            val token = auth.token()
+            JSONArray(SupabaseHttp.json("GET", "/rest/v1/device_keys?user_id=eq.${session.userId}&kdf_salt=not.is.null&select=device_id&limit=1", token).orThrow().text).length() > 0
+        }.getOrNull().also { _passphraseOnServer.value = it }
+    }
+
     init {
         repo.onLocalChange = { if (auth.session.value != null && key() != null) requestSync(delayMs = 4_000) }
         refreshStatus()
@@ -130,7 +142,7 @@ class SyncManager private constructor(private val context: Context) {
             val row = existing.getJSONObject(0)
             salt = SyncEngine.unhex(row.getString("kdf_salt"))
             k = Crypto.deriveKey(passphrase.toCharArray(), salt)
-            if (!Crypto.verifyKey(k, SyncEngine.unhex(row.getString("key_check")))) throw IllegalArgumentException("Wrong passphrase for this account")
+            if (!Crypto.verifyKey(k, SyncEngine.unhex(row.getString("key_check")))) throw IllegalArgumentException("Wrong passphrase. This account already has one, set on your first device — enter that same passphrase.")
         } else {
             salt = Crypto.randomBytes(16)
             k = Crypto.deriveKey(passphrase.toCharArray(), salt)

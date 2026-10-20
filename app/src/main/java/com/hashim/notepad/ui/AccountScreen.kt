@@ -62,7 +62,11 @@ fun AccountScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val sync = remember { SyncManager.get(context) }
     val status by sync.status.collectAsState()
+    val passphraseOnServer by sync.passphraseOnServer.collectAsState()
     val session by sync.auth.session.collectAsState()
+    LaunchedEffect(status.state, session?.userId) {
+        if (status.state == SyncState.NEEDS_KEY) sync.checkPassphraseOnServer()
+    }
     val scope = rememberCoroutineScope()
     var email by remember { mutableStateOf(sync.auth.pendingConfirmationEmail.orEmpty()) }
     var password by remember { mutableStateOf("") }
@@ -132,7 +136,11 @@ fun AccountScreen(onBack: () -> Unit) {
                         val title = when (accountState) {
                             SyncState.DISABLED -> "Sync not configured in this build"
                             SyncState.SIGNED_OUT -> "Your notes stay on this device"
-                            SyncState.NEEDS_KEY -> "Signed in as ${session?.email}. Set your encryption passphrase to start syncing."
+                            SyncState.NEEDS_KEY -> when (passphraseOnServer) {
+                                true -> "Signed in as ${session?.email}. Enter the passphrase you chose on your other device."
+                                false -> "Signed in as ${session?.email}. Choose an encryption passphrase to start syncing."
+                                null -> "Signed in as ${session?.email}. Checking account…"
+                            }
                             SyncState.IDLE -> "Connected as ${session?.email}"
                             SyncState.SYNCING -> "Syncing…"
                             SyncState.ERROR -> "Sync error"
@@ -195,9 +203,15 @@ fun AccountScreen(onBack: () -> Unit) {
                         }
                     }
                     SyncState.NEEDS_KEY -> {
-                        Text("The passphrase encrypts your notes before they leave the device. It is never sent to the server and cannot be recovered — use the same one on every device.",
-                            style = MaterialTheme.typography.bodyMedium)
-                        OutlinedTextField(passphrase, { passphrase = it }, label = { Text("Encryption passphrase (8+ characters)") }, singleLine = true,
+                        Text(
+                            if (passphraseOnServer == true) {
+                                "This account's notes are encrypted with a passphrase you set on another device. It is not your account password and NotePad cannot recover it — if you have forgotten it, disconnect and reset sync from that device."
+                            } else {
+                                "The passphrase encrypts your notes before they leave the device. It is never sent to the server and cannot be recovered — write it down and use the same one on every device."
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        OutlinedTextField(passphrase, { passphrase = it }, label = { Text(if (passphraseOnServer == true) "Your existing passphrase" else "New encryption passphrase (8+ characters)") }, singleLine = true,
                             modifier = Modifier.fillMaxWidth(), visualTransformation = PasswordVisualTransformation())
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Button(onClick = { run { sync.setPassphrase(passphrase); passphrase = ""; "Encryption enabled" } }, enabled = !busy && passphrase.length >= 8) { Text("Unlock sync") }

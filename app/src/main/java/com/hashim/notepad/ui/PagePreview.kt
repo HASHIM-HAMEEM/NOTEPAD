@@ -55,6 +55,12 @@ import com.hashim.notepad.pdf.PdfPageSource
 import com.hashim.notepad.pdf.PdfMarkGeometry
 import com.hashim.notepad.pdf.PdfiumDispatcher
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import android.os.SystemClock
+import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.first
@@ -77,6 +83,108 @@ private object PreviewCache {
 }
 
 internal const val MAX_PDF_PREVIEW_WIDTH_PX = 3072
+
+/**
+ * Resolves a PDF page bitmap: memory cache → on-disk WebP → PDFium render. The render result is
+ * returned immediately and compressed to disk in the background, so first paint never waits on
+ * encoding. Timing is logged under `PdfTiming` so open latency can be measured on a device.
+ */
+internal suspend fun loadPdfPageBitmap(
+    context: android.content.Context,
+    repo: NotePadRepository,
+    assetId: String,
+    pageIndex: Int,
+    renderWidth: Int,
+): Bitmap? {
+    val bitmapKey = "$assetId:$pageIndex:$renderWidth"
+    PreviewCache.bitmaps.get(bitmapKey)?.let { return it }
+    // The reader, its prefetch and the library cover often ask for the same rendition at once;
+    // let one caller do the PDFium work and hand the result to the others.
+    val mine = CompletableDeferred<Bitmap?>()
+    val existing = inFlightPdfRenders.putIfAbsent(bitmapKey, mine)
+    if (existing != null) return existing.await()
+    try {
+        val bitmap = loadPdfPageBitmapUncached(context, repo, assetId, pageIndex, renderWidth, bitmapKey)
+        mine.complete(bitmap)
+        return bitmap
+    } catch (error: Throwable) {
+        mine.completeExceptionally(error)
+        throw error
+    } finally {
+        inFlightPdfRenders.remove(bitmapKey, mine)
+    }
+}
+
+private val inFlightPdfRenders = java.util.concurrent.ConcurrentHashMap<String, CompletableDeferred<Bitmap?>>()
+
+private suspend fun loadPdfPageBitmapUncached(
+    context: android.content.Context,
+    repo: NotePadRepository,
+    assetId: String,
+    pageIndex: Int,
+    renderWidth: Int,
+    bitmapKey: String,
+): Bitmap? {
+    val asset = repo.asset(assetId) ?: return null
+    val started = SystemClock.elapsedRealtime()
+    val cacheFile = previewFile(context, assetId, pageIndex, renderWidth)
+    val fromDisk = if (cacheFile.isFile) {
+        withContext(Dispatchers.IO) { BitmapFactory.decodeFile(cacheFile.absolutePath) }
+    } else null
+    val bitmap = fromDisk ?: run {
+        val rendered = withContext(PdfiumDispatcher.dispatcher) {
+            PdfSourceCache.withSource(
+                context,
+                File(asset.localPath),
+                com.hashim.notepad.pdf.PdfPasswordVault(context).read(assetId),
+            ) { it.render(pageIndex, renderWidth) }
+        }
+        PreviewDiskWriter.persist(cacheFile, rendered)
+        rendered
+    }
+    PreviewCache.bitmaps.put(bitmapKey, bitmap)
+    Log.d(
+        "PdfTiming",
+        "page=$pageIndex width=$renderWidth source=${if (fromDisk != null) "disk" else "render"} ms=${SystemClock.elapsedRealtime() - started}",
+    )
+    return bitmap
+}
+
+/** Writes rendered previews to the disk cache off the critical path, one writer per file. */
+private object PreviewDiskWriter {
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val inFlight = HashSet<String>()
+
+    fun persist(file: File, bitmap: Bitmap) {
+        synchronized(inFlight) { if (!inFlight.add(file.path)) return }
+        scope.launch {
+            val started = SystemClock.elapsedRealtime()
+            try {
+                file.parentFile?.mkdirs()
+                val temporary = File(file.parentFile, "${file.name}.part")
+                FileOutputStream(temporary).use { output ->
+                    val format = if (Build.VERSION.SDK_INT >= 30) Bitmap.CompressFormat.WEBP_LOSSY else Bitmap.CompressFormat.WEBP
+                    bitmap.compress(format, 86, output)
+                }
+                if (!temporary.renameTo(file)) temporary.delete()
+                Log.d("PdfTiming", "persist ${file.name} ms=${SystemClock.elapsedRealtime() - started}")
+            } catch (error: Exception) {
+                Log.w("PagePreview", "Unable to persist preview ${file.name}", error)
+            } finally {
+                synchronized(inFlight) { inFlight.remove(file.path) }
+            }
+        }
+    }
+}
+
+/** Any already-decoded rendition of this page (e.g. the low-res prefetch) to show while the sharp one loads. */
+private fun nearestCachedPdfBitmap(assetId: String, pageIndex: Int): Bitmap? {
+    val prefix = "$assetId:$pageIndex:"
+    return PreviewCache.bitmaps.snapshot().entries
+        .filter { it.key.startsWith(prefix) }
+        .maxByOrNull { it.value.width }
+        ?.value
+}
 
 internal fun pdfPreviewRenderWidth(targetWidthPx: Int, cropScale: Float, renderScale: Float): Int =
     (targetWidthPx * cropScale.coerceAtLeast(1f) * renderScale.coerceIn(0.2f, 4f))
@@ -116,27 +224,13 @@ internal suspend fun precomposeReadPage(
     val pdfBitmap = if (page.kind == PageKind.PDF && page.assetId != null) {
         val pageIndex = page.pdfPageIndex ?: 0
         val bitmapKey = "${page.assetId}:$pageIndex:$renderWidth"
-        PreviewCache.bitmaps.get(bitmapKey) ?: run {
-            val asset = repo.asset(page.assetId)
-            if (asset == null) null else runCatching {
-                val cacheFile = previewFile(context, page.assetId, pageIndex, renderWidth)
-                val cached = if (cacheFile.isFile) BitmapFactory.decodeFile(cacheFile.absolutePath) else null
-                cached ?: withContext(PdfiumDispatcher.dispatcher) {
-                    PdfSourceCache.withSource(
-                        context,
-                        File(asset.localPath),
-                        com.hashim.notepad.pdf.PdfPasswordVault(context).read(asset.id),
-                    ) { it.render(pageIndex, renderWidth) }
-                }.also { rendered ->
-                    cacheFile.parentFile?.mkdirs()
-                    val temporary = File(cacheFile.parentFile, "${cacheFile.name}.part")
-                    FileOutputStream(temporary).use { output ->
-                        val format = if (Build.VERSION.SDK_INT >= 30) Bitmap.CompressFormat.WEBP_LOSSY else Bitmap.CompressFormat.WEBP
-                        rendered.compress(format, 86, output)
-                    }
-                    if (!temporary.renameTo(cacheFile)) temporary.delete()
-                }
-            }.getOrNull()?.also { PreviewCache.bitmaps.put(bitmapKey, it) }
+        PreviewCache.bitmaps.get(bitmapKey) ?: try {
+            loadPdfPageBitmap(context, repo, page.assetId, pageIndex, renderWidth)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            Log.w("PagePreview", "Unable to prefetch PDF page $pageIndex", error)
+            null
         }
     } else null
     PreviewCache.composites.put(
@@ -181,7 +275,12 @@ fun PagePreview(
     val bitmapKey = page?.takeIf { it.kind == PageKind.PDF && it.assetId != null }?.let {
         "${it.assetId}:${it.pdfPageIndex ?: 0}:$renderWidth"
     }
-    var bitmap by remember(page?.id, page?.pdfPageIndex) { mutableStateOf<Bitmap?>(bitmapKey?.let { PreviewCache.bitmaps.get(it) }) }
+    var bitmap by remember(page?.id, page?.pdfPageIndex) {
+        mutableStateOf<Bitmap?>(
+            bitmapKey?.let { PreviewCache.bitmaps.get(it) }
+                ?: page?.takeIf { it.kind == PageKind.PDF && it.assetId != null }?.let { nearestCachedPdfBitmap(it.assetId!!, it.pdfPageIndex ?: 0) },
+        )
+    }
     val cropStartFraction = remember(bitmap, cropScale, cropToContent) {
         if (cropToContent) 0f else bitmap?.let { focusCropStartFraction(it, cropScale) } ?: 0f
     }
@@ -242,32 +341,15 @@ fun PagePreview(
             if (cachedBitmap != null) {
                 bitmap = cachedBitmap
             } else {
-                val asset = repo.asset(p.assetId) ?: return@LaunchedEffect
+                if (bitmap == null) bitmap = nearestCachedPdfBitmap(p.assetId, p.pdfPageIndex ?: 0)
                 val bmp = try {
-                    withContext(Dispatchers.Default) {
-                    val file = previewFile(context, p.assetId, p.pdfPageIndex ?: 0, renderWidth)
-                    val cached = if (file.exists()) BitmapFactory.decodeFile(file.absolutePath) else null
-                    cached ?: run {
-                        val rendered = withContext(PdfiumDispatcher.dispatcher) {
-                            PdfSourceCache.withSource(context, File(asset.localPath), com.hashim.notepad.pdf.PdfPasswordVault(context).read(asset.id)) { it.render(p.pdfPageIndex ?: 0, renderWidth) }
-                        }
-                        file.parentFile?.mkdirs()
-                        val temporary = File(file.parentFile, "${file.name}.part")
-                        FileOutputStream(temporary).use { output ->
-                            val format = if (Build.VERSION.SDK_INT >= 30) Bitmap.CompressFormat.WEBP_LOSSY else Bitmap.CompressFormat.WEBP
-                            rendered.compress(format, 86, output)
-                        }
-                        if (!temporary.renameTo(file)) temporary.delete()
-                        rendered
-                    }
-                    }
+                    loadPdfPageBitmap(context, repo, p.assetId, p.pdfPageIndex ?: 0, renderWidth)
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (error: Exception) {
-                    android.util.Log.e("PagePreview", "Unable to load PDF preview for page ${p.id}", error)
+                    Log.e("PagePreview", "Unable to load PDF preview for page ${p.id}", error)
                     return@LaunchedEffect
-                }
-                PreviewCache.bitmaps.put(bitmapKey, bmp)
+                } ?: return@LaunchedEffect
                 bitmap = bmp
             }
         }

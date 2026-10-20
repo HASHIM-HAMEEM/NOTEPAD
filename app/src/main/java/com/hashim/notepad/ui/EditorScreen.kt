@@ -944,6 +944,12 @@ fun EditorScreen(
         val safeTopPx = statusBarPx + toolbarGapPx
         val topToolbarClearance = if (compactToolbar && !verticalToolbar) 88.dp else sideToolbarClearance
         val dockSafeTopPx = safeTopPx + with(density) { topToolbarClearance.roundToPx() }
+        val chromeInsetPx = if (toolbarEdge == EditorToolbarEdge.TOP && toolbarSize.height > 0) {
+            dockSafeTopPx + toolbarSize.height + toolbarGapPx
+        } else {
+            safeTopPx + with(density) { 48.dp.roundToPx() }
+        }
+        LaunchedEffect(surface, chromeInsetPx) { surface?.setTopInset(chromeInsetPx.toFloat()) }
 
         fun dockedToolbarPosition(edge: EditorToolbarEdge, size: IntSize): IntOffset {
             val maxX = (containerWidthPx - size.width).coerceAtLeast(0)
@@ -1429,6 +1435,7 @@ fun EditorScreen(
                         },
                     )
                     if (narrowToolbar) {
+                        // Tools and colours scroll; undo/redo stay pinned so they are never hidden off-screen.
                         Row(
                             Modifier.weight(1f).fillMaxHeight().horizontalScroll(rememberScrollState()).clipToBounds(),
                             verticalAlignment = Alignment.CenterVertically,
@@ -1439,12 +1446,12 @@ fun EditorScreen(
                                     .background(MaterialTheme.colorScheme.outlineVariant),
                             )
                             colorControls()
-                            Box(
-                                Modifier.padding(horizontal = 6.dp).fillMaxHeight(0.4f).width(1.dp)
-                                    .background(MaterialTheme.colorScheme.outlineVariant),
-                            )
-                            historyControls()
                         }
+                        Box(
+                            Modifier.padding(horizontal = 6.dp).fillMaxHeight(0.4f).width(1.dp)
+                                .background(MaterialTheme.colorScheme.outlineVariant),
+                        )
+                        historyControls()
                     } else {
                         Row(
                             Modifier.weight(1f).fillMaxHeight().horizontalScroll(rememberScrollState()).clipToBounds(),

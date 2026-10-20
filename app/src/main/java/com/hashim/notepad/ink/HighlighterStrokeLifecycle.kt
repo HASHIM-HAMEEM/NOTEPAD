@@ -38,8 +38,18 @@ internal object HighlighterInputPolicy {
     fun tilt(value: Float): Float =
         value.takeIf(Float::isFinite)?.coerceIn(0f, (PI / 2).toFloat()) ?: 0f
 
-    fun orientation(value: Float): Float =
-        value.takeIf(Float::isFinite)?.coerceIn(-PI.toFloat(), PI.toFloat()) ?: 0f
+    /**
+     * MotionEvent reports orientation in [-π, π] (0 = tip pointing up), but Ink's StrokeInput
+     * requires [0, 2π) with 0 = tip pointing left. Real styluses report negative values whenever
+     * the pen leans left; emulators and fingers always report 0, so an out-of-range value only
+     * surfaces on hardware, where StrokeInputBatch rejects it and the stroke crashes.
+     */
+    fun orientation(value: Float): Float {
+        if (!value.isFinite()) return 0f
+        val twoPi = (2 * PI).toFloat()
+        val converted = (value + 2.5f * PI.toFloat()).mod(twoPi)
+        return if (converted.isFinite() && converted >= 0f && converted < twoPi) converted else 0f
+    }
 
     fun hasLength(startX: Float, startY: Float, endX: Float, endY: Float): Boolean {
         if (!startX.isFinite() || !startY.isFinite() || !endX.isFinite() || !endY.isFinite()) return false

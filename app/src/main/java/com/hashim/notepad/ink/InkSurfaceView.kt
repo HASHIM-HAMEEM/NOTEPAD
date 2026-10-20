@@ -10,6 +10,7 @@ import android.graphics.Canvas
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.PorterDuff
+import android.util.Log
 import android.graphics.PorterDuffColorFilter
 import android.graphics.Typeface
 import android.os.SystemClock
@@ -77,6 +78,8 @@ private const val STYLUS_BUTTON_TAIL_KEYCODE = 311
  * and [InProgressStrokesView] draws the wet stroke on a front buffer on top.
  * Stylus draws; fingers pan/zoom unless [fingerDraws] is on.
  */
+private const val TAG = "InkSurfaceView"
+
 class InkSurfaceView(context: Context) : FrameLayout(context) {
 
     var brushSpec: BrushSpec = BrushSpec(InkTool.PEN, 0xFF1A1A1A.toInt(), 2.5f)
@@ -1449,8 +1452,23 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
 
     private fun fitToWidth() {
         if (width == 0) return
-        scale = minScale(); panX = MARGIN_PX; panY = MARGIN_PX
+        scale = minScale(); panX = MARGIN_PX; panY = MARGIN_PX + topInsetPx
         updateMatrices()
+    }
+
+    /** Space reserved at the top for the floating chrome so the page's first lines are not hidden under it. */
+    private var topInsetPx = 0f
+
+    fun setTopInset(px: Float) {
+        val value = px.coerceAtLeast(0f)
+        if (value == topInsetPx) return
+        val delta = value - topInsetPx
+        topInsetPx = value
+        if (width == 0) return
+        panY += delta
+        clampPan()
+        updateMatrices()
+        strokeLayer.invalidate()
     }
 
     private fun rulerLength() = max(pageWidthPt, pageHeightPt) * 1.3f
@@ -1483,7 +1501,8 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
     private fun clampPan() {
         val pageW = displayPageWidth() * scale; val pageH = displayPageHeight() * scale
         panX = if (pageW <= width) (width - pageW) / 2f else panX.coerceIn(width - pageW - MARGIN_PX, MARGIN_PX)
-        panY = if (pageH <= height - 2 * MARGIN_PX) MARGIN_PX else panY.coerceIn(height - pageH - MARGIN_PX, MARGIN_PX)
+        val topLimit = MARGIN_PX + topInsetPx
+        panY = if (pageH <= height - topLimit - MARGIN_PX) topLimit else panY.coerceIn(height - pageH - MARGIN_PX, topLimit)
     }
 
     private fun updateMatrices() {
@@ -2155,23 +2174,37 @@ class InkSurfaceView(context: Context) : FrameLayout(context) {
             first.tiltRadians,
             first.orientationRadians,
         )
-        val batch = MutableStrokeInputBatch()
-        batch.add(copyInput(first))
-        batch.add(end)
-        val wet = InProgressStroke()
-        highlighterWet = wet
-        wet.start(brush)
-        wet.enqueueInputs(batch.toImmutable(), MutableStrokeInputBatch().toImmutable())
-        wet.updateShape(SystemClock.uptimeMillis())
+        runCatching {
+            val batch = MutableStrokeInputBatch()
+            batch.add(copyInput(first))
+            batch.add(end)
+            val wet = InProgressStroke()
+            wet.start(brush)
+            wet.enqueueInputs(batch.toImmutable(), MutableStrokeInputBatch().toImmutable())
+            wet.updateShape(SystemClock.uptimeMillis())
+            highlighterWet = wet
+        }.onFailure {
+            Log.w(TAG, "Dropping straight highlighter rebuild: ${it.message}")
+            resetHighlighterStroke()
+        }
     }
 
     private fun enqueueHighlighterInputs(inputs: List<StrokeInput>) {
         if (inputs.isEmpty()) return
         val wet = highlighterWet ?: return
-        val batch = MutableStrokeInputBatch()
-        inputs.forEach(batch::add)
-        wet.enqueueInputs(batch.toImmutable(), MutableStrokeInputBatch().toImmutable())
-        wet.updateShape(SystemClock.uptimeMillis())
+        // Ink validates every input against the batch (ranges, monotonic time, consistent axes)
+        // and throws IllegalArgumentException; a bad sample from one stylus must never kill the app.
+        val ok = runCatching {
+            val batch = MutableStrokeInputBatch()
+            inputs.forEach(batch::add)
+            wet.enqueueInputs(batch.toImmutable(), MutableStrokeInputBatch().toImmutable())
+            wet.updateShape(SystemClock.uptimeMillis())
+        }.onFailure { Log.w(TAG, "Dropping highlighter input: ${it.message}") }.isSuccess
+        if (!ok) {
+            removeCallbacks(highlighterStraightenRunnable)
+            resetHighlighterStroke()
+            strokeLayer.invalidate()
+        }
     }
 
     private fun highlighterInputs(event: MotionEvent, index: Int, includeHistory: Boolean): List<StrokeInput> {

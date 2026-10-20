@@ -90,7 +90,15 @@ class SyncEngine(private val context: Context, private val repo: NotePadReposito
         val id = r.getString("id")
         val remoteUpdated = ms(r.getString("updated_at"))
         val localKey = if (table == "stroke_batches" || table == "recognition") r.getString("page_id") else id
-        val localUpdated = db.rawQuery("select updated_at from $table where id = ?", arrayOf(id)).use { if (it.moveToFirst()) it.getLong(0) else null }
+        if (table == "assets") {
+            // Assets are immutable blobs without a local updated_at column: an existing local row
+            // already has the file, so the remote copy never needs to replace it.
+            val exists = db.rawQuery("select 1 from assets where id = ?", arrayOf(id)).use { it.moveToFirst() }
+            if (exists) return false
+        }
+        val localUpdated = if (table == "assets") null else {
+            db.rawQuery("select updated_at from $table where id = ?", arrayOf(id)).use { if (it.moveToFirst()) it.getLong(0) else null }
+        }
         if (localUpdated != null && localUpdated > remoteUpdated) return false // local is newer; the push will win
         if (localUpdated != null && localUpdated == remoteUpdated) { clearOutbox(table, localKey); return false }
         val cv = ContentValues()
