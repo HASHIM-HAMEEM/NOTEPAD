@@ -26,16 +26,16 @@ object OcrModelCatalog {
         "fas" to OcrModelSpec(
             code = "fas",
             displayName = "Farsi",
-            sizeBytes = 431_500,
-            sha256 = "db1c0a91208aff00d3cf1ed2c1d23f76419afd5f024688b4f71adc3f2ce4a505",
-            url = "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/fas.traineddata",
+            sizeBytes = 3_325_955,
+            sha256 = "99e420969b5ddd2cb135b416316a7ed417c59c4faf9e0d28941348f6448114df",
+            url = "https://raw.githubusercontent.com/tesseract-ocr/tessdata_best/main/fas.traineddata",
         ),
         "urd" to OcrModelSpec(
             code = "urd",
             displayName = "Urdu",
-            sizeBytes = 1_398_718,
-            sha256 = "62e8250ce2a994106e313a82e26a516a39e2cf159d0ce3c5b5008387fd0d555f",
-            url = "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/urd.traineddata",
+            sizeBytes = 7_994_323,
+            sha256 = "65af3f6e50a3c3df15d7b405aab5d467e53433207745c8f5be5b8ff1a58a67c8",
+            url = "https://raw.githubusercontent.com/tesseract-ocr/tessdata_best/main/urd.traineddata",
         ),
     )
 

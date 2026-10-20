@@ -23,6 +23,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.ripple
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -153,7 +154,7 @@ fun SidebarRow(
             .height(40.dp)
             .clip(RoundedCornerShape(10.dp))
             .background(fill)
-            .clickable(interaction, indication = null, onClick = onClick)
+            .clickable(interaction, indication = ripple(color = NotePadTheme.tokens.ink), onClick = onClick)
             .pressable(interaction)
             .padding(horizontal = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -203,7 +204,7 @@ fun ComposerSearch(
     var plusOpen by remember { mutableStateOf(false) }
     val interaction = remember { MutableInteractionSource() }
     Surface(
-        modifier = modifier.height(height).clip(RoundedCornerShape(height / 2)).clickable(interaction, indication = null, onClick = onSearch).pressable(interaction),
+        modifier = modifier.height(height).clip(RoundedCornerShape(height / 2)).clickable(interaction, indication = ripple(color = NotePadTheme.tokens.ink), onClick = onSearch).pressable(interaction),
         shape = RoundedCornerShape(height / 2),
         color = t.surface,
         contentColor = t.ink,

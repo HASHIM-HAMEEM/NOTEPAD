@@ -14,8 +14,8 @@ class PdfOcrPolicyTest {
 
     @Test
     fun arabicPagesUseLowerRenderDpiWhileOtherLanguagesKeepStandardDpi() {
-        assertEquals(200, PdfOcrPolicy.renderDpi("ar"))
-        assertEquals(200, PdfOcrPolicy.renderDpi("ar-SA"))
+        assertEquals(300, PdfOcrPolicy.renderDpi("ar"))
+        assertEquals(300, PdfOcrPolicy.renderDpi("ar-SA"))
         assertEquals(300, PdfOcrPolicy.renderDpi("en"))
     }
 
@@ -53,5 +53,17 @@ class PdfOcrPolicyTest {
         assertFalse(PdfOcrPolicy.shouldRetryArabicWithSingleBlock("eng", automatic))
         assertTrue(PdfOcrPolicy.preferSingleBlock(automatic, singleBlock))
         assertFalse(PdfOcrPolicy.preferSingleBlock(singleBlock, automatic))
+    }
+
+    @Test
+    fun weakArabicPassRetriesWithUrduOnlyWhenModelInstalled() {
+        val weak = listOf(OcrBox("عاضا", 0, 0, 10, 10, 31f), OcrBox("yh", 0, 0, 10, 10, 80f))
+        val strong = listOf(OcrBox("المكتبة", 0, 0, 10, 10, 91f), OcrBox("الطلاب", 0, 0, 10, 10, 88f))
+        assertTrue(PdfOcrPolicy.shouldRetryWithUrdu("ara+eng", weak, urduModelAvailable = true))
+        assertFalse(PdfOcrPolicy.shouldRetryWithUrdu("ara+eng", weak, urduModelAvailable = false))
+        assertFalse(PdfOcrPolicy.shouldRetryWithUrdu("ara+eng", strong, urduModelAvailable = true))
+        assertFalse(PdfOcrPolicy.shouldRetryWithUrdu("eng", weak, urduModelAvailable = true))
+        assertTrue(PdfOcrPolicy.preferUrdu(weak, strong))
+        assertFalse(PdfOcrPolicy.preferUrdu(strong, weak))
     }
 }

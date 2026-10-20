@@ -18,6 +18,23 @@ class PdfOcrEngine(private val context: Context) : AutoCloseable {
 
     fun recognize(bitmap: Bitmap, language: String): List<OcrBox> {
         installModels()
+        val grayscale = preprocess(grayscale(bitmap))
+        try {
+            val arabicPass = recognizeBest(grayscale, language)
+            val urduAvailable = File(File(context.filesDir, "tessdata"), "urd.traineddata").isFile
+            if (!PdfOcrPolicy.shouldRetryWithUrdu(language, arabicPass, urduAvailable)) return arabicPass
+            val urduPass = runCatching { recognizeBest(grayscale, "urd+eng") }.getOrElse { error ->
+                Log.w(TAG, "Urdu fallback failed", error); return arabicPass
+            }
+            Log.i(TAG, "Arabic pass weak (${arabicPass.size} words); Urdu pass returned ${urduPass.size} words")
+            return if (PdfOcrPolicy.preferUrdu(arabicPass, urduPass)) urduPass else arabicPass
+        } finally {
+            grayscale.recycle()
+            api.clear()
+        }
+    }
+
+    private fun ensureLanguage(language: String) {
         if (initializedLanguage != language) {
             val initialized = try {
                 api.init(context.filesDir.absolutePath, language)
@@ -33,19 +50,15 @@ class PdfOcrEngine(private val context: Context) : AutoCloseable {
             initializedLanguage = language
             Log.i(TAG, "Initialized Tesseract language=$language, abis=${Build.SUPPORTED_ABIS.joinToString()}")
         }
-        val grayscale = grayscale(bitmap)
-        try {
-            val automatic = recognizeWithMode(grayscale, TessBaseAPI.PageSegMode.PSM_AUTO)
-            if (!PdfOcrPolicy.shouldRetryArabicWithSingleBlock(language, automatic)) {
-                return automatic
-            }
-            val singleBlock = recognizeWithMode(grayscale, TessBaseAPI.PageSegMode.PSM_SINGLE_BLOCK)
-            Log.i(TAG, "Arabic OCR PSM_AUTO returned too few words; PSM_SINGLE_BLOCK returned ${singleBlock.size} words")
-            return if (PdfOcrPolicy.preferSingleBlock(automatic, singleBlock)) singleBlock else automatic
-        } finally {
-            grayscale.recycle()
-            api.clear()
-        }
+    }
+
+    private fun recognizeBest(grayscale: Bitmap, language: String): List<OcrBox> {
+        ensureLanguage(language)
+        val automatic = recognizeWithMode(grayscale, TessBaseAPI.PageSegMode.PSM_AUTO)
+        if (!PdfOcrPolicy.shouldRetryArabicWithSingleBlock(language, automatic)) return automatic
+        val singleBlock = recognizeWithMode(grayscale, TessBaseAPI.PageSegMode.PSM_SINGLE_BLOCK)
+        Log.i(TAG, "Arabic OCR PSM_AUTO returned too few words; PSM_SINGLE_BLOCK returned ${singleBlock.size} words")
+        return if (PdfOcrPolicy.preferSingleBlock(automatic, singleBlock)) singleBlock else automatic
     }
 
     override fun close() {
@@ -93,6 +106,29 @@ class PdfOcrEngine(private val context: Context) : AutoCloseable {
         } finally {
             iterator.delete()
         }
+    }
+
+    /** Deskew (always) and Otsu-binarise (scan-like pages only); see [OcrPreprocess]. Recycles [source] when it returns a new bitmap. */
+    private fun preprocess(source: Bitmap): Bitmap {
+        val width = source.width
+        val height = source.height
+        val pixels = IntArray(width * height)
+        source.getPixels(pixels, 0, width, 0, 0, width, height)
+        val lum = IntArray(pixels.size) { pixels[it] and 0xFF }
+        val plan = OcrPreprocess.plan(lum, width, height)
+        Log.i(TAG, "OCR preprocess skew=${plan.skewDegrees} binarize=${plan.binarize} threshold=${plan.threshold}")
+        if (plan.binarize) {
+            for (i in pixels.indices) pixels[i] = if (lum[i] < plan.threshold) 0xFF000000.toInt() else 0xFFFFFFFF.toInt()
+            source.setPixels(pixels, 0, width, 0, 0, width, height)
+        }
+        if (plan.skewDegrees == 0f) return source
+        val rotated = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(rotated)
+        canvas.drawColor(android.graphics.Color.WHITE)
+        canvas.rotate(-plan.skewDegrees, width / 2f, height / 2f)
+        canvas.drawBitmap(source, 0f, 0f, Paint(Paint.FILTER_BITMAP_FLAG))
+        source.recycle()
+        return rotated
     }
 
     private fun grayscale(source: Bitmap): Bitmap {

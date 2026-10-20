@@ -26,6 +26,7 @@ import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
@@ -121,7 +122,11 @@ fun ToolCell(
 ) {
     val t = NotePadTheme.tokens
     val interaction = remember { MutableInteractionSource() }
-    val fill by animateColorAsState(if (selected) t.surface2 else Color.Transparent, tween(Motion.medium, easing = Motion.emphasized), label = "fill")
+    val pressed by interaction.collectIsPressedAsState()
+    val fill by animateColorAsState(
+        when { selected -> t.surface2; pressed && enabled -> t.ink.copy(alpha = 0.10f); else -> Color.Transparent },
+        tween(if (pressed) Motion.press else Motion.medium, easing = Motion.emphasized), label = "fill",
+    )
     val glyph = when {
         !enabled -> t.ink3.copy(alpha = 0.6f)
         tint != null -> tint
@@ -132,7 +137,7 @@ fun ToolCell(
         modifier
             .size(Spec.hit)
             .clip(RoundedCornerShape(Spec.cellRadius))
-            .clickable(interaction, indication = null, enabled = enabled, role = Role.Button, onClick = onClick)
+            .clickable(interaction, indication = ripple(color = NotePadTheme.tokens.ink), enabled = enabled, role = Role.Button, onClick = onClick)
             .pressable(interaction, enabled),
         contentAlignment = Alignment.Center,
     ) {
@@ -298,7 +303,7 @@ fun BottomNavPill(items: List<NavItem>, modifier: Modifier = Modifier) {
                     .weight(1f)
                     .height(Spec.navPillHeight)
                     .clip(RoundedCornerShape(Spec.navPillHeight / 2))
-                    .clickable(interaction, indication = null, role = Role.Tab, onClick = item.onClick)
+                    .clickable(interaction, indication = ripple(color = NotePadTheme.tokens.ink), role = Role.Tab, onClick = item.onClick)
                     .pressable(interaction),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = androidx.compose.foundation.layout.Arrangement.Center,
@@ -341,7 +346,7 @@ fun NavRail(items: List<NavItem>, modifier: Modifier = Modifier, bottom: (@Compo
                 Modifier
                     .width(64.dp)
                     .clip(RoundedCornerShape(12.dp))
-                    .clickable(interaction, indication = null, role = Role.Tab, onClick = item.onClick)
+                    .clickable(interaction, indication = ripple(color = NotePadTheme.tokens.ink), role = Role.Tab, onClick = item.onClick)
                     .pressable(interaction)
                     .padding(vertical = 6.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
