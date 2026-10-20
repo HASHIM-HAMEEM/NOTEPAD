@@ -73,13 +73,13 @@ data class Tokens(
     val pageTint: Color?,
 )
 
-/** Light: ChatGPT-like neutral greys. */
+/** Light: devin.ai tokens — warm off-white page (#F7F6F5), white cards, #191919 ink, blue accent used sparingly. */
 val LightTokens = Tokens(
-    bg = Color(0xFFF7F7F8), surface = Color(0xFFFFFFFF), surface2 = Color(0xFFEFEFF1), border = Color(0xFFE2E2E6),
-    page = Color(0xFFFFFFFF), pageInk = Color(0xFF1A1A1A),
-    ink = Color(0xFF0D0D0D), ink2 = Color(0xFF5C5C66), ink3 = Color(0xFF9090A0),
-    accent = Color(0xFF0E7C86), onAccent = Color.White, accentSoft = Color(0xFFDCF0F1),
-    shadow = Color(0x1A101018), isDark = false, pageTint = null,
+    bg = Color(0xFFF7F6F5), surface = Color(0xFFFFFFFF), surface2 = Color(0xFFEFEEEC), border = Color(0xFFE6E4E1),
+    page = Color(0xFFFFFFFF), pageInk = Color(0xFF191919),
+    ink = Color(0xFF191919), ink2 = Color(0xFF5C5B58), ink3 = Color(0xFF8E8C88),
+    accent = Color(0xFF005FCC), onAccent = Color.White, accentSoft = Color(0xFFE2EFFF),
+    shadow = Color(0x33DDDDDD), isDark = false, pageTint = null,
 )
 
 /** Paper: Perplexity-like paper white, off-black ink, teal accent; pages are warmed for reading. */
@@ -91,13 +91,13 @@ val PaperTokens = Tokens(
     shadow = Color(0x1A091717), isDark = false, pageTint = Color(0xFFF7F3E8),
 )
 
-/** Dark: Cursor-like near black with low-contrast borders. */
+/** Dark: devin.ai app tokens — #141414 page, #1F1F1F elevated surfaces, neutral #363636 borders, #4489FF accent. */
 val DarkTokens = Tokens(
-    bg = Color(0xFF121214), surface = Color(0xFF1C1C1F), surface2 = Color(0xFF26262A), border = Color(0xFF2F2F34),
-    page = Color(0xFF1E1E21), pageInk = Color(0xFFC8C8CC),
-    ink = Color(0xFFECECEE), ink2 = Color(0xFFA3A3AC), ink3 = Color(0xFF6E6E78),
-    accent = Color(0xFF5FC1CB), onAccent = Color(0xFF0B1A1C), accentSoft = Color(0xFF16383B),
-    shadow = Color(0x73000000), isDark = true, pageTint = Color(0xFFD8D8DC),
+    bg = Color(0xFF141414), surface = Color(0xFF1F1F1F), surface2 = Color(0xFF2A2A2A), border = Color(0xFF363636),
+    page = Color(0xFF1E1E1E), pageInk = Color(0xFFC8C8C8),
+    ink = Color(0xFFECECEC), ink2 = Color(0xFFA3A3A3), ink3 = Color(0xFF6E6E6E),
+    accent = Color(0xFF4489FF), onAccent = Color.White, accentSoft = Color(0xFF1D3552),
+    shadow = Color(0x73000000), isDark = true, pageTint = Color(0xFFD8D8D8),
 )
 
 val LocalTokens = staticCompositionLocalOf { LightTokens }

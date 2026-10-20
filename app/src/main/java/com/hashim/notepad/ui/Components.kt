@@ -55,9 +55,9 @@ object Spec {
     val toolCell = 36.dp
     val hit = 44.dp
     val glyph = 22.dp
-    val buttonRadius = 12.dp
-    val cellRadius = 10.dp
-    val coverRadius = 10.dp
+    val buttonRadius = 8.dp
+    val cellRadius = 8.dp
+    val coverRadius = 8.dp
     val dialogRadius = 20.dp
     val sheetRadius = 28.dp
     val hairline = 1.dp
