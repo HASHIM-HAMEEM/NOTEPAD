@@ -43,6 +43,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
+import androidx.compose.material.icons.automirrored.outlined.ViewList
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -147,6 +148,10 @@ fun NotebooksScreen(
     onSharedIntentConsumed: (String) -> Unit = {},
     sharedTransitionScope: SharedTransitionScope? = null,
     animatedVisibilityScope: AnimatedVisibilityScope? = null,
+    onMenu: (() -> Unit)? = null,
+    externalNewRequest: Int = 0,
+    externalImportRequest: Int = 0,
+    externalFolderRequest: Int = 0,
 ) {
     val context = LocalContext.current
     val screenWidthDp = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp
@@ -173,6 +178,12 @@ fun NotebooksScreen(
     var renameFor by remember { mutableStateOf<Notebook?>(null) }
     var deleteFor by remember { mutableStateOf<Notebook?>(null) }
     var showCreateFolder by remember { mutableStateOf(false) }
+    var libraryView by remember {
+        mutableStateOf(runCatching { LibraryView.valueOf(libraryPrefs.getString("library_view", "LIST") ?: "LIST") }.getOrDefault(LibraryView.LIST))
+    }
+    LaunchedEffect(libraryView) { libraryPrefs.edit().putString("library_view", libraryView.name).apply() }
+    LaunchedEffect(externalNewRequest) { if (externalNewRequest > 0) showNew = true }
+    LaunchedEffect(externalFolderRequest) { if (externalFolderRequest > 0) showCreateFolder = true }
     var newFolderForNotebook by remember { mutableStateOf<Notebook?>(null) }
     var folderActionsFor by remember { mutableStateOf<Folder?>(null) }
     var renameFolderFor by remember { mutableStateOf<Folder?>(null) }
@@ -310,11 +321,13 @@ fun NotebooksScreen(
         }
     }
 
+    LaunchedEffect(externalImportRequest) { if (externalImportRequest > 0) pickPdf.launch(arrayOf("application/pdf")) }
+
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         containerColor = MaterialTheme.colorScheme.background,
         floatingActionButton = {
-            if (!compact && !tabletLayout) FloatingActionButton(
+            if (!compact && !tabletLayout && !phoneLayout) FloatingActionButton(
                 onClick = { showNew = true },
                 containerColor = NotePadTheme.tokens.ink,
                 contentColor = NotePadTheme.tokens.onAccent,
@@ -324,14 +337,16 @@ fun NotebooksScreen(
         },
     ) { padding ->
         Row(Modifier.fillMaxSize().padding(padding)) {
+        Box(Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.TopCenter) {
         LazyVerticalGrid(
             state = gridState,
             columns = when {
+                libraryView == LibraryView.LIST -> GridCells.Fixed(1)
                 tabletLayout -> GridCells.Adaptive(168.dp)
                 phoneLayout -> GridCells.Adaptive(150.dp)
                 else -> GridCells.Fixed(1)
             },
-            modifier = Modifier.weight(1f).fillMaxHeight(),
+            modifier = Modifier.fillMaxHeight().widthIn(max = 1040.dp),
             contentPadding = if (phoneLayout) {
                 PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 168.dp)
             } else {
@@ -347,7 +362,8 @@ fun NotebooksScreen(
                     librarySort = librarySort, onSortChange = { librarySort = it },
                     tabletLayout = tabletLayout,
                     onSearch = onSearch, onAccount = onAccount, onAppearance = { showAppearance = true },
-                    onNew = { showNew = true },
+                    onNew = { showNew = true }, onImport = { pickPdf.launch(arrayOf("application/pdf")) },
+                    libraryView = libraryView, onViewChange = { libraryView = it }, onMenu = onMenu,
                     folders = folders, selectedFolderId = selectedFolderId,
                     onSelectFolder = onSelectedFolderChange,
                     onAddFolder = { showCreateFolder = true }, onFolderLongPress = { folderActionsFor = it },
@@ -402,8 +418,13 @@ fun NotebooksScreen(
             if (notebooks.isNotEmpty() && visibleNotebooks.isEmpty()) item(span = { GridItemSpan(maxLineSpan) }, contentType = "filtered-empty-state") {
                 Text("No notebooks match these filters.", modifier = Modifier.padding(vertical = 24.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            items(sortedNotebooks, key = { it.id }, contentType = { "notebook-card" }) { nb ->
-                NotebookCard(
+            items(sortedNotebooks, key = { it.id }, contentType = { if (libraryView == LibraryView.LIST) "notebook-row" else "notebook-card" }) { nb ->
+                if (libraryView == LibraryView.LIST) NotebookRow(
+                    repo = repo, notebook = nb, modifier = Modifier.animateItem(),
+                    subjectColor = subjectColor(nb, folders), renderThumbnail = renderThumbnails,
+                    onOpen = { if (nb.documentKind == "file") openStoredFile(nb) else onContinueAtPosition(nb.id, nb.lastPageIndex) },
+                    onMore = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); actionsFor = nb },
+                ) else NotebookCard(
                     repo = repo, notebook = nb, tags = tags, compact = compact,
                     modifier = Modifier.animateItem(),
                     subjectColor = subjectColor(nb, folders),
@@ -414,6 +435,7 @@ fun NotebooksScreen(
                     onMore = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); actionsFor = nb },
                 )
             }
+        }
         }
         }
     }
@@ -807,7 +829,7 @@ fun NotebooksScreen(
 
 @Composable
 @OptIn(ExperimentalMaterial3Api::class)
-private fun AppearanceSheet(
+internal fun AppearanceSheet(
     themeMode: ThemeMode,
     dynamicColor: Boolean,
     onThemeChange: (ThemeMode) -> Unit,
@@ -865,6 +887,10 @@ private fun LibraryHeader(
     onAccount: () -> Unit,
     onAppearance: () -> Unit,
     onNew: () -> Unit,
+    onImport: () -> Unit,
+    libraryView: LibraryView,
+    onViewChange: (LibraryView) -> Unit,
+    onMenu: (() -> Unit)?,
     folders: List<Folder>,
     selectedFolderId: String,
     onSelectFolder: (String) -> Unit,
@@ -872,65 +898,85 @@ private fun LibraryHeader(
     onFolderLongPress: (Folder) -> Unit,
 ) {
     var sortExpanded by remember { mutableStateOf(false) }
+    val t = NotePadTheme.tokens
     val phoneLayout = compact || androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 600
-    Column(Modifier.statusBarsPadding().padding(top = 12.dp, bottom = 4.dp)) {
+    val sortMenu: @Composable () -> Unit = {
+        DropdownMenu(expanded = sortExpanded, onDismissRequest = { sortExpanded = false }, shape = RoundedCornerShape(16.dp), containerColor = t.surface) {
+            listOf(LibrarySort.RECENT to "Recent", LibrarySort.NAME to "Name", LibrarySort.DATE_ADDED to "Date added").forEach { (sort, label) ->
+                DropdownMenuItem(
+                    text = { Text(label) },
+                    trailingIcon = { if (librarySort == sort) Icon(Icons.Outlined.Check, null, tint = t.ink) },
+                    onClick = { onSortChange(sort); sortExpanded = false },
+                )
+            }
+            if (phoneLayout) {
+                HorizontalDivider(color = t.border)
+                DropdownMenuItem(
+                    text = { Text(if (libraryView == LibraryView.LIST) "Show as grid" else "Show as list") },
+                    leadingIcon = { Icon(if (libraryView == LibraryView.LIST) Icons.Outlined.GridView else Icons.AutoMirrored.Outlined.ViewList, null) },
+                    onClick = { onViewChange(if (libraryView == LibraryView.LIST) LibraryView.GRID else LibraryView.LIST); sortExpanded = false },
+                )
+            }
+        }
+    }
+    val subtitle = if (importing) "Importing…" else "$count item${if (count == 1) "" else "s"}"
+    Column(Modifier.statusBarsPadding().padding(top = if (phoneLayout) 0.dp else 8.dp, bottom = 4.dp)) {
         if (phoneLayout) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f).padding(end = 8.dp)) {
-                    Text("Library", style = MaterialTheme.typography.headlineMedium)
-                    Text(if (importing) "Importing…" else "$count items", style = MaterialTheme.typography.bodySmall, color = NotePadTheme.tokens.ink3)
+            // ChatGPT mobile header: menu · centred title · compose.
+            PhoneTopBar(title = "Library", subtitle = subtitle, onMenu = { onMenu?.invoke() ?: onAppearance() }) {
+                Box {
+                    IconButton(onClick = { sortExpanded = true }) { Icon(Icons.Outlined.Tune, "Sort and view", tint = t.ink) }
+                    sortMenu()
                 }
+                IconButton(onClick = onNew) { Icon(Icons.Outlined.EditNote, "New notebook", tint = t.ink) }
+            }
+            Spacer(Modifier.height(4.dp))
+        } else {
+            Row(Modifier.fillMaxWidth().height(44.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("Library", style = MaterialTheme.typography.titleLarge, color = t.ink)
+                Spacer(Modifier.width(10.dp))
+                Text(subtitle, style = MaterialTheme.typography.bodyMedium, color = t.ink3)
+                Spacer(Modifier.weight(1f))
                 Box {
                     PillIconButton(Icons.Outlined.Sort, "Sort", onClick = { sortExpanded = true })
-                    DropdownMenu(expanded = sortExpanded, onDismissRequest = { sortExpanded = false }, shape = RoundedCornerShape(16.dp), containerColor = NotePadTheme.tokens.surface) {
-                        listOf(LibrarySort.RECENT to "Recent", LibrarySort.NAME to "Name", LibrarySort.DATE_ADDED to "Date added").forEach { (sort, label) ->
-                            DropdownMenuItem(text = { Text(label) }, onClick = { onSortChange(sort); sortExpanded = false })
-                        }
-                    }
+                    sortMenu()
                 }
                 Spacer(Modifier.width(8.dp))
-                PillIconButton(Icons.Outlined.Search, "Search", onClick = onSearch)
-                Spacer(Modifier.width(8.dp))
-                PillIconButton(Icons.Outlined.Palette, "Appearance", onClick = onAppearance)
+                ViewToggle(libraryView, onViewChange)
+                if (!tabletLayout) { Spacer(Modifier.width(8.dp)); PillIconButton(Icons.Outlined.Palette, "Appearance", onClick = onAppearance) }
                 if (showAccountButton) { Spacer(Modifier.width(8.dp)); PillIconButton(Icons.Outlined.AccountCircle, "Sync & account", onClick = onAccount) }
+                Spacer(Modifier.width(8.dp))
+                AppButton("New", onClick = onNew, icon = Icons.Default.Add)
             }
-            Spacer(Modifier.height(12.dp))
-        } else Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f).padding(end = 16.dp)) {
-                Text("Library", style = MaterialTheme.typography.displaySmall)
-                Text(if (importing) "Importing…" else "$count items", style = MaterialTheme.typography.bodyMedium, color = NotePadTheme.tokens.ink3)
+            // ChatGPT hero: a short prompt and a centred composer, here a search box.
+            Column(Modifier.fillMaxWidth().padding(top = 36.dp, bottom = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("What do you want to study?", style = MaterialTheme.typography.headlineMedium, color = t.ink)
+                Spacer(Modifier.height(18.dp))
+                ComposerSearch(
+                    placeholder = "Search notes, PDFs and handwriting",
+                    onSearch = onSearch, onNew = onNew, onImport = onImport,
+                    modifier = Modifier.fillMaxWidth().widthIn(max = 720.dp),
+                )
+                Spacer(Modifier.height(16.dp))
             }
-            LibrarySearchButton(onSearch, Modifier.width(300.dp))
-            Spacer(Modifier.width(8.dp))
-            Box {
-                PillIconButton(Icons.Outlined.Sort, "Sort", onClick = { sortExpanded = true })
-                DropdownMenu(expanded = sortExpanded, onDismissRequest = { sortExpanded = false }, shape = RoundedCornerShape(16.dp), containerColor = NotePadTheme.tokens.surface) {
-                    listOf(LibrarySort.RECENT to "Recent", LibrarySort.NAME to "Name", LibrarySort.DATE_ADDED to "Date added").forEach { (sort, label) ->
-                        DropdownMenuItem(text = { Text(label) }, onClick = { onSortChange(sort); sortExpanded = false })
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = if (phoneLayout) Arrangement.Start else Arrangement.Center) {
+            Row(
+                Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                AppChip("All", selected = selectedFolderId == ALL_FOLDERS, onClick = { onSelectFolder(ALL_FOLDERS) })
+                folders.forEach { folder ->
+                    val selected = selectedFolderId == folder.id
+                    val dot = folder.color?.let { runCatching { Color(android.graphics.Color.parseColor(it)) }.getOrNull() }
+                    Box(Modifier.combinedClickable(onClick = { onSelectFolder(folder.id) }, onLongClick = { onFolderLongPress(folder) })) {
+                        AppChip(folder.name, selected = selected, onClick = { onSelectFolder(folder.id) })
+                        if (dot != null) Box(Modifier.align(Alignment.CenterStart).padding(start = 6.dp).size(6.dp).clip(CircleShape).background(dot))
                     }
                 }
+                AppChip("+ Subject", selected = false, onClick = onAddFolder)
             }
-            if (!tabletLayout) { Spacer(Modifier.width(8.dp)); PillIconButton(Icons.Outlined.Palette, "Appearance", onClick = onAppearance) }
-            if (showAccountButton) { Spacer(Modifier.width(8.dp)); PillIconButton(Icons.Outlined.AccountCircle, "Sync & account", onClick = onAccount) }
-            Spacer(Modifier.width(8.dp))
-            AppButton("New", onClick = onNew, icon = Icons.Default.Add)
-        }
-        Spacer(Modifier.height(8.dp))
-        Row(
-            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            AppChip("All", selected = selectedFolderId == ALL_FOLDERS, onClick = { onSelectFolder(ALL_FOLDERS) })
-            folders.forEach { folder ->
-                val selected = selectedFolderId == folder.id
-                val dot = folder.color?.let { runCatching { Color(android.graphics.Color.parseColor(it)) }.getOrNull() }
-                Box(Modifier.combinedClickable(onClick = { onSelectFolder(folder.id) }, onLongClick = { onFolderLongPress(folder) })) {
-                    AppChip(folder.name, selected = selected, onClick = { onSelectFolder(folder.id) })
-                    if (dot != null) Box(Modifier.align(Alignment.CenterStart).padding(start = 6.dp).size(6.dp).clip(CircleShape).background(dot))
-                }
-            }
-            AppChip("+ Subject", selected = false, onClick = onAddFolder)
         }
         Spacer(Modifier.height(8.dp))
         AnimatedVisibility(importing || progress != null, enter = fadeIn(), exit = fadeOut()) {
@@ -942,10 +988,70 @@ private fun LibraryHeader(
                 LinearProgressIndicator(
                     progress = { progress?.percent?.div(100f) ?: 0f },
                     modifier = Modifier.fillMaxWidth().padding(top = 4.dp).clip(CircleShape),
+                    color = t.ink, trackColor = t.surface2,
                 )
             }
         }
         Spacer(Modifier.height(8.dp))
+    }
+}
+
+/** Perplexity-Library-style row: small page thumbnail, title, meta, kebab; hairline between rows. */
+@Composable
+private fun NotebookRow(
+    repo: NotePadRepository,
+    notebook: Notebook,
+    modifier: Modifier,
+    subjectColor: Color,
+    renderThumbnail: Boolean,
+    onOpen: () -> Unit,
+    onMore: () -> Unit,
+) {
+    val t = NotePadTheme.tokens
+    val pages by repo.pages(notebook.id).collectAsState(initial = emptyList())
+    val interaction = remember { MutableInteractionSource() }
+    val isPdf = pages.any { it.kind == PageKind.PDF }
+    val radius = RoundedCornerShape(6.dp)
+    Column(modifier) {
+        Row(
+            Modifier.fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .combinedClickable(interactionSource = interaction, indication = null, onClick = onOpen, onLongClick = onMore)
+                .pressable(interaction)
+                .padding(horizontal = 8.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(Modifier.size(width = 44.dp, height = 58.dp).clip(radius).border(Spec.hairline, t.border, radius).background(if (isPdf) t.page else paperOf(notebook))) {
+                when {
+                    notebook.documentKind == "file" -> FileCover(notebook, Modifier.fillMaxSize())
+                    pages.isNotEmpty() -> PagePreview(repo, pages.firstOrNull(), if (isPdf) t.page else paperOf(notebook), Modifier.fillMaxSize(), renderEnabled = renderThumbnail)
+                    else -> BookCover(notebook.title, bookCoverColor(notebook), false, Modifier.fillMaxSize())
+                }
+            }
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f)) {
+                Text(notebook.title, style = MaterialTheme.typography.bodyLarge.copy(fontFamily = titleFontFamily(notebook.title)), fontWeight = FontWeight.Medium, color = t.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Spacer(Modifier.height(2.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(7.dp).clip(CircleShape).background(subjectColor))
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        buildString {
+                            if (isPdf) append("PDF · ")
+                            append(meta(notebook))
+                            if (notebook.lastOpenedAt != null && notebook.pageCount > 0) append(" · ").append(progressLabel(notebook.lastPageIndex, notebook.pageCount))
+                        },
+                        style = MaterialTheme.typography.bodySmall, color = t.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            if (notebook.lastOpenedAt != null && notebook.pageCount > 0) {
+                Spacer(Modifier.width(12.dp))
+                LibraryProgressTrack(((notebook.lastPageIndex + 1f) / notebook.pageCount).coerceIn(0f, 1f), subjectColor, Modifier.width(56.dp))
+            }
+            IconButton(onClick = onMore, modifier = Modifier.size(36.dp)) { Icon(Icons.Default.MoreVert, "More", tint = t.ink3) }
+        }
+        Hairline(Modifier.padding(start = 66.dp))
     }
 }
 

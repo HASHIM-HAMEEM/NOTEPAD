@@ -130,6 +130,11 @@ fun NotePadApp(
     }
     LaunchedEffect(selectedFolderId) { libraryPrefs.edit().putString("library_folder", selectedFolderId).apply() }
     val appScope = rememberCoroutineScope()
+    var newRequest by remember { mutableIntStateOf(0) }
+    var importRequest by remember { mutableIntStateOf(0) }
+    var folderRequest by remember { mutableIntStateOf(0) }
+    var drawerOpen by remember { mutableStateOf(false) }
+    var showAppearance by remember { mutableStateOf(false) }
     val importer = remember { PdfImporter(context, repo) }
     val fileImporter = remember { FileImporter(context, repo) }
     val exporter = remember { com.hashim.notepad.export.PdfExporter(context, repo) }
@@ -153,6 +158,13 @@ fun NotePadApp(
             Screen.Read(notebookId, pageId, searchQuery)
         } else {
             Screen.Editor(notebookId, pageId)
+        }
+    }
+
+    fun continueNotebook(notebookId: String, pageIndex: Int) {
+        appScope.launch {
+            val targetPage = repo.pages(notebookId).first().getOrNull(pageIndex)
+            screen = targetPage?.let { destinationForPage(notebookId, it.id) } ?: Screen.Pages(notebookId)
         }
     }
 
@@ -294,6 +306,10 @@ fun NotePadApp(
                         showAccountButton = !showSidebar && !showNavigationBar,
                         sharedTransitionScope = sharedScope,
                         animatedVisibilityScope = visibilityScope,
+                        onMenu = if (showNavigationBar) { { drawerOpen = true } } else null,
+                        externalNewRequest = newRequest,
+                        externalImportRequest = importRequest,
+                        externalFolderRequest = folderRequest,
                     )
                     Screen.Account -> AccountScreen(onBack = { screen = Screen.Notebooks })
                     Screen.Search -> SearchScreen(repo = repo, onBack = { screen = Screen.Notebooks }, onOpenPage = ::openPage)
@@ -376,41 +392,71 @@ fun NotePadApp(
             }
         }
 
-        if (showSidebar) {
-            Row(Modifier.fillMaxSize()) {
-                LibrarySidebar(
-                    repo = repo,
-                    selectedFolderId = selectedFolderId,
-                    onSelectFolder = { selectedFolderId = it; screen = Screen.Notebooks },
+        val sidebarFolders by repo.folders().collectAsState(initial = emptyList())
+        val sidebarNotebooks by repo.notebooks().collectAsState(initial = emptyList())
+        val folderCounts = remember(sidebarNotebooks) { sidebarNotebooks.groupingBy { it.folderId }.eachCount() }
+        val recents = remember(sidebarNotebooks) {
+            sidebarNotebooks.filter { it.lastOpenedAt != null }.sortedByDescending { it.lastOpenedAt }.take(8).map { SidebarRecent(it.id, it.title, it.lastPageIndex) }
+        }
+        val sidebar: @Composable (collapsed: Boolean, onToggle: () -> Unit, width: androidx.compose.ui.unit.Dp, afterNavigate: () -> Unit) -> Unit =
+            { collapsed, onToggle, width, afterNavigate ->
+                AppSidebar(
                     screen = screen,
-                    onNavigate = { screen = it },
-                    themeMode = themeMode,
-                    dynamicColor = dynamicColor,
-                    onThemeChange = onThemeChange,
-                    onDynamicChange = onDynamicChange,
+                    onNavigate = { screen = it; afterNavigate() },
+                    folders = sidebarFolders, folderCounts = folderCounts,
+                    selectedFolderId = selectedFolderId, onSelectFolder = { selectedFolderId = it },
+                    onAddFolder = { screen = Screen.Notebooks; folderRequest++; afterNavigate() },
+                    recents = recents, onOpenRecent = { continueNotebook(it.id, it.pageIndex); afterNavigate() },
+                    onNew = { screen = Screen.Notebooks; newRequest++; afterNavigate() },
+                    onImport = { screen = Screen.Notebooks; importRequest++; afterNavigate() },
+                    onAppearance = { showAppearance = true; afterNavigate() },
+                    collapsed = collapsed, onToggleCollapsed = onToggle,
+                    expandedWidth = width,
                 )
+            }
+        if (showSidebar) {
+            var sidebarCollapsed by rememberSaveable { mutableStateOf(false) }
+            Row(Modifier.fillMaxSize()) {
+                sidebar(sidebarCollapsed, { sidebarCollapsed = !sidebarCollapsed }, 264.dp) {}
                 Box(Modifier.weight(1f).fillMaxSize()) {
                     screenContent()
                 }
             }
         } else if (showNavigationBar) {
-            Box(Modifier.fillMaxSize()) {
-                screenContent()
-                BottomNavPill(
-                    items = listOf(
-                        NavItem("Library", Icons.Outlined.Book, screen == Screen.Notebooks) { screen = Screen.Notebooks },
-                        NavItem("Search", Icons.Outlined.Search, screen == Screen.Search) { screen = Screen.Search },
-                        NavItem("Sync", Icons.Outlined.Cloud, screen == Screen.Account) { screen = Screen.Account },
-                    ),
-                    modifier = Modifier.align(Alignment.BottomStart)
-                        .navigationBarsPadding()
-                        .padding(start = 16.dp, bottom = 16.dp, end = if (screen == Screen.Notebooks) 100.dp else 16.dp)
-                        .fillMaxWidth(),
-                )
+            val drawerState = androidx.compose.material3.rememberDrawerState(androidx.compose.material3.DrawerValue.Closed)
+            LaunchedEffect(drawerOpen) { if (drawerOpen) { drawerState.open(); drawerOpen = false } }
+            val closeDrawer: () -> Unit = { appScope.launch { drawerState.close() } }
+            androidx.compose.material3.ModalNavigationDrawer(
+                drawerState = drawerState,
+                scrimColor = androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.32f),
+                drawerContent = {
+                    androidx.compose.material3.ModalDrawerSheet(
+                        modifier = Modifier.width(300.dp),
+                        drawerShape = androidx.compose.foundation.shape.RoundedCornerShape(topEnd = 16.dp, bottomEnd = 16.dp),
+                        drawerContainerColor = NotePadTheme.tokens.bg,
+                        windowInsets = androidx.compose.foundation.layout.WindowInsets(0),
+                    ) { sidebar(false, closeDrawer, 300.dp, closeDrawer) }
+                },
+            ) {
+                Box(Modifier.fillMaxSize()) {
+                    screenContent()
+                    if (screen == Screen.Notebooks) ComposerSearch(
+                        placeholder = "Search notes, PDFs and handwriting",
+                        onSearch = { screen = Screen.Search },
+                        onNew = { newRequest++ },
+                        onImport = { importRequest++ },
+                        modifier = Modifier.align(Alignment.BottomCenter)
+                            .navigationBarsPadding()
+                            .padding(horizontal = 16.dp, vertical = 12.dp)
+                            .fillMaxWidth(),
+                    )
+                }
             }
         } else {
             screenContent()
         }
+
+        if (showAppearance) AppearanceSheet(themeMode, dynamicColor, onThemeChange, onDynamicChange) { showAppearance = false }
 
         splitRequest?.let { request ->
             SplitPairPickerSheet(
