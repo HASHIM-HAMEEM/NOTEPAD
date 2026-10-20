@@ -18,6 +18,18 @@ object PdfInvert {
     )
 
     /** Inverted like [darkPaperFilter], then compressed into the dark page tone: white paper -> #1E1E1E, black ink -> #C8C8C8. Used for every rendered page/thumbnail in Dark so covers don't go pure black. */
+    /** Row-major 4x5 matrix equivalent of [darkPreviewFilter], for Compose ColorFilter.colorMatrix. */
+    val darkPreviewMatrix: FloatArray by lazy {
+        ColorMatrix(
+            floatArrayOf(
+                1f - 2f * lr, -2f * lg, -2f * lb, 0f, 255f,
+                -2f * lr, 1f - 2f * lg, -2f * lb, 0f, 255f,
+                -2f * lr, -2f * lg, 1f - 2f * lb, 0f, 255f,
+                0f, 0f, 0f, 1f, 0f,
+            ),
+        ).apply { postConcat(ColorMatrix(floatArrayOf(0.667f, 0f, 0f, 0f, 30f, 0f, 0.667f, 0f, 0f, 30f, 0f, 0f, 0.667f, 0f, 30f, 0f, 0f, 0f, 1f, 0f))) }.array
+    }
+
     val darkPreviewFilter: ColorMatrixColorFilter = ColorMatrixColorFilter(
         ColorMatrix(
             floatArrayOf(

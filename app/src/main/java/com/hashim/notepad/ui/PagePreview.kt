@@ -395,6 +395,14 @@ fun PagePreview(
                 modifier = measuredModifier,
                 contentScale = ContentScale.FillBounds,
                 filterQuality = FilterQuality.Low,
+                // Same treatment as the drawn path: Paper multiplies the page toward the paper colour, Dark dims/inverts.
+                colorFilter = when {
+                    paperColor.luminance() < 0.5f -> androidx.compose.ui.graphics.ColorFilter.colorMatrix(
+                        androidx.compose.ui.graphics.ColorMatrix(PdfInvert.darkPreviewMatrix),
+                    )
+                    pageTint != null -> androidx.compose.ui.graphics.ColorFilter.tint(pageTint, androidx.compose.ui.graphics.BlendMode.Modulate)
+                    else -> null
+                },
             )
         } else {
             Box(measuredModifier.background(paperColor))
