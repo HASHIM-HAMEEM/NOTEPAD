@@ -1342,10 +1342,10 @@ fun EditorScreen(
             }
         Surface(
             modifier = toolbarPanelModifier,
-            shape = RoundedCornerShape(20.dp),
+            shape = RoundedCornerShape(16.dp),
             color = MaterialTheme.colorScheme.surface,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-            shadowElevation = 6.dp,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)),
+            shadowElevation = 2.dp,
         ) {
             if (verticalToolbar) {
                 Column(
@@ -1525,8 +1525,8 @@ fun EditorScreen(
                 },
             shape = CircleShape,
             color = MaterialTheme.colorScheme.surface,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-            shadowElevation = 6.dp,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)),
+            shadowElevation = 2.dp,
         ) {
             IconButton(
                 onClick = onBack,
@@ -1541,8 +1541,8 @@ fun EditorScreen(
                 .graphicsLayer { alpha = toolbarAlpha; translationX = toolbarShiftXPx; translationY = toolbarShiftYPx },
             shape = CircleShape,
             color = MaterialTheme.colorScheme.surface,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-            shadowElevation = 6.dp,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)),
+            shadowElevation = 2.dp,
         ) {
             IconButton(onClick = { pageSidebarOpen = !pageSidebarOpen }, enabled = !toolbarHidden, modifier = Modifier.size(40.dp)) {
                 Icon(Icons.Default.List, "Pages and bookmarks", tint = toolbarContentColor, modifier = Modifier.size(22.dp))
@@ -1558,8 +1558,8 @@ fun EditorScreen(
             },
             shape = RoundedCornerShape(20.dp),
             color = MaterialTheme.colorScheme.surface,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-            shadowElevation = 6.dp,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)),
+            shadowElevation = 2.dp,
         ) {
             Row(Modifier.height(40.dp), verticalAlignment = Alignment.CenterVertically) {
                 AudioRecorderButton(

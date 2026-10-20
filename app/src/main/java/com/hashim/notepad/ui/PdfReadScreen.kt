@@ -25,6 +25,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -249,7 +251,8 @@ fun PdfReadScreen(
     var searchQuery by remember { mutableStateOf("") }
     val ocrWorkName = "pdf-ocr-$notebookId"
     val ocrWorkManager = remember(context) { androidx.work.WorkManager.getInstance(context) }
-    val ocrWorkInfos by ocrWorkManager.getWorkInfosForUniqueWorkFlow(ocrWorkName).collectAsState(initial = emptyList())
+    val ocrWorkInfosOrNull by ocrWorkManager.getWorkInfosForUniqueWorkFlow(ocrWorkName).collectAsState(initial = null)
+    val ocrWorkInfos = ocrWorkInfosOrNull ?: emptyList()
     val ocrWorkInfo = ocrWorkInfos.firstOrNull { !it.state.isFinished }
     val ocrProgress = ocrWorkInfo?.progress?.getInt(PdfOcrWorker.KEY_COMPLETED, 0) ?: 0
     val ocrTotal = ocrWorkInfo?.progress?.getInt(PdfOcrWorker.KEY_TOTAL, 0) ?: 0
@@ -268,7 +271,10 @@ fun PdfReadScreen(
     var ocrResultSummary by remember { mutableStateOf<String?>(null) }
     var ocrResultText by remember { mutableStateOf("") }
     var showOcrResult by remember { mutableStateOf(false) }
-    LaunchedEffect(ocrWorkInfos) {
+    LaunchedEffect(ocrWorkInfosOrNull) {
+        // Wait for WorkManager's first real emission; the placeholder must not mark anything handled,
+        // otherwise the previous session's finished job pops the result sheet on every open.
+        if (ocrWorkInfosOrNull == null) return@LaunchedEffect
         if (!hasObservedOcrWork) {
             handledOcrWorkIds = ocrWorkInfos.map { it.id.toString() }.toSet()
             hasObservedOcrWork = true
@@ -815,13 +821,14 @@ fun PdfReadScreen(
             modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth().padding(start = sidebarWidth),
         ) {
             Surface(
-                color = MaterialTheme.colorScheme.surface,
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
                 contentColor = MaterialTheme.colorScheme.onSurface,
                 shadowElevation = 0.dp,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)),
             ) {
                 Column {
                     Row(
-                        Modifier.fillMaxWidth().padding(top = 24.dp, start = 8.dp, end = 8.dp, bottom = 8.dp),
+                        Modifier.fillMaxWidth().statusBarsPadding().padding(start = 8.dp, end = 8.dp, top = 4.dp, bottom = 6.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                     IconButton(onClick = onBack) {
@@ -1017,9 +1024,11 @@ fun PdfReadScreen(
         ) {
             Surface(
                 Modifier.fillMaxWidth().widthIn(max = 720.dp),
-                shape = RoundedCornerShape(28.dp),
-                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                shape = RoundedCornerShape(20.dp),
+                color = MaterialTheme.colorScheme.surface,
                 contentColor = MaterialTheme.colorScheme.onSurface,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)),
+                shadowElevation = 2.dp,
             ) {
                 Row(
                     Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp),
