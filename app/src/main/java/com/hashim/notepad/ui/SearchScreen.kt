@@ -59,7 +59,7 @@ fun SearchScreen(
                     Text("Search your library", style = MaterialTheme.typography.headlineMedium, color = t.ink)
                     Spacer(Modifier.height(18.dp))
                 }
-                Row(Modifier.fillMaxWidth().widthIn(max = 720.dp), verticalAlignment = Alignment.CenterVertically) {
+                Row(Modifier.widthIn(max = 720.dp).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 if (showBack) {
                     PillIconButton(Icons.AutoMirrored.Filled.ArrowBack, "Back", onClick = onBack)
                     Spacer(Modifier.width(8.dp))
@@ -100,7 +100,7 @@ fun SearchScreen(
                         textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                     )
                 }
-                else -> LazyColumn(modifier = Modifier.fillMaxWidth().widthIn(max = 760.dp).align(Alignment.CenterHorizontally), contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                else -> LazyColumn(modifier = Modifier.widthIn(max = 760.dp).fillMaxWidth().align(Alignment.CenterHorizontally), contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     itemsIndexed(hits, key = { index, hit -> "search-result:${hit.source}:${hit.pageId}:$index" }) { _, h ->
                         Surface(
                             onClick = { onOpenPage(h.notebookId, h.pageId, query) }, shape = RoundedCornerShape(12.dp),

@@ -955,7 +955,7 @@ private fun LibraryHeader(
                 ComposerSearch(
                     placeholder = "Search notes, PDFs and handwriting",
                     onSearch = onSearch, onNew = onNew, onImport = onImport,
-                    modifier = Modifier.fillMaxWidth().widthIn(max = 720.dp),
+                    modifier = Modifier.widthIn(max = 720.dp).fillMaxWidth(),
                 )
                 Spacer(Modifier.height(16.dp))
             }
