@@ -822,37 +822,32 @@ fun PdfReadScreen(
             exit = fadeOut(tween(Motion.chrome)) + slideOutVertically(tween(Motion.chrome)) { -it },
             modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth().padding(start = sidebarWidth),
         ) {
-            Surface(
-                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
-                contentColor = MaterialTheme.colorScheme.onSurface,
-                shadowElevation = 0.dp,
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)),
+            Row(
+                Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Column {
-                    Row(
-                        Modifier.fillMaxWidth().statusBarsPadding().padding(start = 8.dp, end = 8.dp, top = 4.dp, bottom = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back", tint = MaterialTheme.colorScheme.onSurface)
-                    }
-                    Column(Modifier.weight(1f).padding(end = 8.dp)) {
+                PillIconButton(Icons.AutoMirrored.Outlined.ArrowBack, "Back", onClick = onBack)
+                FloatingPill(Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 14.dp)) {
+                    Column(Modifier.weight(1f)) {
                         Text(
                             notebook?.title.orEmpty(),
                             Modifier.fillMaxWidth(),
                             maxLines = 1,
                             overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.onSurface,
+                            style = MaterialTheme.typography.titleSmall,
+                            color = NotePadTheme.tokens.ink,
                         )
                         Text(
                             "Page ${currentIndex + 1} of ${pages.size.coerceAtLeast(1)}",
                             maxLines = 1,
                             overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = NotePadTheme.tokens.ink3,
                         )
                     }
+                }
+                FloatingPill {
                     val statusLabel = when {
                         ocrWorkInfo != null -> "Recognizing $ocrProgress/$ocrTotal"
                         modelWorkInfo != null -> "Downloading model"
@@ -893,16 +888,12 @@ fun PdfReadScreen(
                         }
                     }
                     if (!compactBar) {
-                        IconButton(onClick = { sidebarOpen = !sidebarOpen; chromeVisible = true }) {
-                            Icon(Icons.AutoMirrored.Outlined.List, "Contents", modifier = Modifier.size(24.dp))
-                        }
-                        IconButton(onClick = {
+                        ToolCell(Icons.AutoMirrored.Outlined.List, "Contents", selected = sidebarOpen, onClick = { sidebarOpen = !sidebarOpen; chromeVisible = true })
+                        ToolCell(Icons.Outlined.Bookmarks, "Marks", onClick = {
                             selection?.text?.let { searchQuery = it }
                             sidebarOpen = true
                             chromeVisible = true
-                        }) {
-                            Icon(Icons.Outlined.Bookmarks, "Marks", modifier = Modifier.size(24.dp))
-                        }
+                        })
                         AudioRecorderButton(
                             repo = repo,
                             notebookId = notebookId,
@@ -910,13 +901,9 @@ fun PdfReadScreen(
                             onRecordingSelected = { selectedAudioRecordingId = it },
                         )
                     }
-                    IconButton(onClick = { onWrite(pages.getOrNull(currentIndex)?.id ?: startPageId) }) {
-                        Icon(Icons.Outlined.Edit, "Write", modifier = Modifier.size(24.dp))
-                    }
+                    ToolCell(Icons.Outlined.Edit, "Write", onClick = { onWrite(pages.getOrNull(currentIndex)?.id ?: startPageId) })
                         Box {
-                            IconButton(onClick = { showMenu = true }) {
-                            Icon(Icons.Outlined.MoreVert, "More", modifier = Modifier.size(24.dp))
-                        }
+                            ToolCell(Icons.Outlined.MoreVert, "More", onClick = { showMenu = true })
                         androidx.compose.material3.DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
                             if (compactBar) {
                                 androidx.compose.material3.DropdownMenuItem(
@@ -1027,9 +1014,7 @@ fun PdfReadScreen(
                         }
                     }
                 }
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             }
-        }
         }
 
         if (pages.size > 1) AnimatedVisibility(
@@ -1039,16 +1024,12 @@ fun PdfReadScreen(
             modifier = Modifier.align(Alignment.BottomCenter).padding(start = sidebarWidth)
                 .navigationBarsPadding().systemGesturesPadding().padding(bottom = 16.dp),
         ) {
-            Surface(
-                Modifier.fillMaxWidth().widthIn(max = 720.dp),
-                shape = RoundedCornerShape(20.dp),
-                color = MaterialTheme.colorScheme.surface,
-                contentColor = MaterialTheme.colorScheme.onSurface,
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)),
-                shadowElevation = 2.dp,
+            FloatingPill(
+                Modifier.fillMaxWidth().widthIn(max = 720.dp).padding(horizontal = 16.dp),
+                contentPadding = PaddingValues(horizontal = 16.dp),
             ) {
                 Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp),
+                    Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     PageScrubber(
@@ -1284,9 +1265,9 @@ private fun PageScrubber(
     onValueChange: (Float) -> Unit,
     onValueChangeFinished: () -> Unit,
 ) {
-    val primary = MaterialTheme.colorScheme.primary
-    val track = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.30f)
-    val surface = MaterialTheme.colorScheme.surface
+    val primary = NotePadTheme.tokens.accent
+    val track = NotePadTheme.tokens.border
+    val surface = NotePadTheme.tokens.surface
     val view = LocalView.current
     Canvas(
         modifier.fillMaxWidth().height(32.dp)
@@ -1315,10 +1296,10 @@ private fun PageScrubber(
         val end = size.width - start
         val y = size.height / 2f
         val x = start + (end - start) * (value.coerceIn(0f, maxValue.coerceAtLeast(1f)) / maxValue.coerceAtLeast(1f))
-        drawLine(track, Offset(start, y), Offset(end, y), 2.dp.toPx())
-        drawLine(primary, Offset(start, y), Offset(x, y), 2.dp.toPx())
-        drawCircle(surface, 6.dp.toPx(), Offset(x, y))
-        drawCircle(primary, 6.dp.toPx(), Offset(x, y), style = Stroke(2.dp.toPx()))
+        drawLine(track, Offset(start, y), Offset(end, y), 4.dp.toPx(), cap = androidx.compose.ui.graphics.StrokeCap.Round)
+        drawLine(primary, Offset(start, y), Offset(x, y), 4.dp.toPx(), cap = androidx.compose.ui.graphics.StrokeCap.Round)
+        drawCircle(primary, 8.dp.toPx(), Offset(x, y))
+        drawCircle(surface, 3.dp.toPx(), Offset(x, y))
     }
 }
 

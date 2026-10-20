@@ -7,6 +7,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -103,18 +105,23 @@ fun AccountScreen(onBack: () -> Unit) {
         }
     }
 
-    Scaffold(topBar = {
-        TopAppBar(title = { Text("Sync") }, navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } })
-    }) { padding ->
+    Scaffold(
+        containerColor = NotePadTheme.tokens.bg,
+        topBar = {
+            Row(Modifier.statusBarsPadding().padding(start = 12.dp, top = 8.dp)) {
+                PillIconButton(Icons.AutoMirrored.Filled.ArrowBack, "Back", onClick = onBack)
+            }
+        },
+    ) { padding ->
         Column(
             Modifier.padding(padding).imePadding().fillMaxWidth().verticalScroll(rememberScrollState()).padding(24.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Column(Modifier.widthIn(max = 560.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("Optional backup and sync", style = MaterialTheme.typography.titleLarge)
+                Text("Sync", style = MaterialTheme.typography.headlineMedium)
                 Text("No account is needed to use NotePad. Add an account only to sync your notes across devices.",
                     style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(22.dp), color = MaterialTheme.colorScheme.surfaceContainer) {
+                Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), color = NotePadTheme.tokens.surface, border = BorderStroke(Spec.hairline, NotePadTheme.tokens.border)) {
                     Column(Modifier.padding(22.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             val dot = when (accountState) {
@@ -142,7 +149,7 @@ fun AccountScreen(onBack: () -> Unit) {
                                 false -> "Signed in as ${session?.email}. Choose an encryption passphrase to start syncing."
                                 null -> "Signed in as ${session?.email}. Checking account…"
                             }
-                            SyncState.IDLE -> "Connected as\n${session?.email}"
+                            SyncState.IDLE -> "Connected as ${session?.email}"
                             SyncState.SYNCING -> "Syncing…"
                             SyncState.ERROR -> "Sync error"
                             SyncState.OFFLINE -> "Offline — changes queued"

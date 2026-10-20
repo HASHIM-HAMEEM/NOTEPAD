@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -41,6 +42,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 
 /*
  * The component sheet from the redesign brief. Every screen composes these so sizes,
@@ -276,4 +278,86 @@ fun CoverFrame(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
             .background(t.page)
             .border(Spec.hairline, t.border, RoundedCornerShape(Spec.coverRadius)),
     ) { content() }
+}
+
+/** One destination in the rail or the bottom nav pill. */
+data class NavItem(val label: String, val icon: ImageVector, val selected: Boolean, val onClick: () -> Unit)
+
+/** Phone navigation: a floating 56 dp pill with 3 destinations; the selected one gets an accentSoft capsule. */
+@Composable
+fun BottomNavPill(items: List<NavItem>, modifier: Modifier = Modifier) {
+    val t = NotePadTheme.tokens
+    FloatingPill(modifier, height = Spec.navPillHeight, contentPadding = PaddingValues(horizontal = 6.dp)) {
+        items.forEach { item ->
+            val interaction = remember { MutableInteractionSource() }
+            val capsule by animateColorAsState(if (item.selected) t.accentSoft else Color.Transparent, tween(Motion.medium, easing = Motion.emphasized), label = "capsule")
+            val tint = if (item.selected) t.accent else t.ink2
+            androidx.compose.foundation.layout.Column(
+                Modifier
+                    .weight(1f)
+                    .height(Spec.navPillHeight)
+                    .clip(RoundedCornerShape(Spec.navPillHeight / 2))
+                    .clickable(interaction, indication = null, role = Role.Tab, onClick = item.onClick)
+                    .pressable(interaction),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = androidx.compose.foundation.layout.Arrangement.Center,
+            ) {
+                Box(Modifier.width(48.dp).height(28.dp).background(capsule, CircleShape), contentAlignment = Alignment.Center) {
+                    Icon(item.icon, item.label, tint = tint, modifier = Modifier.size(20.dp))
+                }
+                Text(
+                    item.label,
+                    style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 0.sp),
+                    color = if (item.selected) t.accent else t.ink3,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+            }
+        }
+    }
+}
+
+/** Tablet navigation: a 72 dp icon rail with the app mark on top and an optional bottom action. */
+@Composable
+fun NavRail(items: List<NavItem>, modifier: Modifier = Modifier, bottom: (@Composable () -> Unit)? = null) {
+    val t = NotePadTheme.tokens
+    androidx.compose.foundation.layout.Column(
+        modifier
+            .width(72.dp)
+            .fillMaxHeight()
+            .background(t.bg)
+            .border(0.dp, Color.Transparent)
+            .padding(vertical = 16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Box(Modifier.size(40.dp).background(t.accent, RoundedCornerShape(12.dp)), contentAlignment = Alignment.Center) {
+            Text("N", color = t.onAccent, style = MaterialTheme.typography.titleLarge)
+        }
+        androidx.compose.foundation.layout.Spacer(Modifier.height(24.dp))
+        items.forEach { item ->
+            val interaction = remember { MutableInteractionSource() }
+            val fill by animateColorAsState(if (item.selected) t.accentSoft else Color.Transparent, tween(Motion.medium, easing = Motion.emphasized), label = "railFill")
+            androidx.compose.foundation.layout.Column(
+                Modifier
+                    .width(64.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .clickable(interaction, indication = null, role = Role.Tab, onClick = item.onClick)
+                    .pressable(interaction)
+                    .padding(vertical = 6.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Box(Modifier.size(40.dp).background(fill, RoundedCornerShape(12.dp)), contentAlignment = Alignment.Center) {
+                    Icon(item.icon, item.label, tint = if (item.selected) t.accent else t.ink2, modifier = Modifier.size(Spec.glyph))
+                }
+                Text(
+                    item.label,
+                    style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 0.sp),
+                    color = if (item.selected) t.accent else t.ink3,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+            }
+            androidx.compose.foundation.layout.Spacer(Modifier.height(8.dp))
+        }
+        androidx.compose.foundation.layout.Spacer(Modifier.weight(1f))
+        bottom?.invoke()
+    }
 }

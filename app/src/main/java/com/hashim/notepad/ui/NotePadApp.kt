@@ -31,6 +31,9 @@ import androidx.compose.material.icons.outlined.Cloud
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.Alignment
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Text
@@ -386,34 +389,24 @@ fun NotePadApp(
                     onThemeChange = onThemeChange,
                     onDynamicChange = onDynamicChange,
                 )
-                VerticalDivider(Modifier.fillMaxHeight(), thickness = 1.dp, color = MaterialTheme.colorScheme.outlineVariant)
                 Box(Modifier.weight(1f).fillMaxSize()) {
                     screenContent()
                 }
             }
         } else if (showNavigationBar) {
-            Column(Modifier.fillMaxSize()) {
-                Box(Modifier.weight(1f).fillMaxWidth()) { screenContent() }
-                NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
-                    NavigationBarItem(
-                        selected = screen == Screen.Notebooks,
-                        onClick = { screen = Screen.Notebooks },
-                        icon = { Icon(Icons.Outlined.Book, contentDescription = "Library") },
-                        label = { Text("Library") },
-                    )
-                    NavigationBarItem(
-                        selected = screen == Screen.Search,
-                        onClick = { screen = Screen.Search },
-                        icon = { Icon(Icons.Outlined.Search, contentDescription = "Search") },
-                        label = { Text("Search") },
-                    )
-                    NavigationBarItem(
-                        selected = screen == Screen.Account,
-                        onClick = { screen = Screen.Account },
-                        icon = { Icon(Icons.Outlined.Cloud, contentDescription = "Sync") },
-                        label = { Text("Sync") },
-                    )
-                }
+            Box(Modifier.fillMaxSize()) {
+                screenContent()
+                BottomNavPill(
+                    items = listOf(
+                        NavItem("Library", Icons.Outlined.Book, screen == Screen.Notebooks) { screen = Screen.Notebooks },
+                        NavItem("Search", Icons.Outlined.Search, screen == Screen.Search) { screen = Screen.Search },
+                        NavItem("Sync", Icons.Outlined.Cloud, screen == Screen.Account) { screen = Screen.Account },
+                    ),
+                    modifier = Modifier.align(Alignment.BottomStart)
+                        .navigationBarsPadding()
+                        .padding(start = 16.dp, bottom = 16.dp, end = if (screen == Screen.Notebooks) 100.dp else 16.dp)
+                        .fillMaxWidth(),
+                )
             }
         } else {
             screenContent()

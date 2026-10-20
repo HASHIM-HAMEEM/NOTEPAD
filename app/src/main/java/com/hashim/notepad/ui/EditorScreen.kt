@@ -32,6 +32,20 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.Redo
+import androidx.compose.material.icons.automirrored.outlined.Undo
+import androidx.compose.material.icons.outlined.BorderColor
+import androidx.compose.material.icons.outlined.Brush
+import androidx.compose.material.icons.outlined.CleaningServices
+import androidx.compose.material.icons.outlined.CropLandscape
+import androidx.compose.material.icons.outlined.Draw
+import androidx.compose.material.icons.outlined.Flare
+import androidx.compose.material.icons.outlined.Gesture
+import androidx.compose.material.icons.outlined.HighlightAlt
+import androidx.compose.material.icons.outlined.HistoryEdu
+import androidx.compose.material.icons.outlined.Straighten
+import androidx.compose.material.icons.outlined.TextFields
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.Undo
@@ -381,11 +395,7 @@ fun EditorScreen(
     val toolbarX = remember { Animatable(0f) }
     val toolbarY = remember { Animatable(0f) }
     val darkTheme = MaterialTheme.colorScheme.isDark
-    val toolbarColor = when {
-        darkTheme -> Color(0xFF111111)
-        LocalThemeMode.current == ThemeMode.SEPIA -> MaterialTheme.colorScheme.surfaceContainer
-        else -> Color(0xFFEDEDED)
-    }
+    val toolbarColor = NotePadTheme.tokens.bg
     val deskColor = toolbarColor
     val activeBrushSettings = when (tool) {
         InkTool.HIGHLIGHTER -> highlighterSettings
@@ -911,7 +921,8 @@ fun EditorScreen(
 
     val statusBarHeight = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val navigationBarHeight = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
-    val toolbarContentColor = if (darkTheme) Color(0xFFEDEDED) else Color(0xFF333333)
+    val t = NotePadTheme.tokens
+    val toolbarContentColor = t.ink
     val displayedRecentColors = (recentColors + listOf(0xFFFFFFFF.toInt(), 0xFF1B2A4E.toInt()))
         .distinct()
         .take(2)
@@ -925,10 +936,10 @@ fun EditorScreen(
         val compactToolbar = maxWidth < 600.dp
         val narrowToolbar = maxWidth < 1024.dp
         val toolbarWidth = when {
-            verticalToolbar -> 76.dp
+            verticalToolbar -> TOOL_PILL_HEIGHT
             compactToolbar -> (maxWidth - 24.dp).coerceAtLeast(0.dp)
             narrowToolbar -> (maxWidth - TOP_CHROME_CLEARANCE * 2).coerceAtLeast(320.dp)
-            else -> minOf(740.dp, (maxWidth - TOP_CHROME_CLEARANCE * 2).coerceAtLeast(0.dp))
+            else -> minOf(760.dp, (maxWidth - TOP_CHROME_CLEARANCE * 2).coerceAtLeast(0.dp))
         }
         val sideToolbarClearance = if (verticalToolbar) 48.dp else 0.dp
         val pageIndicatorClearance = if (toolbarEdge == EditorToolbarEdge.START) 64.dp else 0.dp
@@ -1041,52 +1052,63 @@ fun EditorScreen(
         )
 
         val shelfTools: @Composable () -> Unit = {
-            listOf(PenType.BALLPOINT, PenType.PENCIL, PenType.FOUNTAIN, PenType.MARKER).forEach { type ->
-                val settings = penSettings[type] ?: ToolBrushSettings(0xFF000000.toInt(), 2.5f, type.defaultOpacity())
-                Box {
-                    ShelfCanvasItem(
-                        label = type.label,
-                        style = type.toShelfStyle(),
-                        selected = tool == InkTool.PEN && pen == type,
+            val penTypes = listOf(PenType.BALLPOINT, PenType.PENCIL, PenType.FOUNTAIN, PenType.MARKER, PenType.CALLIGRAPHY)
+            val currentPenSettings = penSettings[pen] ?: ToolBrushSettings(0xFF000000.toInt(), 2.5f, pen.defaultOpacity())
+            Box {
+                ToolCell(
+                    icon = pen.toolIcon(),
+                    contentDescription = pen.label,
+                    selected = tool == InkTool.PEN,
+                    enabled = !toolbarHidden,
+                    indicator = Color(currentPenSettings.color),
+                    onClick = { if (tool == InkTool.PEN) penPopover = pen else selectPen(pen) },
+                )
+                val popoverType = penPopover
+                ToolbarPopover(
+                    expanded = popoverType != null,
+                    edge = toolbarEdge,
+                    onDismissRequest = { penPopover = null },
+                ) {
+                    val type = popoverType ?: pen
+                    val settings = penSettings[type] ?: ToolBrushSettings(0xFF000000.toInt(), 2.5f, type.defaultOpacity())
+                    BrushSettingsPopover(
+                        title = type.label,
+                        favoritePresets = favoritePresets,
+                        onAddFavorite = { addFavorite(InkTool.PEN, type, settings) },
+                        onSelectFavorite = ::applyFavorite,
+                        onRemoveFavorite = ::removeFavorite,
                         color = settings.color,
+                        brushSize = settings.size,
+                        previewStrokeSize = settings.size * type.previewScale(),
+                        onSizeChange = { value -> updateActiveBrushSettings { it.copy(size = value) } },
                         opacity = settings.opacity,
-                        enabled = !toolbarHidden,
-                        vertical = verticalToolbar,
-                        edge = toolbarEdge,
-                        onClick = { selectPen(type) },
+                        onOpacityChange = { value -> updateActiveBrushSettings { it.copy(opacity = value) } },
+                        showOpacity = true,
+                        topContent = {
+                            Row(
+                                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(bottom = 8.dp),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
+                                penTypes.forEach { candidate ->
+                                    AppChip(
+                                        text = candidate.label,
+                                        selected = candidate == type,
+                                        leading = candidate.toolIcon(),
+                                        onClick = { selectPen(candidate); penPopover = candidate },
+                                    )
+                                }
+                            }
+                        },
                     )
-                    ToolbarPopover(
-                        expanded = penPopover == type,
-                        edge = toolbarEdge,
-                        onDismissRequest = { penPopover = null },
-                    ) {
-                        BrushSettingsPopover(
-                            title = type.label,
-                            favoritePresets = favoritePresets,
-                            onAddFavorite = { addFavorite(InkTool.PEN, type, settings) },
-                            onSelectFavorite = ::applyFavorite,
-                            onRemoveFavorite = ::removeFavorite,
-                            color = settings.color,
-                            brushSize = settings.size,
-                            previewStrokeSize = settings.size * type.previewScale(),
-                            onSizeChange = { value -> updateActiveBrushSettings { it.copy(size = value) } },
-                            opacity = settings.opacity,
-                            onOpacityChange = { value -> updateActiveBrushSettings { it.copy(opacity = value) } },
-                            showOpacity = true,
-                        )
-                    }
                 }
             }
             Box {
-                ShelfCanvasItem(
-                    label = "Highlighter",
-                    style = ShelfDrawing.HIGHLIGHTER,
+                ToolCell(
+                    icon = Icons.Outlined.BorderColor,
+                    contentDescription = "Highlighter",
                     selected = tool == InkTool.HIGHLIGHTER,
-                    color = highlighterSettings.color,
-                    opacity = highlighterSettings.opacity,
                     enabled = !toolbarHidden,
-                    vertical = verticalToolbar,
-                    edge = toolbarEdge,
+                    indicator = Color(highlighterSettings.color),
                     onClick = { selectHighlighter() },
                 )
                 ToolbarPopover(
@@ -1122,17 +1144,13 @@ fun EditorScreen(
                 }
             }
             Box {
-                ShelfCanvasItem(
-                    label = "Tape",
-                    style = ShelfDrawing.TAPE,
+                ToolCell(
+                    icon = Icons.Outlined.CropLandscape,
+                    contentDescription = "Tape",
                     selected = tool == InkTool.TAPE,
-                    color = tapeSettings.color,
                     enabled = !toolbarHidden,
-                    vertical = verticalToolbar,
-                    edge = toolbarEdge,
-                    onClick = {
-                        if (tool == InkTool.TAPE) tapePopover = true else selectTool(InkTool.TAPE)
-                    },
+                    indicator = Color(tapeSettings.color),
+                    onClick = { if (tool == InkTool.TAPE) tapePopover = true else selectTool(InkTool.TAPE) },
                 )
                 ToolbarPopover(
                     expanded = tapePopover,
@@ -1147,94 +1165,31 @@ fun EditorScreen(
                     )
                 }
             }
-            val calligraphySettings = penSettings[PenType.CALLIGRAPHY]
-                ?: ToolBrushSettings(0xFF000000.toInt(), 2.5f, PenType.CALLIGRAPHY.defaultOpacity())
-            Box {
-                ShelfCanvasItem(
-                    label = PenType.CALLIGRAPHY.label,
-                    style = ShelfDrawing.CALLIGRAPHY,
-                    selected = tool == InkTool.PEN && pen == PenType.CALLIGRAPHY,
-                    color = calligraphySettings.color,
-                    opacity = calligraphySettings.opacity,
-                    enabled = !toolbarHidden,
-                    vertical = verticalToolbar,
-                    edge = toolbarEdge,
-                    onClick = { selectPen(PenType.CALLIGRAPHY) },
-                )
-                ToolbarPopover(
-                    expanded = penPopover == PenType.CALLIGRAPHY,
-                    edge = toolbarEdge,
-                    onDismissRequest = { penPopover = null },
-                ) {
-                        BrushSettingsPopover(
-                            title = PenType.CALLIGRAPHY.label,
-                            favoritePresets = favoritePresets,
-                            onAddFavorite = { addFavorite(InkTool.PEN, PenType.CALLIGRAPHY, calligraphySettings) },
-                            onSelectFavorite = ::applyFavorite,
-                            onRemoveFavorite = ::removeFavorite,
-                            color = calligraphySettings.color,
-                        brushSize = calligraphySettings.size,
-                        previewStrokeSize = calligraphySettings.size * PenType.CALLIGRAPHY.previewScale(),
-                        onSizeChange = { value -> updateActiveBrushSettings { it.copy(size = value) } },
-                        opacity = calligraphySettings.opacity,
-                        onOpacityChange = { value -> updateActiveBrushSettings { it.copy(opacity = value) } },
-                        showOpacity = true,
-                    )
-                }
-            }
-            ShelfCanvasItem(
-                "Eraser", ShelfDrawing.ERASER, tool == InkTool.ERASER, color,
-                enabled = !toolbarHidden, vertical = verticalToolbar, edge = toolbarEdge,
-                onClick = { selectTool(InkTool.ERASER) },
-            )
-            ShelfCanvasItem(
-                "Lasso", ShelfDrawing.LASSO, tool == InkTool.LASSO, color,
-                enabled = !toolbarHidden, vertical = verticalToolbar, edge = toolbarEdge,
-                onClick = { selectTool(InkTool.LASSO) },
-            )
-            ShelfCanvasItem(
-                "Text", ShelfDrawing.TEXT, tool == InkTool.TEXT, color,
-                enabled = !toolbarHidden, vertical = verticalToolbar, edge = toolbarEdge,
-                onClick = { selectTool(InkTool.TEXT) },
-            )
-            ShelfCanvasItem(
-                "Ruler", ShelfDrawing.RULER, rulerVisible, color,
-                enabled = !toolbarHidden, vertical = verticalToolbar, edge = toolbarEdge,
+            ToolCell(Icons.Outlined.CleaningServices, "Eraser", selected = tool == InkTool.ERASER, enabled = !toolbarHidden, onClick = { selectTool(InkTool.ERASER) })
+            ToolCell(Icons.Outlined.HighlightAlt, "Lasso", selected = tool == InkTool.LASSO, enabled = !toolbarHidden, onClick = { selectTool(InkTool.LASSO) })
+            ToolCell(Icons.Outlined.TextFields, "Text", selected = tool == InkTool.TEXT, enabled = !toolbarHidden, onClick = { selectTool(InkTool.TEXT) })
+            ToolCell(
+                Icons.Outlined.Straighten, "Ruler", selected = rulerVisible, enabled = !toolbarHidden,
                 onClick = {
                     rulerVisible = !rulerVisible
                     haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                 },
             )
-            ShelfCanvasItem(
-                "Laser", ShelfDrawing.LASER, tool == InkTool.LASER, color,
-                enabled = !toolbarHidden, vertical = verticalToolbar, edge = toolbarEdge,
-                onClick = { selectTool(InkTool.LASER) },
-            )
+            ToolCell(Icons.Outlined.Flare, "Laser", selected = tool == InkTool.LASER, enabled = !toolbarHidden, onClick = { selectTool(InkTool.LASER) })
         }
         val colorControls: @Composable () -> Unit = {
             if (verticalToolbar) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Box(Modifier.padding(top = 2.dp)) {
-                        IconButton(
-                            onClick = { recolorSelectionMode = false; colorPop = true },
-                            enabled = !toolbarHidden,
-                            modifier = Modifier.size(36.dp),
-                        ) {
-                            ColorWheelButton(color)
-                        }
+                        CurrentColorCell(color, enabled = !toolbarHidden) { recolorSelectionMode = false; colorPop = true }
                         ToolbarPopover(
                             expanded = colorPop,
                             edge = toolbarEdge,
                             onDismissRequest = { colorPop = false; recolorSelectionMode = false },
                         ) {
-                            Surface(shape = RoundedCornerShape(22.dp), color = MaterialTheme.colorScheme.surfaceContainer, shadowElevation = 6.dp) {
+                            PopoverCard {
                                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                    Text(
-                                        "Colour",
-                                        Modifier.padding(4.dp),
-                                        style = MaterialTheme.typography.titleSmall,
-                                        fontWeight = FontWeight.Bold,
-                                    )
+                                    Text("Colour", Modifier.padding(4.dp), style = MaterialTheme.typography.titleSmall)
                                     PALETTE.chunked(6).forEach { row ->
                                         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                                             row.forEach { swatch ->
@@ -1252,27 +1207,16 @@ fun EditorScreen(
                 }
             } else {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.padding(start = 7.dp)) {
-                        IconButton(
-                            onClick = { recolorSelectionMode = false; colorPop = true },
-                            enabled = !toolbarHidden,
-                            modifier = Modifier.size(40.dp),
-                        ) {
-                            ColorWheelButton(color)
-                        }
+                    Box {
+                        CurrentColorCell(color, enabled = !toolbarHidden) { recolorSelectionMode = false; colorPop = true }
                         ToolbarPopover(
                             expanded = colorPop,
                             edge = toolbarEdge,
                             onDismissRequest = { colorPop = false; recolorSelectionMode = false },
                         ) {
-                            Surface(shape = RoundedCornerShape(22.dp), color = MaterialTheme.colorScheme.surfaceContainer, shadowElevation = 6.dp) {
+                            PopoverCard {
                                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                    Text(
-                                        "Colour",
-                                        Modifier.padding(4.dp),
-                                        style = MaterialTheme.typography.titleSmall,
-                                        fontWeight = FontWeight.Bold,
-                                    )
+                                    Text("Colour", Modifier.padding(4.dp), style = MaterialTheme.typography.titleSmall)
                                     PALETTE.chunked(6).forEach { row ->
                                         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                                             row.forEach { swatch ->
@@ -1285,46 +1229,22 @@ fun EditorScreen(
                         }
                     }
                     displayedRecentColors.forEach { swatch ->
-                        ColorDot(swatch, false, 40.dp, enabled = !toolbarHidden) { chooseColor(swatch) }
+                        ColorDot(swatch, false, 36.dp, enabled = !toolbarHidden) { chooseColor(swatch) }
                     }
                 }
             }
         }
         val historyControls: @Composable () -> Unit = {
+            val undoCell: @Composable () -> Unit = {
+                ToolCell(Icons.AutoMirrored.Outlined.Undo, "Undo", enabled = canUndo && !toolbarHidden, onClick = { surface?.undo() })
+            }
+            val redoCell: @Composable () -> Unit = {
+                ToolCell(Icons.AutoMirrored.Outlined.Redo, "Redo", enabled = canRedo && !toolbarHidden, onClick = { surface?.redo() })
+            }
             if (verticalToolbar) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    IconButton(
-                        enabled = canUndo && !toolbarHidden,
-                        onClick = { surface?.undo() },
-                        modifier = Modifier.size(36.dp),
-                    ) {
-                        HistoryArrow(redo = false, tint = toolbarContentColor.copy(alpha = if (canUndo) 1f else 0.38f))
-                    }
-                    IconButton(
-                        enabled = canRedo && !toolbarHidden,
-                        onClick = { surface?.redo() },
-                        modifier = Modifier.size(36.dp),
-                    ) {
-                        HistoryArrow(redo = true, tint = toolbarContentColor.copy(alpha = if (canRedo) 1f else 0.38f))
-                    }
-                }
+                Column(horizontalAlignment = Alignment.CenterHorizontally) { undoCell(); redoCell() }
             } else {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(
-                        enabled = canUndo && !toolbarHidden,
-                        onClick = { surface?.undo() },
-                        modifier = Modifier.size(40.dp),
-                    ) {
-                        HistoryArrow(redo = false, tint = toolbarContentColor.copy(alpha = if (canUndo) 1f else 0.38f))
-                    }
-                    IconButton(
-                        enabled = canRedo && !toolbarHidden,
-                        onClick = { surface?.redo() },
-                        modifier = Modifier.size(40.dp),
-                    ) {
-                        HistoryArrow(redo = true, tint = toolbarContentColor.copy(alpha = if (canRedo) 1f else 0.38f))
-                    }
-                }
+                Row(verticalAlignment = Alignment.CenterVertically) { undoCell(); redoCell() }
             }
         }
         val toolbarPanelModifier = Modifier
@@ -1333,7 +1253,7 @@ fun EditorScreen(
                 else IntOffset(toolbarX.value.roundToInt(), toolbarY.value.roundToInt())
             }
             .width(toolbarWidth)
-            .then(if (verticalToolbar) Modifier.heightIn(max = toolbarSafeHeight) else Modifier.height(76.dp))
+            .then(if (verticalToolbar) Modifier.heightIn(max = toolbarSafeHeight) else Modifier.height(TOOL_PILL_HEIGHT))
             .onSizeChanged { if (toolbarSize != it) toolbarSize = it }
             .graphicsLayer {
                 alpha = if (toolbarPositionReady) toolbarAlpha else 0f
@@ -1342,10 +1262,11 @@ fun EditorScreen(
             }
         Surface(
             modifier = toolbarPanelModifier,
-            shape = RoundedCornerShape(16.dp),
-            color = MaterialTheme.colorScheme.surface,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)),
-            shadowElevation = 2.dp,
+            shape = RoundedCornerShape(TOOL_PILL_HEIGHT / 2),
+            color = t.surface,
+            contentColor = t.ink,
+            border = BorderStroke(Spec.hairline, t.border),
+            shadowElevation = Spec.pillShadow,
         ) {
             if (verticalToolbar) {
                 Column(
@@ -1388,18 +1309,18 @@ fun EditorScreen(
                     Column(horizontalAlignment = Alignment.CenterHorizontally) { shelfTools() }
                     Box(
                         Modifier.padding(vertical = 4.dp).fillMaxWidth(0.4f).height(1.dp)
-                            .background(MaterialTheme.colorScheme.outlineVariant),
+                            .background(t.border),
                     )
                     colorControls()
                     Box(
                         Modifier.padding(vertical = 4.dp).fillMaxWidth(0.4f).height(1.dp)
-                            .background(MaterialTheme.colorScheme.outlineVariant),
+                            .background(t.border),
                     )
                     historyControls()
                 }
             } else {
                 Row(
-                Modifier.width(toolbarWidth).height(76.dp).padding(horizontal = 6.dp),
+                Modifier.width(toolbarWidth).height(TOOL_PILL_HEIGHT).padding(horizontal = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     EditorToolbarGrip(
@@ -1448,7 +1369,7 @@ fun EditorScreen(
                         }
                         Box(
                             Modifier.padding(horizontal = 6.dp).fillMaxHeight(0.4f).width(1.dp)
-                                .background(MaterialTheme.colorScheme.outlineVariant),
+                                .background(t.border),
                         )
                         historyControls()
                     } else {
@@ -1458,12 +1379,12 @@ fun EditorScreen(
                         ) { shelfTools() }
                         Box(
                             Modifier.padding(horizontal = 8.dp).fillMaxHeight(0.4f).width(1.dp)
-                                .background(MaterialTheme.colorScheme.outlineVariant),
+                                .background(t.border),
                         )
                         colorControls()
                         Box(
                             Modifier.padding(horizontal = 8.dp).fillMaxHeight(0.4f).width(1.dp)
-                                .background(MaterialTheme.colorScheme.outlineVariant),
+                                .background(t.border),
                         )
                         historyControls()
                     }
@@ -1524,9 +1445,9 @@ fun EditorScreen(
                     translationY = toolbarShiftYPx
                 },
             shape = CircleShape,
-            color = MaterialTheme.colorScheme.surface,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)),
-            shadowElevation = 2.dp,
+            color = t.surface,
+            border = BorderStroke(Spec.hairline, t.border),
+            shadowElevation = Spec.pillShadow,
         ) {
             IconButton(
                 onClick = onBack,
@@ -1540,9 +1461,9 @@ fun EditorScreen(
             modifier = Modifier.offset { IntOffset(with(density) { 60.dp.roundToPx() }, safeTopPx) }
                 .graphicsLayer { alpha = toolbarAlpha; translationX = toolbarShiftXPx; translationY = toolbarShiftYPx },
             shape = CircleShape,
-            color = MaterialTheme.colorScheme.surface,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)),
-            shadowElevation = 2.dp,
+            color = t.surface,
+            border = BorderStroke(Spec.hairline, t.border),
+            shadowElevation = Spec.pillShadow,
         ) {
             IconButton(onClick = { pageSidebarOpen = !pageSidebarOpen }, enabled = !toolbarHidden, modifier = Modifier.size(40.dp)) {
                 Icon(Icons.Default.List, "Pages and bookmarks", tint = toolbarContentColor, modifier = Modifier.size(22.dp))
@@ -1556,10 +1477,10 @@ fun EditorScreen(
                 translationX = toolbarShiftXPx
                 translationY = toolbarShiftYPx
             },
-            shape = RoundedCornerShape(20.dp),
-            color = MaterialTheme.colorScheme.surface,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)),
-            shadowElevation = 2.dp,
+            shape = CircleShape,
+            color = t.surface,
+            border = BorderStroke(Spec.hairline, t.border),
+            shadowElevation = Spec.pillShadow,
         ) {
             Row(Modifier.height(40.dp), verticalAlignment = Alignment.CenterVertically) {
                 AudioRecorderButton(
@@ -1594,8 +1515,8 @@ fun EditorScreen(
                         expanded = morePop,
                         onDismissRequest = { morePop = false },
                         modifier = Modifier.width(320.dp),
-                        shape = RoundedCornerShape(22.dp),
-                        containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                        shape = RoundedCornerShape(16.dp),
+                        containerColor = t.surface,
                     ) {
                         if (tabletWidth && onOpenSideBySide != null) {
                             DropdownMenuItem(
@@ -2567,15 +2488,17 @@ private fun BrushSettingsPopover(
     alwaysStraight: Boolean? = null,
     onAlwaysStraightChange: ((Boolean) -> Unit)? = null,
     bottomContent: (@Composable () -> Unit)? = null,
+    topContent: (@Composable () -> Unit)? = null,
 ) {
     val sliderColors = SliderDefaults.colors(
         activeTrackColor = MaterialTheme.colorScheme.onSurface,
         inactiveTrackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f),
         thumbColor = MaterialTheme.colorScheme.onSurface,
     )
-    Surface(shape = RoundedCornerShape(22.dp), color = MaterialTheme.colorScheme.surfaceContainer) {
-        Column(Modifier.width(264.dp).padding(16.dp)) {
-        Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+    PopoverCard {
+        Column(Modifier.width(272.dp).padding(16.dp)) {
+        Text(title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(bottom = 8.dp))
+        topContent?.invoke()
         FavoritePresetsRow(favoritePresets, onAddFavorite, onSelectFavorite, onRemoveFavorite)
         Canvas(Modifier.fillMaxWidth().height(40.dp)) {
             drawLine(
@@ -2764,6 +2687,37 @@ private fun TapeSettingsPopover(
     }
 }
 
+private val TOOL_PILL_HEIGHT = 52.dp
+
+private fun PenType.toolIcon(): ImageVector = when (this) {
+    PenType.BALLPOINT -> Icons.Outlined.Edit
+    PenType.PENCIL -> Icons.Outlined.Draw
+    PenType.FOUNTAIN -> Icons.Outlined.Gesture
+    PenType.MARKER -> Icons.Outlined.Brush
+    PenType.CALLIGRAPHY -> Icons.Outlined.HistoryEdu
+}
+
+/** The active colour as a 22 dp disc inside a 44 dp hit target; tap opens the palette. */
+@Composable
+private fun CurrentColorCell(color: Int, enabled: Boolean, onClick: () -> Unit) {
+    val t = NotePadTheme.tokens
+    val interaction = remember { MutableInteractionSource() }
+    Box(
+        Modifier.size(Spec.hit)
+            .clip(RoundedCornerShape(Spec.cellRadius))
+            .clickable(interaction, indication = null, enabled = enabled, onClick = onClick)
+            .pressable(interaction, enabled)
+            .semantics { contentDescription = "Colour" },
+        contentAlignment = Alignment.Center,
+    ) {
+        Canvas(Modifier.size(24.dp)) {
+            val r = size.minDimension / 2f
+            drawCircle(Color(color), r - 1.dp.toPx())
+            drawCircle(t.border, r - 0.5.dp.toPx(), style = DrawStroke(width = 1.dp.toPx()))
+        }
+    }
+}
+
 @Composable
 private fun ColorWheelButton(color: Int) {
     val gap = if (MaterialTheme.colorScheme.isDark) Color(0xFF111111) else Color.White
@@ -2814,8 +2768,8 @@ private fun ColorDot(
 ) {
     val ring by animateFloatAsState(if (selected) 1f else 0f, tween(Motion.press, easing = Motion.emphasized), label = "ring")
     val hairline = android.graphics.Color.luminance(argb) > 0.78f
-    val ringColor = MaterialTheme.colorScheme.onSurface
-    val hairlineColor = MaterialTheme.colorScheme.outlineVariant
+    val ringColor = NotePadTheme.tokens.ink
+    val hairlineColor = NotePadTheme.tokens.border
     Canvas(Modifier.size(dotSize).clip(CircleShape).clickable(enabled = enabled, onClick = onClick)) {
         val radius = size.minDimension / 2f
         val dotRadius = radius * 0.72f
