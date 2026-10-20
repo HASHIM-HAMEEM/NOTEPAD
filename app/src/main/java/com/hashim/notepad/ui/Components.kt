@@ -55,7 +55,7 @@ object Spec {
     val toolCell = 36.dp
     val hit = 44.dp
     val glyph = 22.dp
-    val buttonRadius = 8.dp
+    val buttonRadius = 22.dp
     val cellRadius = 8.dp
     val coverRadius = 8.dp
     val dialogRadius = 20.dp
@@ -106,7 +106,7 @@ fun FloatingPill(
     }
 }
 
-/** A 36 dp cell inside a pill with a 44 dp hit target; selected cells get the accentSoft fill. */
+/** A 36 dp cell inside a pill with a 44 dp hit target; selected cells get the neutral surface2 fill (ChatGPT-style selection, no accent). */
 @Composable
 fun ToolCell(
     icon: ImageVector,
@@ -120,11 +120,11 @@ fun ToolCell(
 ) {
     val t = NotePadTheme.tokens
     val interaction = remember { MutableInteractionSource() }
-    val fill by animateColorAsState(if (selected) t.accentSoft else Color.Transparent, tween(Motion.medium, easing = Motion.emphasized), label = "fill")
+    val fill by animateColorAsState(if (selected) t.surface2 else Color.Transparent, tween(Motion.medium, easing = Motion.emphasized), label = "fill")
     val glyph = when {
         !enabled -> t.ink3.copy(alpha = 0.6f)
         tint != null -> tint
-        selected -> t.accent
+        selected -> t.ink
         else -> t.ink2
     }
     Box(
@@ -178,7 +178,7 @@ fun PillIconButton(icon: ImageVector, contentDescription: String, modifier: Modi
 
 enum class ButtonKind { Primary, Tonal, Outlined, Ghost }
 
-/** 44 dp, 12 dp radius. Primary = accent, Tonal = accentSoft, Outlined = surface + hairline. */
+/** 44 dp pill. Primary = ink fill (ChatGPT black button), Tonal = surface2, Outlined = surface + hairline. */
 @Composable
 fun AppButton(
     text: String,
@@ -192,10 +192,10 @@ fun AppButton(
     val interaction = remember { MutableInteractionSource() }
     val (container, content, border) = when {
         !enabled -> Triple(t.surface2, t.ink3, null)
-        kind == ButtonKind.Primary -> Triple(t.accent, t.onAccent, null)
-        kind == ButtonKind.Tonal -> Triple(t.accentSoft, t.accent, null)
+        kind == ButtonKind.Primary -> Triple(t.ink, t.bg, null)
+        kind == ButtonKind.Tonal -> Triple(t.surface2, t.ink, null)
         kind == ButtonKind.Outlined -> Triple(t.surface, t.ink, BorderStroke(Spec.hairline, t.border))
-        else -> Triple(Color.Transparent, t.accent, null)
+        else -> Triple(Color.Transparent, t.ink, null)
     }
     Surface(
         onClick = onClick,
@@ -290,8 +290,8 @@ fun BottomNavPill(items: List<NavItem>, modifier: Modifier = Modifier) {
     FloatingPill(modifier, height = Spec.navPillHeight, contentPadding = PaddingValues(horizontal = 6.dp)) {
         items.forEach { item ->
             val interaction = remember { MutableInteractionSource() }
-            val capsule by animateColorAsState(if (item.selected) t.accentSoft else Color.Transparent, tween(Motion.medium, easing = Motion.emphasized), label = "capsule")
-            val tint = if (item.selected) t.accent else t.ink2
+            val capsule by animateColorAsState(if (item.selected) t.surface2 else Color.Transparent, tween(Motion.medium, easing = Motion.emphasized), label = "capsule")
+            val tint = if (item.selected) t.ink else t.ink2
             androidx.compose.foundation.layout.Column(
                 Modifier
                     .weight(1f)
@@ -308,7 +308,7 @@ fun BottomNavPill(items: List<NavItem>, modifier: Modifier = Modifier) {
                 Text(
                     item.label,
                     style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 0.sp),
-                    color = if (item.selected) t.accent else t.ink3,
+                    color = if (item.selected) t.ink else t.ink3,
                     modifier = Modifier.padding(top = 2.dp),
                 )
             }
@@ -329,13 +329,13 @@ fun NavRail(items: List<NavItem>, modifier: Modifier = Modifier, bottom: (@Compo
             .padding(vertical = 16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Box(Modifier.size(40.dp).background(t.accent, RoundedCornerShape(12.dp)), contentAlignment = Alignment.Center) {
+        Box(Modifier.size(40.dp).background(t.ink, RoundedCornerShape(12.dp)), contentAlignment = Alignment.Center) {
             Text("N", color = t.onAccent, style = MaterialTheme.typography.titleLarge)
         }
         androidx.compose.foundation.layout.Spacer(Modifier.height(24.dp))
         items.forEach { item ->
             val interaction = remember { MutableInteractionSource() }
-            val fill by animateColorAsState(if (item.selected) t.accentSoft else Color.Transparent, tween(Motion.medium, easing = Motion.emphasized), label = "railFill")
+            val fill by animateColorAsState(if (item.selected) t.surface2 else Color.Transparent, tween(Motion.medium, easing = Motion.emphasized), label = "railFill")
             androidx.compose.foundation.layout.Column(
                 Modifier
                     .width(64.dp)
@@ -346,12 +346,12 @@ fun NavRail(items: List<NavItem>, modifier: Modifier = Modifier, bottom: (@Compo
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Box(Modifier.size(40.dp).background(fill, RoundedCornerShape(12.dp)), contentAlignment = Alignment.Center) {
-                    Icon(item.icon, item.label, tint = if (item.selected) t.accent else t.ink2, modifier = Modifier.size(Spec.glyph))
+                    Icon(item.icon, item.label, tint = if (item.selected) t.ink else t.ink2, modifier = Modifier.size(Spec.glyph))
                 }
                 Text(
                     item.label,
                     style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 0.sp),
-                    color = if (item.selected) t.accent else t.ink3,
+                    color = if (item.selected) t.ink else t.ink3,
                     modifier = Modifier.padding(top = 2.dp),
                 )
             }

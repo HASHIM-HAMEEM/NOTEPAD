@@ -441,7 +441,7 @@ fun PagePreview(
                     val m = Matrix().apply { preScale(p.widthPt / b.width, p.heightPt / b.height) }
                     val bitmapPaint = Paint(Paint.FILTER_BITMAP_FLAG).apply {
                         colorFilter = when {
-                            paperColor.luminance() < 0.5f -> PdfInvert.darkPaperFilter
+                            paperColor.luminance() < 0.5f -> PdfInvert.darkPreviewFilter
                             pageTint != null -> PorterDuffColorFilter(pageTint.toArgbInt(), PorterDuff.Mode.MULTIPLY)
                             else -> null
                         }
@@ -461,7 +461,7 @@ fun PagePreview(
                     val m = Matrix().apply { preScale(p.widthPt / b.width, p.heightPt / b.height) }
                     val bitmapPaint = Paint(Paint.FILTER_BITMAP_FLAG).apply {
                         colorFilter = when {
-                            paperColor.luminance() < 0.5f -> PdfInvert.darkPaperFilter
+                            paperColor.luminance() < 0.5f -> PdfInvert.darkPreviewFilter
                             pageTint != null -> PorterDuffColorFilter(pageTint.toArgbInt(), PorterDuff.Mode.MULTIPLY)
                             else -> null
                         }
@@ -514,7 +514,7 @@ private fun renderPreviewComposite(
         )
         pdfBitmap?.let {
             val paint = Paint(Paint.FILTER_BITMAP_FLAG).apply {
-                if (android.graphics.Color.luminance(paperArgb) < 0.5f) colorFilter = PdfInvert.darkPaperFilter
+                if (android.graphics.Color.luminance(paperArgb) < 0.5f) colorFilter = PdfInvert.darkPreviewFilter
             }
             canvas.drawBitmap(it, null, RectF(0f, 0f, page.widthPt, page.heightPt), paint)
         }

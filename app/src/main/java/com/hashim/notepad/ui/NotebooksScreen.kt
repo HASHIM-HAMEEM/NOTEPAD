@@ -316,7 +316,7 @@ fun NotebooksScreen(
         floatingActionButton = {
             if (!compact && !tabletLayout) FloatingActionButton(
                 onClick = { showNew = true },
-                containerColor = NotePadTheme.tokens.accent,
+                containerColor = NotePadTheme.tokens.ink,
                 contentColor = NotePadTheme.tokens.onAccent,
                 shape = CircleShape,
                 elevation = FloatingActionButtonDefaults.elevation(2.dp, 2.dp),
@@ -826,8 +826,8 @@ private fun AppearanceSheet(
                 Surface(
                     onClick = { onThemeChange(mode) },
                     shape = MaterialTheme.shapes.medium,
-                    color = if (selected) NotePadTheme.tokens.accentSoft else NotePadTheme.tokens.bg,
-                    border = BorderStroke(Spec.hairline, if (selected) NotePadTheme.tokens.accent else NotePadTheme.tokens.border),
+                    color = if (selected) NotePadTheme.tokens.surface2 else NotePadTheme.tokens.bg,
+                    border = BorderStroke(Spec.hairline, if (selected) NotePadTheme.tokens.ink else NotePadTheme.tokens.border),
                     modifier = Modifier.weight(1f),
                 ) {
                     Column(Modifier.padding(vertical = 14.dp), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -1201,8 +1201,10 @@ private fun ContinueReadingCard(
 
 @Composable
 private fun LibraryProgressTrack(progress: Float, color: Color, modifier: Modifier = Modifier) {
-    Box(modifier.height(3.dp).clip(CircleShape).background(color.copy(alpha = 0.18f))) {
-        Box(Modifier.fillMaxHeight().fillMaxWidth(progress.coerceIn(0f, 1f)).clip(CircleShape).background(color))
+    // Quiet reading-progress line: ChatGPT-style neutral ink, never the accent.
+    val ink = NotePadTheme.tokens.ink
+    Box(modifier.height(2.dp).clip(CircleShape).background(ink.copy(alpha = 0.10f))) {
+        Box(Modifier.fillMaxHeight().fillMaxWidth(progress.coerceIn(0f, 1f)).clip(CircleShape).background(ink.copy(alpha = 0.55f)))
     }
 }
 

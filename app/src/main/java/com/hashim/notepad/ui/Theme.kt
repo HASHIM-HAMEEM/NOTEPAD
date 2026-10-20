@@ -73,30 +73,30 @@ data class Tokens(
     val pageTint: Color?,
 )
 
-/** Light: devin.ai tokens — warm off-white page (#F7F6F5), white cards, #191919 ink, blue accent used sparingly. */
+/** Light — ChatGPT (Taste Engine extraction, chatgpt.com): #FCFCFC main, #FFFFFF cards, #F3F3F3 secondary, 15 % black hairlines, #0D0D0D ink, #8F8F8F tertiary, #2C67C5 blue used only for links/selection. */
 val LightTokens = Tokens(
-    bg = Color(0xFFF7F6F5), surface = Color(0xFFFFFFFF), surface2 = Color(0xFFEFEEEC), border = Color(0xFFE6E4E1),
-    page = Color(0xFFFFFFFF), pageInk = Color(0xFF191919),
-    ink = Color(0xFF191919), ink2 = Color(0xFF5C5B58), ink3 = Color(0xFF8E8C88),
-    accent = Color(0xFF005FCC), onAccent = Color.White, accentSoft = Color(0xFFE2EFFF),
-    shadow = Color(0x33DDDDDD), isDark = false, pageTint = null,
+    bg = Color(0xFFFCFCFC), surface = Color(0xFFFFFFFF), surface2 = Color(0xFFF3F3F3), border = Color(0x26000000),
+    page = Color(0xFFFFFFFF), pageInk = Color(0xFF0D0D0D),
+    ink = Color(0xFF0D0D0D), ink2 = Color(0xFF5D5D5D), ink3 = Color(0xFF8F8F8F),
+    accent = Color(0xFF2C67C5), onAccent = Color.White, accentSoft = Color(0x1A2C67C5),
+    shadow = Color(0x1A000000), isDark = false, pageTint = null,
 )
 
-/** Paper: Perplexity-like paper white, off-black ink, teal accent; pages are warmed for reading. */
+/** Paper — Perplexity (Taste Engine extraction, perplexity.ai): #FCFCF9 base, #FFFFFF raised, #F5F5F5 subtle, #E8E8E8 soft, #252525 body ink, #0B2833 headings, teal accent; PDF pages warmed to the base paper. */
 val PaperTokens = Tokens(
-    bg = Color(0xFFFBFAF4), surface = Color(0xFFF4F2EA), surface2 = Color(0xFFECE9DD), border = Color(0xFFE4E3D4),
-    page = Color(0xFFF7F3E8), pageInk = Color(0xFF23302F),
-    ink = Color(0xFF091717), ink2 = Color(0xFF4A5B5B), ink3 = Color(0xFF7F8C8C),
-    accent = Color(0xFF20808D), onAccent = Color.White, accentSoft = Color(0xFFD6E8E6),
-    shadow = Color(0x1A091717), isDark = false, pageTint = Color(0xFFF7F3E8),
+    bg = Color(0xFFFCFCF9), surface = Color(0xFFFFFFFF), surface2 = Color(0xFFF5F5F5), border = Color(0xFFE8E8E8),
+    page = Color(0xFFFCFCF9), pageInk = Color(0xFF0B2833),
+    ink = Color(0xFF252525), ink2 = Color(0xFF5E5E5A), ink3 = Color(0xFF8F8F8A),
+    accent = Color(0xFF20808D), onAccent = Color.White, accentSoft = Color(0x1A20808D),
+    shadow = Color(0x14000000), isDark = false, pageTint = Color(0xFFFCFCF9),
 )
 
-/** Dark: devin.ai app tokens — #141414 page, #1F1F1F elevated surfaces, neutral #363636 borders, #4489FF accent. */
+/** Dark — ChatGPT dark surfaces: #212121 main, #2F2F2F raised, #424242 tertiary, 15 % white hairlines, #ECECEC / #B4B4B4 / #8F8F8F ink, soft blue for links/selection. */
 val DarkTokens = Tokens(
-    bg = Color(0xFF141414), surface = Color(0xFF1F1F1F), surface2 = Color(0xFF2A2A2A), border = Color(0xFF363636),
+    bg = Color(0xFF212121), surface = Color(0xFF2F2F2F), surface2 = Color(0xFF424242), border = Color(0x26FFFFFF),
     page = Color(0xFF1E1E1E), pageInk = Color(0xFFC8C8C8),
-    ink = Color(0xFFECECEC), ink2 = Color(0xFFA3A3A3), ink3 = Color(0xFF6E6E6E),
-    accent = Color(0xFF4489FF), onAccent = Color.White, accentSoft = Color(0xFF1D3552),
+    ink = Color(0xFFECECEC), ink2 = Color(0xFFB4B4B4), ink3 = Color(0xFF8F8F8F),
+    accent = Color(0xFF7AB7FF), onAccent = Color(0xFF0D0D0D), accentSoft = Color(0x337AB7FF),
     shadow = Color(0x73000000), isDark = true, pageTint = Color(0xFFD8D8D8),
 )
 
@@ -161,19 +161,19 @@ fun titleFontFamily(text: String): FontFamily =
 
 /** Display titles are bold and tight; body copy calm; generous line height for Arabic script. */
 val NotePadTypography = Typography(
-    displaySmall = TextStyle(fontFamily = base, fontWeight = FontWeight.Bold, fontSize = 34.sp, lineHeight = 40.sp, letterSpacing = (-0.8).sp),
-    headlineLarge = TextStyle(fontFamily = base, fontWeight = FontWeight.Bold, fontSize = 30.sp, lineHeight = 36.sp, letterSpacing = (-0.7).sp),
-    headlineMedium = TextStyle(fontFamily = base, fontWeight = FontWeight.Bold, fontSize = 26.sp, lineHeight = 32.sp, letterSpacing = (-0.6).sp),
-    headlineSmall = TextStyle(fontFamily = base, fontWeight = FontWeight.SemiBold, fontSize = 21.sp, lineHeight = 28.sp, letterSpacing = (-0.3).sp),
-    titleLarge = TextStyle(fontFamily = base, fontWeight = FontWeight.SemiBold, fontSize = 18.sp, lineHeight = 24.sp, letterSpacing = (-0.2).sp),
-    titleMedium = TextStyle(fontFamily = base, fontWeight = FontWeight.SemiBold, fontSize = 15.sp, lineHeight = 22.sp, letterSpacing = 0.sp),
+    displaySmall = TextStyle(fontFamily = base, fontWeight = FontWeight.Normal, fontSize = 32.sp, lineHeight = 38.sp, letterSpacing = (-0.4).sp),
+    headlineLarge = TextStyle(fontFamily = base, fontWeight = FontWeight.Normal, fontSize = 28.sp, lineHeight = 34.sp, letterSpacing = (-0.3).sp),
+    headlineMedium = TextStyle(fontFamily = base, fontWeight = FontWeight.Normal, fontSize = 24.sp, lineHeight = 28.sp, letterSpacing = (-0.2).sp),
+    headlineSmall = TextStyle(fontFamily = base, fontWeight = FontWeight.SemiBold, fontSize = 20.sp, lineHeight = 28.sp, letterSpacing = 0.sp),
+    titleLarge = TextStyle(fontFamily = base, fontWeight = FontWeight.SemiBold, fontSize = 18.sp, lineHeight = 24.sp, letterSpacing = 0.sp),
+    titleMedium = TextStyle(fontFamily = base, fontWeight = FontWeight.Medium, fontSize = 15.sp, lineHeight = 22.sp, letterSpacing = 0.sp),
     titleSmall = TextStyle(fontFamily = base, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, lineHeight = 18.sp, letterSpacing = 0.sp),
-    bodyLarge = TextStyle(fontFamily = base, fontWeight = FontWeight.Normal, fontSize = 16.sp, lineHeight = 26.sp, letterSpacing = 0.2.sp),
-    bodyMedium = TextStyle(fontFamily = base, fontWeight = FontWeight.Normal, fontSize = 14.sp, lineHeight = 22.sp, letterSpacing = 0.2.sp),
+    bodyLarge = TextStyle(fontFamily = base, fontWeight = FontWeight.Normal, fontSize = 16.sp, lineHeight = 24.sp, letterSpacing = 0.sp),
+    bodyMedium = TextStyle(fontFamily = base, fontWeight = FontWeight.Normal, fontSize = 14.sp, lineHeight = 20.sp, letterSpacing = 0.sp),
     bodySmall = TextStyle(fontFamily = base, fontWeight = FontWeight.Normal, fontSize = 12.sp, lineHeight = 18.sp, letterSpacing = 0.3.sp),
-    labelLarge = TextStyle(fontFamily = base, fontWeight = FontWeight.Medium, fontSize = 14.sp, lineHeight = 20.sp, letterSpacing = 0.1.sp),
-    labelMedium = TextStyle(fontFamily = base, fontWeight = FontWeight.SemiBold, fontSize = 12.sp, lineHeight = 16.sp, letterSpacing = 0.4.sp),
-    labelSmall = TextStyle(fontFamily = base, fontWeight = FontWeight.SemiBold, fontSize = 11.sp, lineHeight = 16.sp, letterSpacing = 1.2.sp),
+    labelLarge = TextStyle(fontFamily = base, fontWeight = FontWeight.Medium, fontSize = 14.sp, lineHeight = 20.sp, letterSpacing = 0.sp),
+    labelMedium = TextStyle(fontFamily = base, fontWeight = FontWeight.Medium, fontSize = 12.sp, lineHeight = 16.sp, letterSpacing = 0.2.sp),
+    labelSmall = TextStyle(fontFamily = base, fontWeight = FontWeight.Medium, fontSize = 11.sp, lineHeight = 16.sp, letterSpacing = 0.6.sp),
 )
 
 /** Motion tokens shared by every transition so the whole app moves with one personality. */
