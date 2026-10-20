@@ -17,6 +17,8 @@ import androidx.compose.material.icons.outlined.SearchOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.layout.height
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
@@ -45,9 +47,10 @@ fun SearchScreen(
 
     Scaffold(containerColor = MaterialTheme.colorScheme.background) { padding ->
         Column(Modifier.padding(padding).fillMaxSize()) {
-            Row(Modifier.statusBarsPadding().padding(start = 8.dp, end = 20.dp, top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
-                Surface(shape = RoundedCornerShape(26.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh, modifier = Modifier.weight(1f).height(50.dp)) {
+            Row(Modifier.statusBarsPadding().padding(start = 12.dp, end = 12.dp, top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                PillIconButton(Icons.AutoMirrored.Filled.ArrowBack, "Back", onClick = onBack)
+                Spacer(Modifier.width(8.dp))
+                Surface(shape = CircleShape, color = NotePadTheme.tokens.surface, border = BorderStroke(Spec.hairline, NotePadTheme.tokens.border), shadowElevation = Spec.pillShadow, modifier = Modifier.weight(1f).height(Spec.pillHeight)) {
                     Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Outlined.Search, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
                         Spacer(Modifier.width(12.dp))
@@ -85,8 +88,8 @@ fun SearchScreen(
                 else -> LazyColumn(contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     itemsIndexed(hits, key = { index, hit -> "search-result:${hit.source}:${hit.pageId}:$index" }) { _, h ->
                         Surface(
-                            onClick = { onOpenPage(h.notebookId, h.pageId, query) }, shape = RoundedCornerShape(22.dp),
-                            color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.fillMaxWidth().animateItem(),
+                            onClick = { onOpenPage(h.notebookId, h.pageId, query) }, shape = RoundedCornerShape(12.dp),
+                            color = NotePadTheme.tokens.surface, border = BorderStroke(Spec.hairline, NotePadTheme.tokens.border), modifier = Modifier.fillMaxWidth().animateItem(),
                         ) {
                             Column(Modifier.padding(18.dp)) {
                                 Text(h.snippet, style = MaterialTheme.typography.bodyLarge, maxLines = 3, overflow = TextOverflow.Ellipsis)

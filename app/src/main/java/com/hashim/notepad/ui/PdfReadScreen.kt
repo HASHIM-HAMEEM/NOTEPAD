@@ -232,6 +232,8 @@ fun PdfReadScreen(
     var panX by remember { mutableFloatStateOf(0f) }
     var panY by remember { mutableFloatStateOf(0f) }
     var chromeVisible by remember { mutableStateOf(true) }
+    // Layout settling right after open can report a scroll; never let that eat the user's first tap.
+    val openedAt = remember { System.currentTimeMillis() }
     var showMenu by remember { mutableStateOf(false) }
     var scrubValue by remember { mutableFloatStateOf(initialIndex.toFloat()) }
     var scrubbing by remember { mutableStateOf(false) }
@@ -470,7 +472,7 @@ fun PdfReadScreen(
                         settledPages = emptySet()
                         // The bar hides only when the reader scrolls, never on a timer, so the
                         // first tap on an icon always lands on a visible, enabled control.
-                        if (!scrubbing && selection == null) chromeVisible = false
+                        if (!scrubbing && selection == null && System.currentTimeMillis() - openedAt > 800) chromeVisible = false
                     } else {
                         delay(150)
                         val visible = listState.layoutInfo.visibleItemsInfo.map { it.index }.filter { it in pages.indices }.toSet()
