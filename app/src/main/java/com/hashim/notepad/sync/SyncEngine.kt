@@ -25,11 +25,31 @@ class SyncEngine(private val context: Context, private val repo: NotePadReposito
     private val db: SQLiteDatabase get() = repo.helper.writableDatabase
     private val assetsDir = File(context.filesDir, "assets").apply { mkdirs() }
 
-    data class Result(val pushed: Int, val pulled: Int)
+    data class Result(val pushed: Int, val pulled: Int, val rejected: Int = 0)
+
+    @Volatile var rejectedRows: Int = 0
+        private set
+
+    /** Returns how many rows the server refused with 403 (owned by another account); the others are uploaded. */
+    private fun pushIndividually(table: String, payload: JSONArray, token: String): Int {
+        var rejected = 0
+        for (i in 0 until payload.length()) {
+            try {
+                SupabaseHttp.json("POST", "/rest/v1/$table?on_conflict=id", token, JSONArray().put(payload.getJSONObject(i)).toString(),
+                    mapOf("Prefer" to "resolution=merge-duplicates,return=minimal")).orThrow()
+            } catch (e: HttpException) {
+                if (e.code != 403) throw e
+                rejected++
+                Log.w(TAG, "server rejected $table row ${payload.getJSONObject(i).optString("id")} (403, owned by another account); dropping from outbox")
+            }
+        }
+        return rejected
+    }
 
     fun pendingCount(): Int = db.rawQuery("select count(*) from outbox", null).use { if (it.moveToFirst()) it.getInt(0) else 0 }
 
     fun sync(): Result {
+        rejectedRows = 0
         val session = auth.session.value ?: throw IllegalStateException("Not signed in")
         val k = key() ?: throw IllegalStateException("Encryption passphrase not set")
         val token = auth.token()
@@ -58,7 +78,7 @@ class SyncEngine(private val context: Context, private val repo: NotePadReposito
             }
         }
         repo.changed()
-        return Result(pushed, pulled)
+        return Result(pushed, pulled, rejectedRows)
     }
 
     // ---------------------------------------------------------------- pull
@@ -240,6 +260,13 @@ class SyncEngine(private val context: Context, private val repo: NotePadReposito
                             mapOf("Prefer" to "resolution=merge-duplicates,return=minimal")).orThrow()
                         break
                     } catch (e: HttpException) {
+                        if (e.code == 403) {
+                            // Row-level security: at least one row id already exists on the server under another account
+                            // (this device synced a different account before). Push the rest one by one and drop the
+                            // rejected rows from the outbox instead of blocking every future sync pass.
+                            rejectedRows += pushIndividually(table, compatiblePayload, token)
+                            break
+                        }
                         val newlyMissing = SyncSchemaFallback.missingColumns(table, e.code, e.message.orEmpty(), missingColumns)
                         if (newlyMissing.isEmpty()) throw e
                         missingColumns += newlyMissing

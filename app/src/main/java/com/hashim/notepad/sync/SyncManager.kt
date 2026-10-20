@@ -58,7 +58,14 @@ class SyncManager private constructor(private val context: Context) {
     }
 
     fun key(): ByteArray? = prefs.getString("key", null)?.let { Base64.decode(it, Base64.NO_WRAP) }
-    private val deviceId: String get() = prefs.getString("device_id", null) ?: UUID.randomUUID().toString().also { prefs.edit().putString("device_id", it).apply() }
+    private val installId: String get() = prefs.getString("device_id", null) ?: UUID.randomUUID().toString().also { prefs.edit().putString("device_id", it).apply() }
+
+    /**
+     * device_keys.device_id is the table's primary key and rows are RLS-scoped per user, so a device that previously
+     * synced another account must not reuse its id: the upsert would try to UPDATE the other user's row and fail with
+     * 403. The id is therefore derived per (install, account).
+     */
+    private fun deviceIdFor(userId: String): String = deviceIdFor(installId, userId)
 
     private fun refreshStatus(message: String? = null) {
         val base = when {
@@ -147,7 +154,7 @@ class SyncManager private constructor(private val context: Context) {
             salt = Crypto.randomBytes(16)
             k = Crypto.deriveKey(passphrase.toCharArray(), salt)
         }
-        val row = JSONObject().put("device_id", deviceId).put("user_id", session.userId).put("name", android.os.Build.MODEL ?: "Android")
+        val row = JSONObject().put("device_id", deviceIdFor(session.userId)).put("user_id", session.userId).put("name", android.os.Build.MODEL ?: "Android")
             .put("public_key", SyncEngine.hex(ByteArray(0))).put("kdf_salt", SyncEngine.hex(salt)).put("key_check", SyncEngine.hex(Crypto.keyCheck(k)))
             .put("last_seen_at", SyncEngine.iso(System.currentTimeMillis()))
         SupabaseHttp.json("POST", "/rest/v1/device_keys?on_conflict=device_id", token, JSONArray().put(row).toString(), mapOf("Prefer" to "resolution=merge-duplicates,return=minimal")).orThrow()
@@ -196,7 +203,10 @@ class SyncManager private constructor(private val context: Context) {
                     extraPasses++
                 }
                 prefs.edit().putLong("last_sync", System.currentTimeMillis()).apply()
-                refreshStatus("Pushed $pushed, pulled $pulled")
+                refreshStatus(buildString {
+                    append("Pushed $pushed, pulled $pulled")
+                    if (r.rejected > 0) append(" · ${r.rejected} item(s) belong to another account on the server and were skipped")
+                })
                 true
             } catch (e: kotlinx.coroutines.CancellationException) {
                 refreshStatus()
@@ -221,6 +231,9 @@ class SyncManager private constructor(private val context: Context) {
     }
 
     companion object {
+        fun deviceIdFor(installId: String, userId: String): String =
+            UUID.nameUUIDFromBytes("$installId:$userId".toByteArray(Charsets.UTF_8)).toString()
+
         private const val TAG = "SyncManager"
         private const val ONCE = "notepad.sync.once"
         private const val PERIODIC = "notepad.sync.periodic"
