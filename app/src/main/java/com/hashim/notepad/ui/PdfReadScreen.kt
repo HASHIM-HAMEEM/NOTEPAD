@@ -458,6 +458,7 @@ fun PdfReadScreen(
         val dockedSidebar = maxWidth >= 840.dp && sidebarOpen
         val sidebarWidth = if (dockedSidebar) 300.dp else 0.dp
         val pageWidth = maxWidth - sidebarWidth - 32.dp
+        val compactBar = maxWidth < 600.dp
         val density = LocalDensity.current
         val pagePaper = if (MaterialTheme.colorScheme.background.luminance() < 0.5f) Color(0xFF202024) else Color.White
         val bookmarkColor = MaterialTheme.colorScheme.primary
@@ -514,6 +515,7 @@ fun PdfReadScreen(
         }
         LazyColumn(
             state = listState,
+            horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier.fillMaxSize().padding(start = sidebarWidth).clipToBounds().pointerInput(Unit) {
                 awaitEachGesture {
                     awaitFirstDown(requireUnconsumed = false)
@@ -890,22 +892,24 @@ fun PdfReadScreen(
                             Icon(Icons.Outlined.ChevronRight, "Next search result", modifier = Modifier.size(24.dp))
                         }
                     }
-                    IconButton(onClick = { sidebarOpen = !sidebarOpen; chromeVisible = true }) {
-                        Icon(Icons.AutoMirrored.Outlined.List, "Contents", modifier = Modifier.size(24.dp))
+                    if (!compactBar) {
+                        IconButton(onClick = { sidebarOpen = !sidebarOpen; chromeVisible = true }) {
+                            Icon(Icons.AutoMirrored.Outlined.List, "Contents", modifier = Modifier.size(24.dp))
+                        }
+                        IconButton(onClick = {
+                            selection?.text?.let { searchQuery = it }
+                            sidebarOpen = true
+                            chromeVisible = true
+                        }) {
+                            Icon(Icons.Outlined.Bookmarks, "Marks", modifier = Modifier.size(24.dp))
+                        }
+                        AudioRecorderButton(
+                            repo = repo,
+                            notebookId = notebookId,
+                            notebookTitle = notebook?.title ?: "Lecture",
+                            onRecordingSelected = { selectedAudioRecordingId = it },
+                        )
                     }
-                    IconButton(onClick = {
-                        selection?.text?.let { searchQuery = it }
-                        sidebarOpen = true
-                        chromeVisible = true
-                    }) {
-                        Icon(Icons.Outlined.Bookmarks, "Marks", modifier = Modifier.size(24.dp))
-                    }
-                    AudioRecorderButton(
-                        repo = repo,
-                        notebookId = notebookId,
-                        notebookTitle = notebook?.title ?: "Lecture",
-                        onRecordingSelected = { selectedAudioRecordingId = it },
-                    )
                     IconButton(onClick = { onWrite(pages.getOrNull(currentIndex)?.id ?: startPageId) }) {
                         Icon(Icons.Outlined.Edit, "Write", modifier = Modifier.size(24.dp))
                     }
@@ -914,6 +918,19 @@ fun PdfReadScreen(
                             Icon(Icons.Outlined.MoreVert, "More", modifier = Modifier.size(24.dp))
                         }
                         androidx.compose.material3.DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                            if (compactBar) {
+                                androidx.compose.material3.DropdownMenuItem(
+                                    text = { Text("Contents and search") },
+                                    leadingIcon = { Icon(Icons.AutoMirrored.Outlined.List, null) },
+                                    onClick = { showMenu = false; sidebarOpen = true; chromeVisible = true },
+                                )
+                                androidx.compose.material3.DropdownMenuItem(
+                                    text = { Text("Marks") },
+                                    leadingIcon = { Icon(Icons.Outlined.Bookmarks, null) },
+                                    onClick = { showMenu = false; selection?.text?.let { searchQuery = it }; sidebarOpen = true; chromeVisible = true },
+                                )
+                                HorizontalDivider()
+                            }
                             if (notebook?.documentKind == "pdf") {
                                 if (optionalModelMissing) {
                                     val spec = OcrModelCatalog.optionalModels[optionalOcrModel]
